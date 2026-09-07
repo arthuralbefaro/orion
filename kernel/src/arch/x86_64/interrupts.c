@@ -1,6 +1,7 @@
 #include <arch/x86_64/interrupts.h>
 #include <arch/x86_64/gdt.h>
 #include <arch/x86_64/cpu.h>
+#include <arch/x86_64/percpu.h>
 #include <drivers/pic.h>
 #include <drivers/ioapic.h>
 #include <arch/x86_64/lapic.h>
@@ -8,6 +9,8 @@
 #include <lib/string.h>
 #include <kernel/log.h>
 #include <kernel/sched.h>
+#include <kernel/smp.h>
+#include <kernel/process.h>
 
 struct idt_entry {
     uint16_t offset_low;
@@ -160,6 +163,14 @@ static void handle_exception(struct interrupt_frame *f)
         return;
     }
 
+    if ((f->cs & 3) == 3) {
+        struct process *p = process_current();
+        log_error("proc", "pid %u '%s' morto: %s em RIP=%016lx (err=%lx, CR2=%016lx)",
+                    p->pid, p->name, exception_name((uint8_t)f->int_no), f->rip, f->err_code,
+                    read_cr2());
+        process_exit(-1);
+    }
+    smp_halt_others();
     cli();
     console_set_colors(COLOR_WHITE, COLOR_RED);
     kprintf("\n*** EXCECAO NAO TRATADA: %s (vetor %lu) ***\n",
@@ -232,11 +243,16 @@ void idt_init(void)
 
     idt_set_gate(EXC_BREAKPOINT, ISR_STUB(EXC_BREAKPOINT), 3);
 
+    idt_load();
+
+    log_info("idt", "IDT carregada: 256 vetores em %p", (void *)idt);
+}
+
+void idt_load(void)
+{
     struct idtr idtr = {
         .limit = sizeof(idt) - 1,
         .base  = (uint64_t)idt,
     };
     __asm__ volatile("lidt %0" : : "m"(idtr) : "memory");
-
-    log_info("idt", "IDT carregada: 256 vetores em %p", (void *)idt);
 }

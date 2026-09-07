@@ -21,9 +21,19 @@ isr_common:
     pushq %r14
     pushq %r15
 
+    testq $3, 144(%rsp)
+    jz 1f
+    swapgs
+
+1:
     cld
     movq %rsp, %rdi
     call isr_dispatch
+
+    testq $3, 144(%rsp)
+    jz 2f
+    swapgs
+2:    
 
     popq %r15
     popq %r14

@@ -6,6 +6,8 @@
 #define VECTOR_IRQ_BASE       32
 #define VECTOR_IRQ_COUNT      16
 #define VECTOR_LAPIC_TIMER    0x40
+#define VECTOR_IPI_HALT       0xF0
+#define VECTOR_IPI_TLB        0xF1
 #define VECTOR_SPURIOUS       0xFF
 
 #define EXC_DIVIDE_ERROR      0
@@ -38,6 +40,7 @@ void irq_disable(uint8_t irq);
 typedef void (*interrupt_handler_t)(struct interrupt_frame *frame, void *ctx);
 
 void idt_init(void);
+void idt_load(void);
 
 void interrupts_register(uint8_t vector, interrupt_handler_t handler, void *ctx);
 void interrupts_unregister(uint8_t vector);

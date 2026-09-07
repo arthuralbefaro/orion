@@ -1,4 +1,5 @@
 #include <kernel/log.h>
+#include <kernel/smp.h>
 #include <arch/x86_64/cpu.h>
 #include <drivers/console.h>
 
@@ -18,6 +19,8 @@ static uint32_t level_color[] = {
 
 void klog(enum log_level level, const char *subsystem, const char *fmt, ...)
 {
+    uint64_t flags;
+    bool locked = kprint_lock(&flags);
     uint32_t fg, bg;
     console_get_colors(&fg, &bg);
 
@@ -33,11 +36,13 @@ void klog(enum log_level level, const char *subsystem, const char *fmt, ...)
     va_end(ap);
 
     kputc('\n');
+    kprint_unlock(locked, flags);
 }
 
 NORETURN void panic(const char *fmt, ...)
 {
     cli();
+    smp_halt_others();
 
     console_set_colors(COLOR_WHITE, COLOR_RED);
     kprintf("\n*** KERNEL PANIC ***\n");

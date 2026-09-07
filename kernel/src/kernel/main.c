@@ -18,6 +18,10 @@
 #include <mm/heap.h>
 #include <mm/memory.h>
 #include <limine.h>
+#include <kernel/syscall.h>
+#include <kernel/sched.h>
+#include <kernel/smp.h>
+#include <arch/x86_64/percpu.h>
 
 static void init_console(void)
 {
@@ -89,9 +93,17 @@ void kmain(void)
         irq_set_mode(IRQ_MODE_PIC);
         log_info("main", "IRQs via 8259 (modo legado)");
     }
-
+    
+    percpu_init_bsp(lapic_id());
     time_init();
     keyboard_init();
+    sched_init();
+    syscall_init();
+    log_info("boot", "%u modulo(s) carregado(s)", boot_info.module_count);
+
+    sti();
+    smp_init();
+    cli();
 
     sti();
     log_info("main", "interrupcoes habilitadas");

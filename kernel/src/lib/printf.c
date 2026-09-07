@@ -3,6 +3,7 @@
 #include <drivers/serial.h>
 #include <drivers/console.h>
 #include <kernel/spinlock.h>
+#include <arch/x86_64/percpu.h>
 
 #define FLAG_LEFT   (1 << 0)  
 #define FLAG_ZERO   (1 << 1)  
@@ -286,15 +287,34 @@ static void kputc_cb(char c, void *ctx)
 }
 
 static spinlock_t print_lock = SPINLOCK_INIT;
+static volatile int32_t print_owner = -1;
+
+bool kprint_lock(uint64_t *flags)
+{
+    *flags = irq_save();
+    int32_t me = (int32_t)percpu_cpu_id();
+    if (print_owner == me)
+        return false;
+    spin_lock(&print_lock);
+    print_owner = me;
+    return true;
+}
+
+void kprint_unlock(bool locked, uint64_t flags)
+{
+    if (locked) {
+        print_owner = -1;
+        spin_unlock(&print_lock);
+    }
+    irq_restore(flags);
+}
 
 int kvprintf(const char *fmt, va_list ap)
 {
-    uint64_t flags = irq_save();
-    bool locked = spin_try_lock(&print_lock);
+    uint64_t flags;
+    bool locked = kprint_lock(&flags);
     int n = kvformat(kputc_cb, NULL, fmt, ap);
-    if (locked)
-        spin_unlock(&print_lock);
-    irq_restore(flags);
+    kprint_unlock(locked, flags);
     return n;
 }
 

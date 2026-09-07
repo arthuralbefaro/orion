@@ -1,16 +1,15 @@
 #include <arch/x86_64/gdt.h>
+#include <arch/x86_64/percpu.h>
 #include <lib/string.h>
 #include <kernel/log.h>
 
-#define SEG_ACCESSED   (1ull << 40)
 #define SEG_RW         (1ull << 41)
-#define SEG_DC         (1ull << 42)
 #define SEG_EXEC       (1ull << 43)
 #define SEG_NONSYS     (1ull << 44)
 #define SEG_DPL(n)     ((uint64_t)(n) << 45)
 #define SEG_PRESENT    (1ull << 47)
 #define SEG_LONG       (1ull << 53)
-#define SEG_DB         (1ull << 54)  
+#define SEG_DB         (1ull << 54)
 #define SEG_GRAN4K     (1ull << 55)
 #define SEG_LIMIT_MAX  (0xFFFFull | (0xFull << 48))
 
@@ -24,15 +23,17 @@ struct gdtr {
     uint64_t base;
 } PACKED;
 
-static uint64_t gdt[7] ALIGNED(16);
-static struct tss tss ALIGNED(16);
+struct cpu_gdt {
+    uint64_t gdt[7];
+    struct tss tss;
+} ALIGNED(16);
 
-static uint8_t kernel_stack[16 * 1024] ALIGNED(16);
+static struct cpu_gdt cpu_gdts[MAX_CPUS];
+static uint8_t bsp_stack[16 * 1024] ALIGNED(16);
 
-static void set_tss_descriptor(uint64_t base, uint32_t limit)
+static void set_tss_descriptor(uint64_t *gdt, uint64_t base, uint32_t limit)
 {
     uint64_t lo = 0, hi = 0;
-
     lo |= (uint64_t)(limit & 0xFFFF);
     lo |= (uint64_t)(base & 0xFFFFFF) << 16;
     lo |= (uint64_t)0x9 << 40;
@@ -40,27 +41,27 @@ static void set_tss_descriptor(uint64_t base, uint32_t limit)
     lo |= (uint64_t)((limit >> 16) & 0xF) << 48;
     lo |= (uint64_t)((base >> 24) & 0xFF) << 56;
     hi  = (base >> 32) & 0xFFFFFFFF;
-
     gdt[5] = lo;
     gdt[6] = hi;
 }
 
-void gdt_init(void)
+void gdt_init_cpu(uint32_t cpu)
 {
-    gdt[0] = 0;
-    gdt[1] = KERNEL_CODE;
-    gdt[2] = KERNEL_DATA;
-    gdt[3] = USER_DATA;
-    gdt[4] = USER_CODE;
+    struct cpu_gdt *g = &cpu_gdts[cpu];
+    g->gdt[0] = 0;
+    g->gdt[1] = KERNEL_CODE;
+    g->gdt[2] = KERNEL_DATA;
+    g->gdt[3] = USER_DATA;
+    g->gdt[4] = USER_CODE;
 
-    memset(&tss, 0, sizeof(tss));
-    tss.rsp0 = (uint64_t)kernel_stack + sizeof(kernel_stack);
-    tss.iopb_offset = sizeof(tss);
-    set_tss_descriptor((uint64_t)&tss, sizeof(tss) - 1);
+    memset(&g->tss, 0, sizeof(g->tss));
+    g->tss.rsp0 = cpu == 0 ? (uint64_t)bsp_stack + sizeof(bsp_stack) : 0;
+    g->tss.iopb_offset = sizeof(g->tss);
+    set_tss_descriptor(g->gdt, (uint64_t)&g->tss, sizeof(g->tss) - 1);
 
     struct gdtr gdtr = {
-        .limit = sizeof(gdt) - 1,
-        .base  = (uint64_t)gdt,
+        .limit = sizeof(g->gdt) - 1,
+        .base  = (uint64_t)g->gdt,
     };
 
     __asm__ volatile(
@@ -82,12 +83,15 @@ void gdt_init(void)
         : "rax", "memory");
 
     __asm__ volatile("ltr %w0" : : "r"((uint16_t)GDT_TSS) : "memory");
+}
 
-    log_info("gdt", "GDT carregada (%u entradas), TSS em %p, rsp0=%p",
-             (unsigned)ARRAY_SIZE(gdt), (void *)&tss, (void *)tss.rsp0);
+void gdt_init(void)
+{
+    gdt_init_cpu(0);
+    log_info("gdt", "GDT/TSS por CPU (ate %u CPUs), cpu0 carregada", MAX_CPUS);
 }
 
 void gdt_set_kernel_stack(uint64_t rsp0)
 {
-    tss.rsp0 = rsp0;
+    cpu_gdts[percpu_cpu_id()].tss.rsp0 = rsp0;
 }

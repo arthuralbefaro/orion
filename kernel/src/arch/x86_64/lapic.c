@@ -151,3 +151,51 @@ void lapic_timer_stop(void)
     lapic_write(LAPIC_REG_LVT_TIMER, LAPIC_LVT_MASKED);
     lapic_write(LAPIC_REG_TIMER_INIT, 0);
 }
+
+void lapic_enable_this_cpu(void)
+{
+    uint64_t base = rdmsr(MSR_IA32_APIC_BASE);
+    if (!(base & APIC_BASE_ENABLE)) {
+        base |= APIC_BASE_ENABLE;
+        wrmsr(MSR_IA32_APIC_BASE, base);
+    }
+    if (x2apic && !(base & APIC_BASE_EXTD)) {
+        base |= APIC_BASE_EXTD;
+        wrmsr(MSR_IA32_APIC_BASE, base);
+    }
+    lapic_write(LAPIC_REG_SVR, LAPIC_SVR_ENABLE | VECTOR_SPURIOUS);
+    lapic_write(LAPIC_REG_TPR, 0);
+    lapic_write(LAPIC_REG_LVT_LINT0, LAPIC_LVT_MASKED);
+    lapic_write(LAPIC_REG_LVT_LINT1, LAPIC_LVT_MASKED);
+    lapic_write(LAPIC_REG_LVT_TIMER, LAPIC_LVT_MASKED);
+}
+
+#define ICR_DEST_ALL_BUT_SELF (3u << 18)
+
+void lapic_send_ipi(uint32_t dest, uint8_t vector)
+{
+    if (!enabled)
+        return;
+    if (x2apic) {
+        wrmsr(X2APIC_MSR_BASE + LAPIC_REG_ICR, ((uint64_t)dest << 32) | vector);
+    } else {
+        mmio[(LAPIC_REG_ICR + 1) * 4] = dest << 24;
+        mmio[LAPIC_REG_ICR * 4] = vector;
+        while (mmio[LAPIC_REG_ICR * 4] & (1u << 12))
+            pause();
+    }
+}
+
+void lapic_send_ipi_others(uint8_t vector)
+{
+    if (!enabled)
+        return;
+    if (x2apic) {
+        wrmsr(X2APIC_MSR_BASE + LAPIC_REG_ICR, ICR_DEST_ALL_BUT_SELF | vector);
+    } else {
+        mmio[(LAPIC_REG_ICR + 1) * 4] = 0;
+        mmio[LAPIC_REG_ICR * 4] = ICR_DEST_ALL_BUT_SELF | vector;
+        while (mmio[LAPIC_REG_ICR * 4] & (1u << 12))
+            pause();
+    }
+}

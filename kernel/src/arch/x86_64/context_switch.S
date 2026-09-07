@@ -23,9 +23,14 @@ context_switch:
     popfq
     ret
 
+.extern sched_post_switch
+.extern thread_exit
+
 .global thread_trampoline
 .type thread_trampoline, @function
 thread_trampoline:
+    call sched_post_switch
+    sti
     movq %r13, %rdi
     callq *%r12
     callq thread_exit

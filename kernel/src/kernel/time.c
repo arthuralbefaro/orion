@@ -4,6 +4,7 @@
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/interrupts.h>
 #include <arch/x86_64/lapic.h>
+#include <arch/x86_64/percpu.h>
 #include <drivers/pit.h>
 #include <drivers/pic.h>
 
@@ -16,8 +17,15 @@ static void tick_handler(struct interrupt_frame *frame, void *ctx)
 {
     (void)frame;
     (void)ctx;
-    ticks++;
+    if (percpu_cpu_id() == 0)
+        ticks++;
     sched_tick(ticks);
+}
+
+void time_init_ap(void)
+{
+    if (lapic_timer_frequency())
+        lapic_timer_start_periodic(VECTOR_LAPIC_TIMER, TIME_TICK_HZ);
 }
 
 static uint64_t calibrate_tsc(void)

@@ -25,6 +25,9 @@
 #define LAPIC_SVR_ENABLE      (1u << 8)
 
 bool lapic_init(void);
+void lapic_enable_this_cpu(void);
+void lapic_send_ipi(uint32_t lapic_id, uint8_t vector);
+void lapic_send_ipi_others(uint8_t vector);
 bool lapic_is_enabled(void);
 bool lapic_is_x2apic(void);
 uint32_t lapic_id(void);

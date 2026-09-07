@@ -14,6 +14,8 @@ enum thread_state {
     THREAD_ZOMBIE,
 };
 
+struct process;
+
 typedef void (*thread_entry_t)(void *arg);
 
 struct thread {
@@ -24,19 +26,26 @@ struct thread {
 
     void   *stack;
     size_t  stack_size;
+    uint64_t kernel_stack_top;
+    struct process *process;
 
     uint64_t slice_left;
     uint64_t total_ticks;
     uint64_t wake_at;
+    uint32_t cpu;
+    bool     is_idle;
 
     struct thread *next;
     struct thread *all_next;
 };
 
 void sched_init(void);
+void sched_init_ap(void);
 bool sched_enabled(void);
 
 struct thread *thread_create(const char *name, thread_entry_t entry, void *arg);
+struct thread *thread_create_for_process(const char *name, thread_entry_t entry, void *arg,
+                                         struct process *process);
 struct thread *thread_current(void);
 
 void thread_yield(void);
@@ -46,6 +55,7 @@ void thread_unblock(struct thread *t);
 NORETURN void thread_exit(void);
 
 void schedule(void);
+void sched_post_switch(void);
 void sched_tick(uint64_t now_ticks);
 void sched_check_preempt(void);
 

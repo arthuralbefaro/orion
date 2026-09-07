@@ -16,3 +16,6 @@ int kvprintf(const char *fmt, va_list ap);
 
 void kputc(char c);
 void kputs(const char *s);
+
+bool kprint_lock(uint64_t *flags);
+void kprint_unlock(bool locked, uint64_t flags);

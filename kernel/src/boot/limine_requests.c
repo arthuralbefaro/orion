@@ -32,6 +32,14 @@ LIMINE_REQ struct limine_rsdp_request rsdp_request = {
     .id = LIMINE_RSDP_REQUEST_ID, .revision = 0
 };
 
+LIMINE_REQ struct limine_module_request module_request = {
+    .id = LIMINE_MODULE_REQUEST_ID, .revision = 0
+};
+
+LIMINE_REQ struct limine_mp_request mp_request = {
+    .id = LIMINE_MP_REQUEST_ID, .revision = 0, .flags = 0
+};
+
 __attribute__((used, section(".limine_requests_end")))
 static volatile uint64_t requests_end_marker[] = LIMINE_REQUESTS_END_MARKER;
 
@@ -82,4 +90,34 @@ void boot_info_init(void)
         boot_info.framebuffer = framebuffer_request.response->framebuffers[0];
 
     boot_info.rsdp = rsdp_request.response ? rsdp_request.response->address : NULL;
+
+    boot_info.mp = mp_request.response;
+
+    boot_info.module_count = 0;
+    if (module_request.response) {
+        uint64_t n = module_request.response->module_count;
+        for (uint64_t i = 0; i < n && i < BOOT_MAX_MODULES; i++) {
+            struct limine_file *f = module_request.response->modules[i];
+            struct boot_module *m = &boot_info.modules[boot_info.module_count++];
+            m->path = f->path;
+            m->address = f->address;
+            m->size = f->size;
+            const char *name = f->path;
+            for (const char *c = f->path; *c; c++)
+                if (*c == '/')
+                    name = c + 1;
+            m->name = name;
+        }
+    }
+}
+
+const struct boot_module *boot_find_module(const char *name)
+{
+    for (uint32_t i = 0; i < boot_info.module_count; i++) {
+        const char *a = boot_info.modules[i].name, *b = name;
+        while (*a && *b && *a == *b) { a++; b++; }
+        if (*b == '\0' && (*a == '\0' || *a == '.'))
+            return &boot_info.modules[i];
+    }
+    return NULL;
 }

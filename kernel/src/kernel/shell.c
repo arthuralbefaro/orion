@@ -8,7 +8,10 @@
 #include <drivers/console.h>
 #include <drivers/acpi.h>
 #include <drivers/ioapic.h>
+#include <kernel/process.h>
 #include <kernel/sched.h>
+#include <kernel/smp.h>
+#include <arch/x86_64/percpu.h>
 #include <kernel/time.h>
 #include <drivers/pic.h>
 #include <mm/pmm.h>
@@ -190,13 +193,17 @@ static void cmd_threads(const char *args)
 }
 
 static volatile uint64_t busy_count[2];
+static volatile uint32_t busy_cpu[2];
 static volatile bool busy_stop;
 
 static void worker_busy(void *arg)
 {
     uint64_t idx = (uint64_t)arg;
-    while (!busy_stop)
+    while (!busy_stop) {
         busy_count[idx]++;
+        if ((busy_count[idx] & 0xFFFF) == 0)
+            busy_cpu[idx] = percpu_cpu_id();
+    }
 }
 
 static void cmd_preempt(const char *args)
@@ -209,9 +216,50 @@ static void cmd_preempt(const char *args)
     kprintf("Duas threads em loop infinito (tids %u e %u); dormindo 1 s...\n", a->tid, b->tid);
     thread_sleep_ms(1000);
     busy_stop = true;
-    thread_sleep_ms(50); /* deixa as duas sairem */
-    kprintf("  A contou %lu, B contou %lu -> %s\n", busy_count[0], busy_count[1],
-            (busy_count[0] && busy_count[1]) ? "preempcao OK (as duas rodaram)" : "FALHA");
+    thread_sleep_ms(50);
+    kprintf("  A contou %lu (cpu %u), B contou %lu (cpu %u) -> %s\n",
+            busy_count[0], busy_cpu[0], busy_count[1], busy_cpu[1],
+            (busy_count[0] && busy_count[1]) ? "OK (as duas rodaram)" : "FALHA");
+}
+
+static void cmd_mods(const char *args)
+{
+    (void)args;
+    if (!boot_info.module_count) {
+        kprintf("nenhum modulo carregado pelo bootloader\n");
+        return;
+    }
+    for (uint32_t i = 0; i < boot_info.module_count; i++)
+        kprintf("  %-12s %8lu bytes  %s\n", boot_info.modules[i].name,
+                boot_info.modules[i].size, boot_info.modules[i].path);
+}
+
+static void cmd_run(const char *args)
+{
+    if (!*args) {
+        kprintf("uso: run <modulo>   (veja 'mods')\n");
+        return;
+    }
+    const struct boot_module *m = boot_find_module(args);
+    if (!m) {
+        kprintf("modulo '%s' nao encontrado\n", args);
+        return;
+    }
+    struct process *p = process_create_elf(args, m->address, m->size);
+    if (!p)
+        kprintf("falha ao criar o processo\n");
+}
+
+static void cmd_procs(const char *args)
+{
+    (void)args;
+    process_dump();
+}
+
+static void cmd_smp(const char *args)
+{
+    (void)args;
+    smp_dump();
 }
 
 static void cmd_boot(const char *args)
@@ -281,8 +329,12 @@ static const struct command commands[] = {
     { "acpi",   "tabelas ACPI encontradas",             cmd_acpi },
     { "cpus",   "CPUs listadas no MADT",                cmd_cpus },
     { "ps",     "lista as threads",                     cmd_ps },
+    { "smp",    "estado de cada CPU",                   cmd_smp },
     { "threads", "demo: 3 threads dormindo",            cmd_threads },
     { "preempt", "demo: preempcao de loops ocupados",   cmd_preempt },
+    { "mods",   "modulos carregados pelo bootloader",   cmd_mods },
+    { "run",    "executa um modulo ELF em ring 3",      cmd_run },
+    { "procs",  "lista os processos",                   cmd_procs },
     { "panic",  "dispara um kernel panic",              cmd_panic },
     { "crash",  "divisao por zero (testa excecao #DE)", cmd_crash },
     { "pf",     "page fault proposital (testa #PF)",    cmd_pf },

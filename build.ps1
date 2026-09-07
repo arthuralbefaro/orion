@@ -3,6 +3,7 @@ param(
     [switch]$Clean,
     [switch]$Gdb,
     [int]$Memory = 512,
+    [int]$Smp = 1,
     [string]$Cpu = "qemu64",
     [string]$Accel = ""
 )
@@ -13,10 +14,11 @@ $Kernel    = "orion"
 $SrcDir    = Join-Path $Root "kernel\src"
 $IncDir    = Join-Path $Root "kernel\include"
 $LimineDir = Join-Path $Root "third_party\limine"
+$UserDir   = Join-Path $Root "user"
 $BuildDir  = Join-Path $Root "build"
 $OutDir    = Join-Path $Root "out"
 $EspDir    = Join-Path $OutDir "esp"
-$Elf       = Join-Path $OutDir "$Kernel.elf"
+$KernelElf = Join-Path $OutDir "$Kernel.elf"
 
 function Find-Tool([string]$Name, [string[]]$Fallbacks) {
     $cmd = Get-Command $Name -ErrorAction SilentlyContinue
@@ -79,14 +81,54 @@ foreach ($src in $sources) {
 
 New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 Write-Host "  LD   out\$Kernel.elf"
-& $Lld @LdFlags -o $Elf @objects
-if ($LASTEXITCODE -ne 0) { throw "Erro no link" }
+& $Lld @LdFlags -o $KernelElf @objects
+if ($LASTEXITCODE -ne 0) { throw "Erro no link do kernel" }
+
+$UCFlags = @(
+    "--target=x86_64-unknown-none-elf", "-std=gnu11", "-O2", "-g", "-Wall", "-Wextra",
+    "-ffreestanding", "-nostdlibinc", "-fno-stack-protector", "-fno-pic", "-fno-pie",
+    "-mno-sse", "-mno-sse2", "-mno-mmx", "-mno-80387", "-I$UserDir\lib"
+)
+$ULdFlags = @(
+    "-m", "elf_x86_64", "-nostdlib", "-static", "-z", "max-page-size=0x1000",
+    "-z", "noexecstack", "-T", (Join-Path $UserDir "linker.ld")
+)
+$ulibSrcs = @(Get-ChildItem (Join-Path $UserDir "lib") -Filter *.c)
+$ulibHeaders = @(Get-ChildItem (Join-Path $UserDir "lib") -Filter *.h)
+$newestUlibHeader = ($ulibHeaders | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+
+$userElfs = @()
+foreach ($prog in Get-ChildItem (Join-Path $UserDir "progs") -Directory) {
+    $uobjDir = Join-Path $BuildDir "user\$($prog.Name)"
+    New-Item -ItemType Directory -Path $uobjDir -Force | Out-Null
+    $uobjs = @()
+    foreach ($usrc in ($ulibSrcs + @(Get-ChildItem $prog.FullName -Filter *.c))) {
+        $uobj = Join-Path $uobjDir ($usrc.Name + ".o")
+        $ustale = -not (Test-Path $uobj)
+        if (-not $ustale) {
+            $uobjTime = (Get-Item $uobj).LastWriteTime
+            $ustale = ($uobjTime -lt $usrc.LastWriteTime) -or ($uobjTime -lt $newestUlibHeader)
+        }
+        if ($ustale) {
+            Write-Host "  UCC  $($prog.Name)\$($usrc.Name)"
+            & $Clang @UCFlags -c $usrc.FullName -o $uobj
+            if ($LASTEXITCODE -ne 0) { throw "Erro compilando $($prog.Name)\$($usrc.Name)" }
+        }
+        $uobjs += $uobj
+    }
+    $uelf = Join-Path $OutDir "$($prog.Name).elf"
+    Write-Host "  ULD  out\$($prog.Name).elf"
+    & $Lld @ULdFlags -o $uelf @uobjs
+    if ($LASTEXITCODE -ne 0) { throw "Erro no link de $($prog.Name)" }
+    $userElfs += $uelf
+}
 
 New-Item -ItemType Directory -Force -Path (Join-Path $EspDir "EFI\BOOT"), (Join-Path $EspDir "boot\limine") | Out-Null
 Copy-Item (Join-Path $LimineDir "BOOTX64.EFI") (Join-Path $EspDir "EFI\BOOT\BOOTX64.EFI") -Force
-Copy-Item $Elf (Join-Path $EspDir "boot\$Kernel.elf") -Force
+Copy-Item $KernelElf (Join-Path $EspDir "boot\$Kernel.elf") -Force
+foreach ($e in $userElfs) { Copy-Item $e (Join-Path $EspDir "boot") -Force }
 Copy-Item (Join-Path $Root "limine.conf") (Join-Path $EspDir "boot\limine\limine.conf") -Force
-Write-Host "OK: out\$Kernel.elf ($compiled arquivo(s) recompilado(s))" -ForegroundColor Green
+Write-Host "OK: out\$Kernel.elf ($compiled arquivo(s) do kernel recompilado(s)), $($userElfs.Count) programa(s) de usuario" -ForegroundColor Green
 
 if ($Run) {
     $Qemu = Find-Tool "qemu-system-x86_64.exe" @("$env:ProgramFiles\qemu\qemu-system-x86_64.exe")
@@ -100,6 +142,7 @@ if ($Run) {
     $qemuArgs = @(
         "-M", "q35",
         "-cpu", $Cpu,
+        "-smp", "$Smp",
         "-m", "${Memory}M",
         "-drive", "if=pflash,format=raw,unit=0,file=$ovmfCode,readonly=on",
         "-drive", "if=pflash,format=raw,unit=1,file=$ovmfVars",

@@ -1,8 +1,3 @@
-/*
- * acpi.h - leitura das tabelas ACPI (só o que precisamos: RSDP -> XSDT/RSDT
- * -> MADT). O MADT diz onde estão o LAPIC e os I/O APICs, quantas CPUs
- * existem e como as IRQs ISA foram remapeadas para GSIs.
- */
 #pragma once
 
 #include <kernel/compiler.h>
@@ -30,11 +25,10 @@ struct acpi_cpu {
 
 struct acpi_ioapic {
     uint8_t  id;
-    uint32_t address;   /* físico */
+    uint32_t address;
     uint32_t gsi_base;
 };
 
-/* Como uma IRQ ISA (0-15) aparece nos I/O APICs. */
 struct acpi_irq_override {
     bool     present;
     uint32_t gsi;
@@ -52,14 +46,11 @@ struct acpi_madt_info {
     struct acpi_irq_override isa_overrides[16];
 };
 
-/* Retorna false se não há ACPI utilizável (fica no PIC/PIT). */
 bool acpi_init(void);
 bool acpi_available(void);
 
-/* Procura uma tabela pela assinatura ("APIC", "HPET", "FACP"...). */
 const struct acpi_sdt_header *acpi_find_table(const char *signature);
 
-/* Dados extraídos do MADT (válidos após acpi_init() retornar true). */
 const struct acpi_madt_info *acpi_madt(void);
 
 void acpi_dump(void);
