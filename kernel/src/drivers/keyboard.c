@@ -56,7 +56,7 @@ static const char keymap_shift[128] = {
 
 #define BUF_SIZE 256
 static char buf[BUF_SIZE];
-static volatile uint32_t buf_head, buf_tail; /* head = escrita, tail = leitura */
+static volatile uint32_t buf_head, buf_tail;
 
 static uint8_t modifiers;
 static bool extended_pending;

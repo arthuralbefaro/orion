@@ -1,15 +1,3 @@
-/*
- * main.c - ponto de entrada do kernel (chamado pelo Limine já em long mode).
- *
- * Ordem de inicialização importa:
- *   1. boot_info  - sem isso não sabemos nem onde está a memória
- *   2. serial     - primeira saída de debug
- *   3. console    - framebuffer
- *   4. GDT/IDT    - antes de qualquer coisa que possa causar exceção
- *   5. PMM/VMM/heap - memória (o LAPIC e o I/O APIC precisam de MMIO)
- *   6. PIC (mascarado) -> LAPIC -> ACPI -> I/O APIC -> timer -> teclado
- *   7. sti        - só agora interrupções ligadas
- */
 #include <kernel/version.h>
 #include <kernel/log.h>
 #include <kernel/shell.h>
@@ -92,8 +80,6 @@ void kmain(void)
     pic_init();
     lapic_init();
 
-    /* Com ACPI + I/O APIC, aposentamos o 8259: mascara tudo nele e fecha a
-     * porta LINT0 do LAPIC. Sem ACPI (maquinas antigas), continua no PIC. */
     if (acpi_init() && ioapic_init()) {
         pic_disable();
         lapic_set_lint0_extint(false);
@@ -110,8 +96,6 @@ void kmain(void)
     sti();
     log_info("main", "interrupcoes habilitadas");
 
-    /* Sem LAPIC a LINT0 continua mascarada e nenhuma IRQ do PIC chega:
-     * nada de timer nem teclado (o shell ainda funciona pela serial). */
     bool irqs_ok = lapic_is_enabled();
     if (irqs_ok) {
         uint64_t t0 = time_ticks();
@@ -128,12 +112,12 @@ void kmain(void)
     for (;;) {
         int c = keyboard_getchar();
         if (c < 0)
-            c = serial_getc(); /* também aceita comandos pela serial */
+            c = serial_getc();
         if (c >= 0)
             shell_feed((char)c);
         else if (irqs_ok)
-            hlt();   /* dorme até a próxima interrupção */
+            hlt();
         else
-            pause(); /* sem interrupções, só resta fazer polling */
+            pause();
     }
 }

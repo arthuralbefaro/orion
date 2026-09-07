@@ -1,6 +1,3 @@
-/*
- * time.c - tick do sistema e TSC.
- */
 #include <kernel/time.h>
 #include <kernel/log.h>
 #include <arch/x86_64/cpu.h>
@@ -21,8 +18,6 @@ static void tick_handler(struct interrupt_frame *frame, void *ctx)
     ticks++;
 }
 
-/* Mede quantos ciclos de TSC cabem em 10 ms (usando o canal 2 do PIT em
- * polling, sem depender de interrupções). */
 static uint64_t calibrate_tsc(void)
 {
     uint64_t t0 = rdtsc();

@@ -1,7 +1,3 @@
-/*
- * lapic.c - Local APIC. Usa x2APIC (MSRs) quando a CPU tem; senão mapeia
- * a página MMIO do xAPIC (0xFEE00000, normalmente) pela janela do VMM.
- */
 #include <arch/x86_64/lapic.h>
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/interrupts.h>
@@ -10,19 +6,19 @@
 #include <kernel/log.h>
 
 #define APIC_BASE_ENABLE   (1ull << 11)
-#define APIC_BASE_EXTD     (1ull << 10)  /* x2APIC */
+#define APIC_BASE_EXTD     (1ull << 10)
 #define APIC_BASE_ADDR_MASK 0x000FFFFFFFFFF000ull
 
 static bool enabled = false;
 static bool x2apic = false;
-static uint64_t timer_hz = 0;   /* frequencia do contador com divisor 16 */
-static volatile uint32_t *mmio = NULL;  /* base do xAPIC mapeada (se não x2APIC) */
+static uint64_t timer_hz = 0;
+static volatile uint32_t *mmio = NULL;
 
 static inline uint64_t lapic_read(uint32_t reg)
 {
     if (x2apic)
         return rdmsr(X2APIC_MSR_BASE + reg);
-    return mmio[reg * 4]; /* registradores a cada 16 bytes */
+    return mmio[reg * 4];
 }
 
 static inline void lapic_write(uint32_t reg, uint64_t value)
@@ -43,8 +39,6 @@ bool lapic_init(void)
 
     uint64_t base = rdmsr(MSR_IA32_APIC_BASE);
 
-    /* Garante o APIC ligado (xAPIC). Transição direta desligado->x2APIC
-     * gera #GP, por isso em dois passos. */
     if (!(base & APIC_BASE_ENABLE)) {
         base |= APIC_BASE_ENABLE;
         wrmsr(MSR_IA32_APIC_BASE, base);
@@ -63,15 +57,9 @@ bool lapic_init(void)
     }
     enabled = true;
 
-    /* Spurious Interrupt Vector Register: APIC software-enabled + vetor. */
     lapic_write(LAPIC_REG_SVR, LAPIC_SVR_ENABLE | VECTOR_SPURIOUS);
 
-    /* Aceita interrupções de qualquer prioridade. */
     lapic_write(LAPIC_REG_TPR, 0);
-
-    /* LINT0 = ExtINT: as IRQs do 8259 entram por aqui (virtual wire).
-     * LINT1 = NMI, mascarada por enquanto. Timer do LAPIC mascarado até
-     * termos calibração. */
     lapic_write(LAPIC_REG_LVT_LINT0, LAPIC_LVT_DELIVERY_EXTINT);
     lapic_write(LAPIC_REG_LVT_LINT1, LAPIC_LVT_DELIVERY_NMI | LAPIC_LVT_MASKED);
     lapic_write(LAPIC_REG_LVT_TIMER, LAPIC_LVT_MASKED);
@@ -98,7 +86,7 @@ uint32_t lapic_id(void)
     if (!enabled)
         return 0;
     uint32_t id = (uint32_t)lapic_read(LAPIC_REG_ID);
-    return x2apic ? id : id >> 24; /* no xAPIC o ID fica nos bits 24-31 */
+    return x2apic ? id : id >> 24;
 }
 
 void lapic_eoi(void)
@@ -113,7 +101,6 @@ void lapic_set_lint0_extint(bool enable)
         lapic_write(LAPIC_REG_LVT_LINT0, enable ? LAPIC_LVT_DELIVERY_EXTINT : LAPIC_LVT_MASKED);
 }
 
-/* Divisor 16: valor 0x3 no registrador de divide configuration. */
 #define TIMER_DIV_16 0x3
 
 bool lapic_timer_calibrate(void)
@@ -122,13 +109,13 @@ bool lapic_timer_calibrate(void)
         return false;
 
     lapic_write(LAPIC_REG_TIMER_DIV, TIMER_DIV_16);
-    lapic_write(LAPIC_REG_LVT_TIMER, LAPIC_LVT_MASKED);  /* one-shot, mascarado */
+    lapic_write(LAPIC_REG_LVT_TIMER, LAPIC_LVT_MASKED);
     lapic_write(LAPIC_REG_TIMER_INIT, 0xFFFFFFFF);
 
     pit_channel2_wait_ms(10);
 
     uint32_t remaining = (uint32_t)lapic_read(LAPIC_REG_TIMER_CUR);
-    lapic_write(LAPIC_REG_TIMER_INIT, 0);               /* para o contador */
+    lapic_write(LAPIC_REG_TIMER_INIT, 0);
 
     uint64_t elapsed = 0xFFFFFFFFu - remaining;
     if (elapsed < 1000) {
