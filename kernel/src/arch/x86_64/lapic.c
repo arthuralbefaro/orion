@@ -1,0 +1,166 @@
+/*
+ * lapic.c - Local APIC. Usa x2APIC (MSRs) quando a CPU tem; senão mapeia
+ * a página MMIO do xAPIC (0xFEE00000, normalmente) pela janela do VMM.
+ */
+#include <arch/x86_64/lapic.h>
+#include <arch/x86_64/cpu.h>
+#include <arch/x86_64/interrupts.h>
+#include <mm/vmm.h>
+#include <drivers/pit.h>
+#include <kernel/log.h>
+
+#define APIC_BASE_ENABLE   (1ull << 11)
+#define APIC_BASE_EXTD     (1ull << 10)  /* x2APIC */
+#define APIC_BASE_ADDR_MASK 0x000FFFFFFFFFF000ull
+
+static bool enabled = false;
+static bool x2apic = false;
+static uint64_t timer_hz = 0;   /* frequencia do contador com divisor 16 */
+static volatile uint32_t *mmio = NULL;  /* base do xAPIC mapeada (se não x2APIC) */
+
+static inline uint64_t lapic_read(uint32_t reg)
+{
+    if (x2apic)
+        return rdmsr(X2APIC_MSR_BASE + reg);
+    return mmio[reg * 4]; /* registradores a cada 16 bytes */
+}
+
+static inline void lapic_write(uint32_t reg, uint64_t value)
+{
+    if (x2apic)
+        wrmsr(X2APIC_MSR_BASE + reg, value);
+    else
+        mmio[reg * 4] = (uint32_t)value;
+}
+
+bool lapic_init(void)
+{
+    struct cpuid_result r = cpuid(1, 0);
+    if (!(r.edx & CPUID_1_EDX_APIC)) {
+        log_warn("lapic", "CPU sem APIC local");
+        return false;
+    }
+
+    uint64_t base = rdmsr(MSR_IA32_APIC_BASE);
+
+    /* Garante o APIC ligado (xAPIC). Transição direta desligado->x2APIC
+     * gera #GP, por isso em dois passos. */
+    if (!(base & APIC_BASE_ENABLE)) {
+        base |= APIC_BASE_ENABLE;
+        wrmsr(MSR_IA32_APIC_BASE, base);
+    }
+
+    if (r.ecx & CPUID_1_ECX_X2APIC) {
+        if (!(base & APIC_BASE_EXTD)) {
+            base |= APIC_BASE_EXTD;
+            wrmsr(MSR_IA32_APIC_BASE, base);
+        }
+        x2apic = true;
+    } else {
+        uint64_t phys = base & APIC_BASE_ADDR_MASK;
+        mmio = vmm_map_mmio(phys, 4096);
+        log_info("lapic", "xAPIC MMIO %016lx mapeado em %p", phys, (void *)mmio);
+    }
+    enabled = true;
+
+    /* Spurious Interrupt Vector Register: APIC software-enabled + vetor. */
+    lapic_write(LAPIC_REG_SVR, LAPIC_SVR_ENABLE | VECTOR_SPURIOUS);
+
+    /* Aceita interrupções de qualquer prioridade. */
+    lapic_write(LAPIC_REG_TPR, 0);
+
+    /* LINT0 = ExtINT: as IRQs do 8259 entram por aqui (virtual wire).
+     * LINT1 = NMI, mascarada por enquanto. Timer do LAPIC mascarado até
+     * termos calibração. */
+    lapic_write(LAPIC_REG_LVT_LINT0, LAPIC_LVT_DELIVERY_EXTINT);
+    lapic_write(LAPIC_REG_LVT_LINT1, LAPIC_LVT_DELIVERY_NMI | LAPIC_LVT_MASKED);
+    lapic_write(LAPIC_REG_LVT_TIMER, LAPIC_LVT_MASKED);
+
+    uint32_t version = (uint32_t)lapic_read(LAPIC_REG_VERSION);
+    log_info("lapic", "%s ligado: id=%u versao=0x%02x lvt_entries=%u, LINT0=ExtINT",
+             x2apic ? "x2APIC" : "xAPIC", lapic_id(), version & 0xFF,
+             ((version >> 16) & 0xFF) + 1);
+    return true;
+}
+
+bool lapic_is_enabled(void)
+{
+    return enabled;
+}
+
+bool lapic_is_x2apic(void)
+{
+    return x2apic;
+}
+
+uint32_t lapic_id(void)
+{
+    if (!enabled)
+        return 0;
+    uint32_t id = (uint32_t)lapic_read(LAPIC_REG_ID);
+    return x2apic ? id : id >> 24; /* no xAPIC o ID fica nos bits 24-31 */
+}
+
+void lapic_eoi(void)
+{
+    if (enabled)
+        lapic_write(LAPIC_REG_EOI, 0);
+}
+
+void lapic_set_lint0_extint(bool enable)
+{
+    if (enabled)
+        lapic_write(LAPIC_REG_LVT_LINT0, enable ? LAPIC_LVT_DELIVERY_EXTINT : LAPIC_LVT_MASKED);
+}
+
+/* Divisor 16: valor 0x3 no registrador de divide configuration. */
+#define TIMER_DIV_16 0x3
+
+bool lapic_timer_calibrate(void)
+{
+    if (!enabled)
+        return false;
+
+    lapic_write(LAPIC_REG_TIMER_DIV, TIMER_DIV_16);
+    lapic_write(LAPIC_REG_LVT_TIMER, LAPIC_LVT_MASKED);  /* one-shot, mascarado */
+    lapic_write(LAPIC_REG_TIMER_INIT, 0xFFFFFFFF);
+
+    pit_channel2_wait_ms(10);
+
+    uint32_t remaining = (uint32_t)lapic_read(LAPIC_REG_TIMER_CUR);
+    lapic_write(LAPIC_REG_TIMER_INIT, 0);               /* para o contador */
+
+    uint64_t elapsed = 0xFFFFFFFFu - remaining;
+    if (elapsed < 1000) {
+        log_warn("lapic", "timer nao avancou durante a calibracao");
+        return false;
+    }
+    timer_hz = elapsed * 100;
+    log_info("lapic", "timer calibrado: %lu ticks/s (div 16)", timer_hz);
+    return true;
+}
+
+uint64_t lapic_timer_frequency(void)
+{
+    return timer_hz;
+}
+
+void lapic_timer_start_periodic(uint8_t vector, uint32_t hz)
+{
+    if (!enabled || !timer_hz)
+        return;
+    uint32_t initial = (uint32_t)(timer_hz / hz);
+    if (initial == 0)
+        initial = 1;
+    lapic_write(LAPIC_REG_TIMER_DIV, TIMER_DIV_16);
+    lapic_write(LAPIC_REG_LVT_TIMER, vector | LAPIC_LVT_TIMER_PERIODIC);
+    lapic_write(LAPIC_REG_TIMER_INIT, initial);
+}
+
+void lapic_timer_stop(void)
+{
+    if (!enabled)
+        return;
+    lapic_write(LAPIC_REG_LVT_TIMER, LAPIC_LVT_MASKED);
+    lapic_write(LAPIC_REG_TIMER_INIT, 0);
+}

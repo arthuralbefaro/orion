@@ -1,0 +1,65 @@
+/*
+ * acpi.h - leitura das tabelas ACPI (só o que precisamos: RSDP -> XSDT/RSDT
+ * -> MADT). O MADT diz onde estão o LAPIC e os I/O APICs, quantas CPUs
+ * existem e como as IRQs ISA foram remapeadas para GSIs.
+ */
+#pragma once
+
+#include <kernel/compiler.h>
+
+struct acpi_sdt_header {
+    char     signature[4];
+    uint32_t length;
+    uint8_t  revision;
+    uint8_t  checksum;
+    char     oem_id[6];
+    char     oem_table_id[8];
+    uint32_t oem_revision;
+    uint32_t creator_id;
+    uint32_t creator_revision;
+} PACKED;
+
+#define ACPI_MAX_CPUS     64
+#define ACPI_MAX_IOAPICS  8
+
+struct acpi_cpu {
+    uint32_t acpi_id;
+    uint32_t apic_id;
+    bool     enabled;
+};
+
+struct acpi_ioapic {
+    uint8_t  id;
+    uint32_t address;   /* físico */
+    uint32_t gsi_base;
+};
+
+/* Como uma IRQ ISA (0-15) aparece nos I/O APICs. */
+struct acpi_irq_override {
+    bool     present;
+    uint32_t gsi;
+    bool     active_low;
+    bool     level_triggered;
+};
+
+struct acpi_madt_info {
+    uint32_t lapic_address;
+    bool     has_legacy_pic;
+    uint32_t cpu_count;
+    struct acpi_cpu cpus[ACPI_MAX_CPUS];
+    uint32_t ioapic_count;
+    struct acpi_ioapic ioapics[ACPI_MAX_IOAPICS];
+    struct acpi_irq_override isa_overrides[16];
+};
+
+/* Retorna false se não há ACPI utilizável (fica no PIC/PIT). */
+bool acpi_init(void);
+bool acpi_available(void);
+
+/* Procura uma tabela pela assinatura ("APIC", "HPET", "FACP"...). */
+const struct acpi_sdt_header *acpi_find_table(const char *signature);
+
+/* Dados extraídos do MADT (válidos após acpi_init() retornar true). */
+const struct acpi_madt_info *acpi_madt(void);
+
+void acpi_dump(void);
