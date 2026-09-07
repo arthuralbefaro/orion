@@ -7,6 +7,7 @@
 #include <drivers/console.h>
 #include <lib/string.h>
 #include <kernel/log.h>
+#include <kernel/sched.h>
 
 struct idt_entry {
     uint16_t offset_low;
@@ -192,8 +193,6 @@ void isr_dispatch(struct interrupt_frame *frame)
     if (vec >= VECTOR_IRQ_BASE && vec < VECTOR_IRQ_BASE + VECTOR_IRQ_COUNT) {
         uint8_t irq = vec - VECTOR_IRQ_BASE;
 
-        /* Modo PIC: IRQ 7/15 podem ser espúrias (ruído / timing do 8259).
-         * Nesse caso não há bit no ISR e não se manda EOI. */
         if (irq_mode == IRQ_MODE_PIC && pic_is_spurious(irq))
             return;
 
@@ -206,11 +205,12 @@ void isr_dispatch(struct interrupt_frame *frame)
             lapic_eoi();
         else
             pic_send_eoi(irq);
+        sched_check_preempt();
         return;
     }
 
     if (vec == VECTOR_SPURIOUS)
-        return; /* espúria do LAPIC: ignorar, sem EOI */
+        return;
 
     if (handlers[vec].fn)
         handlers[vec].fn(frame, handlers[vec].ctx);
@@ -218,6 +218,7 @@ void isr_dispatch(struct interrupt_frame *frame)
         log_warn("int", "vetor %u sem handler", vec);
         
     lapic_eoi();
+    sched_check_preempt();
 }
 
 void idt_init(void)

@@ -1,5 +1,6 @@
 #include <kernel/time.h>
 #include <kernel/log.h>
+#include <kernel/sched.h>
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/interrupts.h>
 #include <arch/x86_64/lapic.h>
@@ -16,6 +17,7 @@ static void tick_handler(struct interrupt_frame *frame, void *ctx)
     (void)frame;
     (void)ctx;
     ticks++;
+    sched_tick(ticks);
 }
 
 static uint64_t calibrate_tsc(void)

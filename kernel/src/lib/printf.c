@@ -1,10 +1,8 @@
-/*
- * printf.c - motor de formatação do kernel.
- */
 #include <lib/printf.h>
 #include <lib/string.h>
 #include <drivers/serial.h>
 #include <drivers/console.h>
+#include <kernel/spinlock.h>
 
 #define FLAG_LEFT   (1 << 0)  
 #define FLAG_ZERO   (1 << 1)  
@@ -287,9 +285,17 @@ static void kputc_cb(char c, void *ctx)
     kputc(c);
 }
 
+static spinlock_t print_lock = SPINLOCK_INIT;
+
 int kvprintf(const char *fmt, va_list ap)
 {
-    return kvformat(kputc_cb, NULL, fmt, ap);
+    uint64_t flags = irq_save();
+    bool locked = spin_try_lock(&print_lock);
+    int n = kvformat(kputc_cb, NULL, fmt, ap);
+    if (locked)
+        spin_unlock(&print_lock);
+    irq_restore(flags);
+    return n;
 }
 
 int kprintf(const char *fmt, ...)

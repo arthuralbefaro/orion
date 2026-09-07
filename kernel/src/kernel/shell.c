@@ -8,6 +8,7 @@
 #include <drivers/console.h>
 #include <drivers/acpi.h>
 #include <drivers/ioapic.h>
+#include <kernel/sched.h>
 #include <kernel/time.h>
 #include <drivers/pic.h>
 #include <mm/pmm.h>
@@ -161,6 +162,58 @@ static void cmd_cpus(const char *args)
                 m->cpus[i].apic_id, m->cpus[i].enabled ? "ativa" : "desativada");
 }
 
+static void cmd_ps(const char *args)
+{
+    (void)args;
+    sched_dump();
+}
+
+static void worker_sleepy(void *arg)
+{
+    uint64_t id = (uint64_t)arg;
+    for (int i = 0; i <= 4; i++) {
+        kprintf("  [thread %lu] iteracao %d (t=%lu ms)\n", id, i, time_uptime_ms());
+        thread_sleep_ms(200 * id);
+    }
+    kprintf("  [thread %lu] terminando\n", id);
+}
+
+static void cmd_threads(const char *args)
+{
+    (void)args;
+    kprintf("Criando 3 threads que dormem 200/400/600 ms entre mensagens...\n");
+    for (uint64_t i = 1; i <= 3; i++) {
+        char name[16];
+        ksnprintf(name, sizeof(name), "sleepy-%lu", i);
+        thread_create(name, worker_sleepy, (void *)i);
+    }
+}
+
+static volatile uint64_t busy_count[2];
+static volatile bool busy_stop;
+
+static void worker_busy(void *arg)
+{
+    uint64_t idx = (uint64_t)arg;
+    while (!busy_stop)
+        busy_count[idx]++;
+}
+
+static void cmd_preempt(const char *args)
+{
+    (void)args;
+    busy_count[0] = busy_count[1] = 0;
+    busy_stop = false;
+    struct thread *a = thread_create("busy-A", worker_busy, (void *)0);
+    struct thread *b = thread_create("busy-B", worker_busy, (void *)1);
+    kprintf("Duas threads em loop infinito (tids %u e %u); dormindo 1 s...\n", a->tid, b->tid);
+    thread_sleep_ms(1000);
+    busy_stop = true;
+    thread_sleep_ms(50); /* deixa as duas sairem */
+    kprintf("  A contou %lu, B contou %lu -> %s\n", busy_count[0], busy_count[1],
+            (busy_count[0] && busy_count[1]) ? "preempcao OK (as duas rodaram)" : "FALHA");
+}
+
 static void cmd_boot(const char *args)
 {
     (void)args;
@@ -227,6 +280,9 @@ static const struct command commands[] = {
     { "boot",   "informacoes do bootloader",            cmd_boot },
     { "acpi",   "tabelas ACPI encontradas",             cmd_acpi },
     { "cpus",   "CPUs listadas no MADT",                cmd_cpus },
+    { "ps",     "lista as threads",                     cmd_ps },
+    { "threads", "demo: 3 threads dormindo",            cmd_threads },
+    { "preempt", "demo: preempcao de loops ocupados",   cmd_preempt },
     { "panic",  "dispara um kernel panic",              cmd_panic },
     { "crash",  "divisao por zero (testa excecao #DE)", cmd_crash },
     { "pf",     "page fault proposital (testa #PF)",    cmd_pf },
