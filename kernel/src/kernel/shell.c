@@ -8,6 +8,7 @@
 #include <drivers/console.h>
 #include <drivers/acpi.h>
 #include <drivers/ioapic.h>
+#include <drivers/mouse.h>
 #include <kernel/time.h>
 #include <kernel/sched.h>
 #include <kernel/process.h>
@@ -231,6 +232,32 @@ static void cmd_preempt(const char *args)
             (busy_count[0] && busy_count[1]) ? "OK (as duas rodaram)" : "FALHA");
 }
 
+static void cmd_mouse(const char *args)
+{
+    (void)args;
+    if (!mouse_available()) {
+        kprintf("mouse PS/2 nao inicializado\n");
+        return;
+    }
+    kprintf("Eventos do mouse por 3 segundos (roda: %s)...\n", mouse_has_wheel() ? "sim" : "nao");
+    uint64_t end = time_uptime_ms() + 3000;
+    uint32_t seen = 0;
+    while (time_uptime_ms() < end) {
+        struct mouse_packet p;
+        if (!mouse_poll(&p)) {
+            thread_sleep_ms(10);
+            continue;
+        }
+        seen++;
+        kprintf("  dx=%4d dy=%4d dz=%2d botoes=[%c%c%c]\n", p.dx, p.dy, p.dz,
+                (p.buttons & MOUSE_BUTTON_LEFT) ? 'E' : '-',
+                (p.buttons & MOUSE_BUTTON_MIDDLE) ? 'M' : '-',
+                (p.buttons & MOUSE_BUTTON_RIGHT) ? 'D' : '-');
+    }
+    kprintf("  %u evento(s) nesta janela; %lu pacote(s) e %lu resync(s) desde o boot\n",
+            seen, mouse_packet_count(), mouse_resync_count());
+}
+
 static void cmd_mods(const char *args)
 {
     (void)args;
@@ -416,6 +443,7 @@ static const struct command commands[] = {
     { "cpus",   "CPUs listadas no MADT",                cmd_cpus },
     { "ps",     "lista as threads",                     cmd_ps },
     { "smp",    "estado de cada CPU",                   cmd_smp },
+    { "mouse",  "eventos do mouse PS/2 por 3 s",        cmd_mouse },
     { "threads", "demo: 3 threads dormindo",            cmd_threads },
     { "preempt", "demo: preempcao de loops ocupados",   cmd_preempt },
     { "mods",   "modulos carregados pelo bootloader",   cmd_mods },

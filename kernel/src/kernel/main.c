@@ -23,6 +23,7 @@
 #include <drivers/acpi.h>
 #include <drivers/ioapic.h>
 #include <drivers/keyboard.h>
+#include <drivers/mouse.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
 #include <mm/heap.h>
@@ -105,6 +106,7 @@ void kmain(void)
     time_init();
     rtc_init();
     keyboard_init();
+    mouse_init();
     sched_init();
     syscall_init();
     log_info("boot", "%u modulo(s) carregado(s)", boot_info.module_count);
