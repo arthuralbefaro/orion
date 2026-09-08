@@ -10,8 +10,8 @@ Base do turno: commit `fe29851` (v1.0), `.\check.ps1` limpo, regressao verde.
 | 4.1 | Filas de espera e poll (v1.1) | [x] | 22:52 | 02:35 | `5601c92` |
 | 4.2 | Sinais (v1.2) | [x] | 02:35 | 14:55 | `80361d7` |
 | 4.3 | Escrita no FAT e redirecionamentos (v1.3) | [x] | 14:55 | 20:10 | `a0da561` |
-| 4.4 | Teclas estendidas e edicao de linha (v1.4) | [ ] | 20:10 | - | - |
-| 4.5 | Fork copy-on-write (v1.5) | [ ] | - | - | - |
+| 4.4 | Teclas estendidas e edicao de linha (v1.4) | [x] | 20:10 | 01:40 | `ff02fda` |
+| 4.5 | Fork copy-on-write (v1.5) | [ ] | 01:40 | - | - |
 | 4.6 | Rede (v1.6) | [ ] | - | - | - |
 | 4.7 | GUI: boot direto e apps (v1.7) | [ ] | - | - | - |
 | 4.8 | Extras | [ ] | - | - | - |
@@ -20,7 +20,7 @@ Base do turno: commit `fe29851` (v1.0), `.\check.ps1` limpo, regressao verde.
 
     cd c:\dev\orion
     .\check.ps1          # precisa terminar com "Nenhum erro ou warning."
-    .\regressao.ps1      # sequencias A (texto) e B (grafica); exit 0 = verde
+    .\regressao.ps1      # sequencias A (texto), B (grafica) e C (disco); exit 0 = verde
     git log --oneline -5
 
 A proxima etapa e a primeira linha com `[ ]` na tabela acima.
@@ -94,4 +94,38 @@ por duas letras + hash do nome longo, como o Windows faz; (2) a opcao `-Disk`
 inseria argumentos vazios na linha de comando do QEMU quando desligada, e o QEMU
 saia sem mensagem - a regressao inteira caiu ate eu achar isso.
 
-### 4.4 Teclas estendidas e edicao de linha - inicio 20:10
+### 4.4 Teclas estendidas e edicao de linha - 20:10 as 01:40 - commit ff02fda - FEITO
+Teclado: mapa de teclas estendidas (prefixo 0xE0) traduzido para sequencias ANSI
+(setas, Home, End, Delete, Insert, PageUp, PageDown), alem de Ctrl e Alt. O mesmo
+byte chega pelo teclado fisico, pela serial e pela PTY.
+Termios de verdade: `TCGETS`/`TCSETS` no TTY e na PTY, `ICANON` e `ECHO`
+separados, `cfmakeraw` na libc, `TIOCGWINSZ` (o `wm` informa o tamanho da janela
+a PTY).
+`sh`: `edit.c` novo com edicao de linha em modo raw - setas esquerda/direita,
+Home, End, Delete, backspace no meio, Ctrl+L, Ctrl+D - e historico de 50 linhas
+nas setas cima/baixo, com o builtin `history`. Redesenho sempre por
+`\r ESC[K linha inteira`, que e O(largura) e nao erra o cursor.
+Terminal grafico do `wm` reescrito: parser CSI completo (CUU/CUD/CUF/CUB, CHA,
+CUP, ED, EL, SGR, `ESC[?25h/l`) e 16 cores com video reverso; cada celula guarda
+caractere, frente e fundo.
+Programa novo `edit`: editor de tela cheia (abre, navega, edita, salva com
+Ctrl+S, sai com Ctrl+X), usa `TIOCGWINSZ` e barra de status em video reverso.
+Funciona igual no TTY e na janela do `wm`.
+Um problema achado: o `edit` saia com Ctrl+Q, mas o `wm` reserva Ctrl+Q para
+fechar a janela focada - dentro do terminal grafico a tecla fechava a janela e o
+editor nunca via nada. Trocado para Ctrl+X.
+A regressao ganhou os passos `keys:<hex>` (varios bytes de uma vez, porque uma
+seta sao tres bytes) e 9 verificacoes novas: recuperar comando do historico e
+anexar texto, inserir no meio com a seta esquerda, Home/End/backspace, Home no
+inicio, seta direita + Delete, listagem do `history`, e o ciclo completo do
+`edit` (grava, sai, `cat` mostra o conteudo).
+Segundo problema, achado pela regressao: a verificacao de memoria da sequencia C
+acusou 69 paginas a mais. Nao era vazamento - o `edit` ainda estava vivo quando o
+`mem` final rodou, segurando os 128 KiB de buffer. A causa e que o `edit`
+redesenhava as 24 linhas a cada tecla (~2 KiB), e a serial de 115200 baud nao
+dava conta: o editor ficava segundos atras das teclas injetadas. Passou a
+redesenhar a tela toda so quando as linhas se deslocam; nas demais teclas
+reescreve so a linha do cursor e o status. Depois disso a sequencia C fecha com
+delta de 1 pagina.
+
+### 4.5 Fork copy-on-write - inicio 01:40
