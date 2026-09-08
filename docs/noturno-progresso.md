@@ -13,8 +13,8 @@ Base do turno: commit `fe29851` (v1.0), `.\check.ps1` limpo, regressao verde.
 | 4.4 | Teclas estendidas e edicao de linha (v1.4) | [x] | 20:10 | 01:40 | `ff02fda` |
 | 4.5 | Fork copy-on-write (v1.5) | [x] | 01:40 | 06:20 | `8e8b469` |
 | 4.6 | Rede (v1.6) | [x] | 06:20 | 12:05 | `32b9937` |
-| 4.7 | GUI: boot direto e apps (v1.7) | [ ] | 12:05 | - | - |
-| 4.8 | Extras | [ ] | - | - | - |
+| 4.7 | GUI: boot direto e apps (v1.7) | [x] | 12:05 | 17:40 | `9fcd874` |
+| 4.8 | Extras | [ ] | 17:40 | - | - |
 
 ## Como retomar
 
@@ -199,4 +199,45 @@ Fora do escopo: TCP e `wget` (o passo pedia como opcional e a maquina de estados
 com retransmissao nao cabia no tempo). A verificacao do `nslookup` na regressao
 depende de o hospedeiro ter DNS funcionando.
 
-### 4.7 GUI: boot direto e apps - inicio 12:05
+### 4.7 GUI: boot direto e aplicativos - 12:05 as 17:40 - commit 9fcd874 - FEITO
+`init` le `/etc/autostart`: uma linha por comando, `#` e comentario, e
+`shell <caminho>` troca o programa que ele mantem vivo. O padrao continua
+`shell /bin/sh`; `.\build.ps1 -Gui` grava um autostart com `/bin/dhcp` e
+`shell /bin/wm`, e o sistema sobe direto na interface grafica, ja com IP.
+Dois syscalls proprios em vez de um `/proc`: `sysinfo` (1002, memoria, uptime,
+heap e numero de CPUs) e `proclist` (1003, ate 64 processos).
+`wm` ganhou janelas de painel (um vetor de linhas de texto que o compositor
+preenche): `Processos` (pid, ppid, paginas, nome, atualizada a cada segundo) e
+`Arquivos` (readdir + stat, clicar num diretorio entra, `..` sobe). Menu no
+botao "Orion 1.0" com terminal, processos, arquivos, sobre e encerrar, com
+realce ao passar o mouse. A barra de topo mostra IP, memoria usada, data e hora,
+e corta a dica da esquerda para nao colidir com o lado direito.
+Atalhos novos: Ctrl+P (processos) e Ctrl+F (arquivos).
+Tres problemas achados:
+(1) `build.ps1` so considerava os cabecalhos de `user/lib` ao decidir se
+recompila um programa. Mudar `wm/win.h` nao recompilava `wm/win.c`, e o binario
+saia com o valor antigo compilado dentro - passei um tempo achando que a
+mudanca de largura do menu nao tinha efeito. Agora os cabecalhos de dentro do
+diretorio do programa contam.
+(2) A sequencia D constroi com `-Gui`, o que deixa `out\esp\etc\autostart`
+apontando para o `wm`. Como as sequencias A, B e C rodam com `-NoBuild`, a
+proxima execucao de C bootava na interface grafica e todos os comandos iam para
+o `sh` de dentro do compositor, sem sair pela serial: 14 verificacoes vermelhas
+sem nenhuma falha de verdade. A sequencia D agora restaura o autostart padrao no
+fim.
+(3) Uma vez, e so uma vez em muitas execucoes, a sequencia C caiu com
+`#PF Page Fault ... ring 0, busca de instrucao` em RIP=0 durante o `mkfs`, na
+CPU 2, com o quadro de excecao inconsistente (RSP=0x400, CS=0x270) e RBP/R13
+apontando para a regiao HHDM. Nao reproduziu em nenhuma das execucoes seguintes
+da mesma sequencia. **Continua em aberto.** Como nao dava para reproduzir, o que
+entrou foi diagnostico: o dump de excecao nao tratada agora imprime tid, nome,
+CPU, os limites da pilha da thread e se o RSP esta dentro dela, alem do processo
+dono. Na proxima vez da para dizer de imediato se e estouro de pilha de kernel.
+(4) Depois de (3), a sequencia A travou uma vez logo depois de o `forktest -s`
+terminar: nenhum panico, so o sistema parou de responder na serial. Rodando a
+sequencia A sozinha duas vezes em seguida, as duas passaram (41 de 41). Junto
+com (3), sao duas travadas raras e nao reproduziveis, as duas em momentos de
+criacao/saida de processo com 4 CPUs. **E o problema numero um em aberto no
+fim do turno.**
+
+### 4.8 Extras - inicio 17:40
