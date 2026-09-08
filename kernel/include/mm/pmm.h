@@ -30,6 +30,11 @@ uint64_t pmm_alloc_pages(size_t count);
 void     pmm_free_page(uint64_t phys);
 void     pmm_free_pages(uint64_t phys, size_t count);
 
+/* Contagem de referencias por pagina, usada pelo fork copy-on-write. */
+void     pmm_ref_inc(uint64_t phys);
+uint32_t pmm_ref_count(uint64_t phys);
+uint64_t pmm_shared_pages(void);
+
 void     pmm_get_stats(struct pmm_stats *out);
 
 /* Imprime o mapa de memoria do bootloader. */

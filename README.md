@@ -1,8 +1,9 @@
 # Orion
 
 Sistema operacional x86_64 escrito do zero em C (gnu11), bootado pelo Limine.
-Kernel com SMP, memoria virtual, processos, sinais, filas de espera, FAT com
-leitura e escrita, e um compositor de janelas em espaco de usuario.
+Kernel com SMP, memoria virtual, processos, sinais, filas de espera, fork
+copy-on-write, FAT com leitura e escrita, e um compositor de janelas em espaco
+de usuario.
 
 ## Requisitos (Windows)
 `.\setup.ps1` instala tudo via winget: LLVM (clang + ld.lld), QEMU e Git,
@@ -80,6 +81,7 @@ A (texto), B (grafica, com screenshots) e C (disco cru, escrita e shell).
     fstest   auto-teste do sistema de arquivos (-a inclui 300 arquivos e 3 MiB)
     polltest auto-teste de poll, pipes e O_NONBLOCK
     sigtest  auto-teste de sinais, mascaras e alarm
+    forktest auto-teste do fork copy-on-write (-s deixa 8 filhos vivos)
     ptytest  abre um pty, roda o sh nele e injeta comandos
     crash    escreve em memoria do kernel (testa a protecao de ring 3)
     fbtest   pinta um gradiente e um retangulo em /dev/fb0

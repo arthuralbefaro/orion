@@ -8,6 +8,7 @@
 #include <arch/x86_64/cpu.h>
 #include <lib/string.h>
 #include <kernel/log.h>
+#include <kernel/spinlock.h>
 #include <limine.h>
 
 static uint8_t  *bitmap;        /* ponteiro virtual (HHDM) */
@@ -18,6 +19,9 @@ static uint64_t  total_pages;   /* páginas utilizáveis */
 static uint64_t  used_pages;
 static uint64_t  highest_addr;
 static uint64_t  search_hint;   /* índice a partir do qual procurar livre */
+static uint16_t *refcount;      /* referências extras por página; 0 = dono único */
+static uint64_t  shared_pages;
+static spinlock_t pmm_lock = SPINLOCK_INIT;
 
 static inline bool bit_test(uint64_t i)  { return (bitmap[i >> 3] >> (i & 7)) & 1; }
 static inline void bit_set(uint64_t i)   { bitmap[i >> 3] |= (uint8_t)(1 << (i & 7)); }
@@ -110,6 +114,13 @@ void pmm_init(void)
 
     search_hint = bitmap_phys / PAGE_SIZE;
 
+    uint64_t ref_bytes = ALIGN_UP(page_count * sizeof(uint16_t), PAGE_SIZE);
+    uint64_t ref_phys = pmm_alloc_pages(ref_bytes / PAGE_SIZE);
+    if (!ref_phys)
+        panic("pmm: sem memoria para a tabela de referencias");
+    refcount = phys_to_virt(ref_phys);
+    memset(refcount, 0, ref_bytes);
+
     log_info("pmm", "RAM utilizavel: %lu MiB em %lu paginas; bitmap de %lu KiB em %016lx",
              total_pages * PAGE_SIZE / MiB(1), total_pages, bitmap_bytes / 1024, bitmap_phys);
 }
@@ -147,14 +158,14 @@ uint64_t pmm_alloc_pages(size_t count)
     if (count == 0)
         return 0;
 
-    uint64_t flags = irq_save();
+    uint64_t flags = spin_lock_irqsave(&pmm_lock);
 
     uint64_t idx = find_free_run(search_hint, count);
     if (idx == (uint64_t)-1)
         idx = find_free_run(1, count); /* volta ao início (pula a página 0) */
 
     if (idx == (uint64_t)-1) {
-        irq_restore(flags);
+        spin_unlock_irqrestore(&pmm_lock, flags);
         log_error("pmm", "sem memoria: pedido de %zu pagina(s)", count);
         return 0;
     }
@@ -164,7 +175,7 @@ uint64_t pmm_alloc_pages(size_t count)
     used_pages += count;
     search_hint = idx + count;
 
-    irq_restore(flags);
+    spin_unlock_irqrestore(&pmm_lock, flags);
     return idx * PAGE_SIZE;
 }
 
@@ -179,16 +190,49 @@ void pmm_free_pages(uint64_t phys, size_t count)
     uint64_t idx = phys / PAGE_SIZE;
     ASSERT(idx + count <= page_count);
 
-    uint64_t flags = irq_save();
+    uint64_t flags = spin_lock_irqsave(&pmm_lock);
     for (size_t i = 0; i < count; i++) {
+        if (refcount && refcount[idx + i]) {
+            if (--refcount[idx + i] == 0)
+                shared_pages--;
+            continue;
+        }
         if (!bit_test(idx + i))
             panic("pmm: double free da pagina %016lx", (idx + i) * PAGE_SIZE);
         bit_clear(idx + i);
+        used_pages--;
+        if (idx + i < search_hint)
+            search_hint = idx + i;
     }
-    used_pages -= count;
-    if (idx < search_hint)
-        search_hint = idx;
-    irq_restore(flags);
+    spin_unlock_irqrestore(&pmm_lock, flags);
+}
+
+void pmm_ref_inc(uint64_t phys)
+{
+    uint64_t idx = phys / PAGE_SIZE;
+    ASSERT(idx < page_count);
+    uint64_t flags = spin_lock_irqsave(&pmm_lock);
+    if (refcount[idx] == UINT16_MAX)
+        panic("pmm: contador de referencias estourou na pagina %016lx", phys);
+    if (refcount[idx]++ == 0)
+        shared_pages++;
+    spin_unlock_irqrestore(&pmm_lock, flags);
+}
+
+uint32_t pmm_ref_count(uint64_t phys)
+{
+    uint64_t idx = phys / PAGE_SIZE;
+    if (idx >= page_count)
+        return 1;
+    uint64_t flags = spin_lock_irqsave(&pmm_lock);
+    uint32_t n = (uint32_t)refcount[idx] + 1;
+    spin_unlock_irqrestore(&pmm_lock, flags);
+    return n;
+}
+
+uint64_t pmm_shared_pages(void)
+{
+    return shared_pages;
 }
 
 void pmm_free_page(uint64_t phys)

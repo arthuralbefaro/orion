@@ -23,6 +23,7 @@
 #include <arch/x86_64/percpu.h>
 #include <drivers/pic.h>
 #include <mm/pmm.h>
+#include <mm/vmm.h>
 #include <mm/heap.h>
 #include <mm/memory.h>
 #include <lib/string.h>
@@ -62,6 +63,10 @@ static void cmd_mem(const char *args)
     kprintf("RAM utilizavel: %lu MiB (livre: %lu MiB), bitmap: %lu KiB\n",
             st.total_pages * PAGE_SIZE / MiB(1), st.free_pages * PAGE_SIZE / MiB(1),
             st.bitmap_bytes / 1024);
+    uint64_t faults, copies;
+    vmm_cow_stats(&faults, &copies);
+    kprintf("COW: %lu pagina(s) compartilhada(s), %lu falta(s), %lu copia(s)\n",
+            pmm_shared_pages(), faults, copies);
     kprintf("HHDM offset: %016lx | kernel fisico: %016lx virtual: %016lx\n",
             boot_info.hhdm_offset, boot_info.kernel_phys_base, boot_info.kernel_virt_base);
 }

@@ -369,7 +369,7 @@ int process_fd_close(struct process *p, int fd)
     return 0;
 }
 
-static bool copy_user_pages(struct process *child, uint64_t parent_pml4)
+static bool share_user_pages(struct process *child, uint64_t parent_pml4)
 {
     uint64_t *pml4 = phys_to_virt(parent_pml4);
     for (uint64_t i4 = 0; i4 < 256; i4++) {
@@ -385,21 +385,24 @@ static bool copy_user_pages(struct process *child, uint64_t parent_pml4)
                     uint64_t e = pt[i1];
                     if (!(e & PTE_PRESENT)) continue;
                     uint64_t virt = (i4 << 39) | (i3 << 30) | (i2 << 21) | (i1 << 12);
+                    uint64_t phys = e & PTE_ADDR_MASK;
+                    uint64_t flags = e & ~PTE_ADDR_MASK;
                     if (e & PTE_NOFREE) {
-                        vmm_map_page_in(child->pml4_phys, virt, e & PTE_ADDR_MASK,
-                                        e & ~PTE_ADDR_MASK);
+                        vmm_map_page_in(child->pml4_phys, virt, phys, flags);
                         continue;
                     }
-                    uint64_t phys = pmm_alloc_page();
-                    if (!phys)
-                        return false;
-                    memcpy(phys_to_virt(phys), phys_to_virt(e & PTE_ADDR_MASK), PAGE_SIZE);
-                    vmm_map_page_in(child->pml4_phys, virt, phys, e & ~PTE_ADDR_MASK);
+                    if (flags & PTE_WRITABLE) {
+                        flags = (flags & ~PTE_WRITABLE) | PTE_COW;
+                        pt[i1] = phys | flags;
+                    }
+                    pmm_ref_inc(phys);
+                    vmm_map_page_in(child->pml4_phys, virt, phys, flags);
                     child->pages++;
                 }
             }
         }
     }
+    write_cr3(read_cr3());
     return true;
 }
 
@@ -418,7 +421,7 @@ int process_fork(struct interrupt_frame *frame)
     if (!child)
         return -ENOMEM;
 
-    if (!copy_user_pages(child, parent->pml4_phys)) {
+    if (!share_user_pages(child, parent->pml4_phys)) {
         vmm_destroy_address_space(child->pml4_phys);
         kfree(child);
         return -ENOMEM;

@@ -20,6 +20,9 @@ static bool     nx_supported;
 
 #define EFER_NXE (1ull << 11)
 
+static uint64_t cow_faults;
+static uint64_t cow_copies;
+
 static inline bool tlb_needs_flush(uint64_t pml4_phys)
 {
     return pml4_phys == kernel_pml4_phys || pml4_phys == (read_cr3() & PTE_ADDR_MASK);
@@ -226,6 +229,39 @@ void vmm_destroy_address_space(uint64_t pml4_phys)
         pmm_free_page(e & PTE_ADDR_MASK);
     }
     pmm_free_page(pml4_phys);
+}
+
+bool vmm_cow_fault(uint64_t pml4_phys, uint64_t virt)
+{
+    virt = PAGE_ALIGN_DOWN(virt);
+    uint64_t pte = vmm_get_pte_in(pml4_phys, virt);
+    if (!(pte & PTE_PRESENT) || !(pte & PTE_COW))
+        return false;
+
+    uint64_t phys = pte & PTE_ADDR_MASK;
+    uint64_t flags = (pte & ~PTE_ADDR_MASK & ~PTE_COW) | PTE_WRITABLE;
+
+    if (pmm_ref_count(phys) == 1) {
+        vmm_map_page_in(pml4_phys, virt, phys, flags);
+        cow_faults++;
+        return true;
+    }
+
+    uint64_t fresh = pmm_alloc_page();
+    if (!fresh)
+        return false;
+    memcpy(phys_to_virt(fresh), phys_to_virt(phys), PAGE_SIZE);
+    vmm_map_page_in(pml4_phys, virt, fresh, flags);
+    pmm_free_page(phys);
+    cow_faults++;
+    cow_copies++;
+    return true;
+}
+
+void vmm_cow_stats(uint64_t *faults, uint64_t *copies)
+{
+    *faults = cow_faults;
+    *copies = cow_copies;
 }
 
 void *vmm_map_mmio(uint64_t phys, size_t size)

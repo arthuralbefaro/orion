@@ -76,6 +76,8 @@ if ($runAll -or $OnlyA) {
         "raw:eccho delok", "keys:1B5B48", "keys:1B5B43", "keys:1B5B43", "keys:1B5B337E",
         "key:0D", "wait:1.5",
         "cmd:history", "wait:1",
+        "cmd:forktest", "wait:30",
+        "cmd:forktest -s 6", "wait:3", "key:0B", "cmd:mem", "key:0B", "wait:12",
         "key:0B", "cmd:heaptest", "wait:1", "cmd:preempt", "wait:2",
         "cmd:dev", "cmd:pty", "cmd:mem"
     )
@@ -108,6 +110,12 @@ if ($runAll -or $OnlyA) {
     Expect $a "\nhomeok" "Home voltou ao inicio e inseriu ali"
     Expect $a "\ndelok" "seta para a direita e Delete apagaram no meio"
     Expect $a "(?s)\n   1  ls /bin \| wc.{0,900}?\n\s+\d+  echo delok" "history listou os comandos numerados"
+    Expect $a "forktest: TUDO OK" "forktest TUDO OK"
+    Expect $a "kernel escreve em pagina COW do filho\s+ok" "kernel escreve em pagina COW sem panic"
+    Expect $a "8 filho\(s\) dormindo" "8 filhos vivos compartilhando memoria"
+    Expect $a "COW: \d{2,} pagina\(s\) compartilhada\(s\)" "paginas compartilhadas enquanto os filhos vivem"
+    Expect $a "filhos so de leitura terminaram ok" "filho so de leitura nao copiou nada"
+    Expect $a "COW: 0 pagina\(s\) compartilhada\(s\), \d{3,} falta" "compartilhamento volta a zero no fim"
     Expect $a ": OK" "heaptest OK"
     Expect $a "OK \(as duas rodaram\)" "preempt OK"
     Expect $a "0 pty\(s\) viva\(s\)" "nenhuma pty vazada"

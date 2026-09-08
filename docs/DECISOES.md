@@ -182,3 +182,36 @@ Uma linha por decisao, na ordem em que foram tomadas.
   rolar, quebrar ou juntar linha); nas outras teclas reescreve so a linha do
   cursor e as duas de status. Redesenhar as 24 linhas por tecla dava ~2 KiB por
   tecla, o que numa serial de 115200 baud atrasava o editor em varios segundos.
+
+## v1.5 (fork copy-on-write)
+
+- A contagem de referencias mora no PMM, num vetor de `uint16_t` por pagina
+  fisica (~230 KiB para 458 MiB de RAM), e nao numa estrutura por regiao de
+  memoria. O kernel ainda nao tem VMA; o vetor plano resolve o problema inteiro
+  com uma indirecao e sem alocacao dinamica no caminho da falta.
+- O valor guardado e o numero de referencias **extras**: 0 significa dono unico.
+  Assim `pmm_alloc_page` nao precisa inicializar nada e o caminho de liberacao
+  das paginas que nunca foram compartilhadas continua identico ao de antes.
+- `pmm_free_page` decrementa a referencia em vez de liberar quando ela e maior
+  que zero. Todo mundo que ja liberava paginas (destruir espaco de enderecos,
+  `munmap`, `exec`) passou a funcionar com COW sem mudar uma linha.
+- O bit 10 da PTE marca copy-on-write. Na `fork`, a pagina gravavel perde o
+  `PTE_WRITABLE` e ganha o `PTE_COW` **nos dois** espacos de enderecos; pagina
+  so de leitura e compartilhada sem marcar COW, para que uma escrita nela
+  continue virando SIGSEGV.
+- Depois de remarcar as PTEs do pai a `fork` recarrega o CR3 inteiro em vez de
+  fazer `invlpg` pagina a pagina: sao centenas de paginas, e um processo tem uma
+  thread so, entao nao ha outra CPU com esse espaco de enderecos carregado.
+- A falta de COW e tratada em `handle_exception`, antes do caminho que manda
+  SIGSEGV, e aceita falta de **ring 0 tambem** (`err & 3`), nao so de ring 3: com
+  `CR0.WP` ligado, uma syscall que escreve no buffer do usuario (um `read`, um
+  `getcwd`) tambem leva falta de escrita numa pagina COW, e la o CPL e 0.
+- Se a pagina tem uma referencia so, a falta apenas devolve o `PTE_WRITABLE` e
+  nao copia nada. E o caso comum depois que o outro lado do fork morre ou faz
+  `exec`.
+- O PMM ganhou um spinlock de verdade. Antes so desabilitava interrupcoes, o que
+  nunca foi correto com 4 CPUs; o COW multiplica as alocacoes concorrentes
+  (uma por falta de escrita) e tornaria a corrida facil de encontrar.
+- O `mem` do shell do kernel mostra paginas compartilhadas, faltas de COW e
+  copias feitas. Sem isso nao da para distinguir "o fork ficou barato" de
+  "o fork parou de funcionar".

@@ -13,6 +13,7 @@
 #include <kernel/sched.h>
 #include <kernel/process.h>
 #include <kernel/signal.h>
+#include <mm/vmm.h>
 #include <kernel/smp.h>
 #include <arch/x86_64/percpu.h>
 
@@ -176,6 +177,12 @@ static void handle_exception(struct interrupt_frame *f)
     if (handlers[f->int_no].fn) {
         handlers[f->int_no].fn(f, handlers[f->int_no].ctx);
         return;
+    }
+
+    if (f->int_no == EXC_PAGE_FAULT && (f->err_code & 3) == 3) {
+        struct process *p = process_current();
+        if (p && vmm_cow_fault(p->pml4_phys, read_cr2()))
+            return;
     }
 
     if ((f->cs & 3) == 3) {
