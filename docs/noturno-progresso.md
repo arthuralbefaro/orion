@@ -8,8 +8,8 @@ Base do turno: commit `fe29851` (v1.0), `.\check.ps1` limpo, regressao verde.
 | # | Etapa | Estado | Inicio | Fim | Commit |
 | --- | --- | --- | --- | --- | --- |
 | 4.1 | Filas de espera e poll (v1.1) | [x] | 22:52 | 02:35 | `5601c92` |
-| 4.2 | Sinais (v1.2) | [ ] | 02:35 | - | - |
-| 4.3 | Escrita no FAT e redirecionamentos (v1.3) | [ ] | - | - | - |
+| 4.2 | Sinais (v1.2) | [x] | 02:35 | 14:55 | `80361d7` |
+| 4.3 | Escrita no FAT e redirecionamentos (v1.3) | [ ] | 14:55 | - | - |
 | 4.4 | Teclas estendidas e edicao de linha (v1.4) | [ ] | - | - | - |
 | 4.5 | Fork copy-on-write (v1.5) | [ ] | - | - | - |
 | 4.6 | Rede (v1.6) | [ ] | - | - | - |
@@ -44,4 +44,28 @@ Medido com o `wm` aberto e parado, 4 CPUs: 31 trocas de contexto em 3,2 s
 (~10/s no total). Antes, cada leitor bloqueado acordava a cada 2 ms e o `wm` a
 cada 20 ms.
 
-### 4.2 Sinais - inicio 02:35
+### 4.2 Sinais - 02:35 as 14:55 - commit 80361d7 - FEITO
+`kernel/signal.{h,c}`: pendentes, mascara, handlers por processo, quadro de
+sinal empilhado na pilha do usuario (128 bytes abaixo do rsp, pulando a red
+zone) e `rt_sigreturn`. Entrega no retorno de syscall, de IRQ e de excecao.
+Syscalls: kill(62), rt_sigaction(13), rt_sigprocmask(14), rt_sigreturn(15),
+alarm(37), setpgid(109), getpgid(121). O trampolim de retorno vem da libc
+(`sa_restorer`), como no Linux.
+Excecoes de ring 3 viram SIGSEGV/SIGILL/SIGFPE; `write` em pipe sem leitor gera
+SIGPIPE; o pai recebe SIGCHLD. Chamadas bloqueantes devolvem `EINTR`.
+Grupo de primeiro plano fica na disciplina de linha; `TIOCSPGRP` funciona no TTY
+e no PTY; Ctrl+C manda SIGINT ao grupo. O `sh` usa grupos, refaz o `waitpid` em
+EINTR e imprime `[morto por sinal N]`.
+Status de saida passou ao formato do Linux (`WIFSIGNALED`/`WTERMSIG`).
+Tres problemas achados: (1) o contador de interrupcoes de timer anda ~10x mais
+devagar que o tempo real neste QEMU com as CPUs ociosas, esticando todo sleep e
+alarm - `time_ticks()` agora sai do TSC; (2) `process_thread_reaped` zerava
+`pml4_phys` fora do `proc_lock`, deixando um `waitpid` concorrente colher e
+liberar o mesmo `struct process` (kfree duplo, so aparecia com o `wm` rodando,
+que faz `waitpid(WNOHANG)` a cada volta); (3) uma edicao minha de `ldisc.c` nao
+casou o padrao e falhou em silencio, deixando `interrupt_pgid` sempre 0 - por
+isso o primeiro Ctrl+C nao matava nada.
+Fora do escopo: zumbi orfao cujo pai morreu antes de colher fica registrado ate
+o boot seguinte (aparece em `procs`); nao vaza paginas, so o `struct process`.
+
+### 4.3 Escrita no FAT e redirecionamentos - inicio 14:55
