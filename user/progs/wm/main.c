@@ -111,8 +111,10 @@ static struct window *new_terminal(void)
 static void close_window(struct window *w)
 {
     desk_damage_window(&desk, w);
-    if (w->kind == WIN_TERM && w->master >= 0)
+    if (w->kind == WIN_TERM && w->master >= 0) {
+        fprintf(stderr, "wm: fechando terminal %d (sh pid %d)\n", w->id, w->pid);
         close(w->master);
+    }
     desk_remove(&desk, w);
     struct window *top = desk_focused(&desk);
     if (top)

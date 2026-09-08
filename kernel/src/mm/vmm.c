@@ -20,9 +20,6 @@ static bool     nx_supported;
 
 #define EFER_NXE (1ull << 11)
 
-/* A metade alta e compartilhada por todos os espacos de endereco: mexer nela
- * pelo PML4 do kernel invalida traducoes que a CPU atual pode ter em cache
- * mesmo com o CR3 de um processo carregado. */
 static inline bool tlb_needs_flush(uint64_t pml4_phys)
 {
     return pml4_phys == kernel_pml4_phys || pml4_phys == (read_cr3() & PTE_ADDR_MASK);

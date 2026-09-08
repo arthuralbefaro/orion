@@ -11,6 +11,7 @@
 #include <drivers/mouse.h>
 #include <drivers/input.h>
 #include <drivers/pty.h>
+#include <drivers/fbdev.h>
 #include <fs/devfs.h>
 #include <kernel/time.h>
 #include <kernel/sched.h>
@@ -154,8 +155,8 @@ static void cmd_fb(const char *args)
     console_get_size(&cols, &rows);
     kprintf("Framebuffer: %lux%lu, %u bpp, pitch %lu, em %p\n",
             fb->width, fb->height, fb->bpp, fb->pitch, fb->address);
-    kprintf("Console: %ux%u celulas, fonte 8x8 com zoom %ux\n",
-            cols, rows, console_get_scale());
+    kprintf("Console: %ux%u celulas, fonte 8x8 com zoom %ux, modo %s\n",
+            cols, rows, console_get_scale(), console_graphics() ? "grafico" : "texto");
 }
 
 static void cmd_acpi(const char *args)
@@ -270,6 +271,7 @@ static void cmd_dev(const char *args)
             input_queued(), input_timeout());
     kprintf("  %lu evento(s) enfileirado(s) e %lu descartado(s) desde o boot\n",
             input_event_count(), input_dropped_count());
+    kprintf("  /dev/fb0: %lu pagina(s) ja mapeada(s) em processos\n", fbdev_mapped_pages());
 }
 
 static void cmd_pty(const char *args)

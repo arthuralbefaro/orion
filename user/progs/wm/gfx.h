@@ -20,7 +20,6 @@ struct gfx {
     uint32_t *back;
     uint8_t *fb;
     int width, height;
-    int fb_stride;
     struct rect clip;
     int cursor_x, cursor_y;
     struct rect dirty[GFX_MAX_DIRTY];
@@ -41,7 +40,6 @@ void gfx_close(struct gfx *g);
 uint32_t gfx_rgb(const struct gfx *g, uint32_t rgb);
 void gfx_set_clip(struct gfx *g, struct rect r);
 void gfx_fill(struct gfx *g, struct rect r, uint32_t pixel);
-void gfx_frame(struct gfx *g, struct rect r, int thickness, uint32_t pixel);
 void gfx_text(struct gfx *g, int x, int y, const char *s, uint32_t pixel, int zoom);
 void gfx_text_n(struct gfx *g, int x, int y, const char *s, int n, uint32_t pixel, int zoom);
 

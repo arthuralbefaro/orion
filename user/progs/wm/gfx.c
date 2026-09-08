@@ -90,7 +90,6 @@ bool gfx_open(struct gfx *g, int fb_fd)
 
     g->width = (int)g->info.width;
     g->height = (int)g->info.height;
-    g->fb_stride = (int)(g->info.pitch / 4);
     g->clip = rect_make(0, 0, g->width, g->height);
 
     g->fb = mmap(NULL, g->info.size, PROT_READ | PROT_WRITE, MAP_SHARED, fb_fd, 0);
@@ -136,14 +135,6 @@ void gfx_fill(struct gfx *g, struct rect r, uint32_t pixel)
         for (int x = 0; x < c.w; x++)
             row[x] = pixel;
     }
-}
-
-void gfx_frame(struct gfx *g, struct rect r, int thickness, uint32_t pixel)
-{
-    gfx_fill(g, rect_make(r.x, r.y, r.w, thickness), pixel);
-    gfx_fill(g, rect_make(r.x, r.y + r.h - thickness, r.w, thickness), pixel);
-    gfx_fill(g, rect_make(r.x, r.y, thickness, r.h), pixel);
-    gfx_fill(g, rect_make(r.x + r.w - thickness, r.y, thickness, r.h), pixel);
 }
 
 static void draw_glyph(struct gfx *g, int x, int y, unsigned char ch, uint32_t pixel, int zoom)

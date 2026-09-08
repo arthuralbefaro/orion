@@ -18,7 +18,6 @@ struct pty {
     uint32_t tail;
     int32_t masters;
     int32_t slaves;
-    uint32_t id;
 };
 
 static uint32_t next_id = 1;
@@ -137,9 +136,12 @@ static int64_t slave_write(struct file *f, const void *buf, uint64_t len)
 
 static long slave_ioctl(struct file *f, uint64_t request, uint64_t arg)
 {
-    (void)f;
-    (void)request;
-    (void)arg;
+    struct pty *p = f->priv;
+    if (request != TIOCINQ)
+        return 0;
+    if (arg >= USER_ADDR_MAX)
+        return -EFAULT;
+    *(uint32_t *)arg = ldisc_available(&p->ld);
     return 0;
 }
 
@@ -177,7 +179,7 @@ int pty_open_pair(struct file **master, struct file **slave)
     ldisc_init(&p->ld, pty_echo, p);
     p->masters = 1;
     p->slaves = 1;
-    p->id = __atomic_fetch_add(&next_id, 1, __ATOMIC_SEQ_CST);
+    __atomic_fetch_add(&next_id, 1, __ATOMIC_SEQ_CST);
 
     *master = file_alloc(&master_ops, p);
     *slave = file_alloc(&slave_ops, p);
@@ -200,5 +202,5 @@ uint32_t pty_count(void)
 
 void pty_dump(void)
 {
-    kprintf("  %u pty(s) viva(s), %u criada(s) desde o boot\n", live, next_id - 1);
+    kprintf("  %u pty(s) viva(s), %u criada(s) desde o boot\n", pty_count(), next_id - 1);
 }
