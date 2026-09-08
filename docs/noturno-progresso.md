@@ -12,8 +12,8 @@ Base do turno: commit `fe29851` (v1.0), `.\check.ps1` limpo, regressao verde.
 | 4.3 | Escrita no FAT e redirecionamentos (v1.3) | [x] | 14:55 | 20:10 | `a0da561` |
 | 4.4 | Teclas estendidas e edicao de linha (v1.4) | [x] | 20:10 | 01:40 | `ff02fda` |
 | 4.5 | Fork copy-on-write (v1.5) | [x] | 01:40 | 06:20 | `8e8b469` |
-| 4.6 | Rede (v1.6) | [ ] | 06:20 | - | - |
-| 4.7 | GUI: boot direto e apps (v1.7) | [ ] | - | - | - |
+| 4.6 | Rede (v1.6) | [x] | 06:20 | 12:05 | `32b9937` |
+| 4.7 | GUI: boot direto e apps (v1.7) | [ ] | 12:05 | - | - |
 | 4.8 | Extras | [ ] | - | - | - |
 
 ## Como retomar
@@ -161,4 +161,42 @@ fork, fork+execv, 40 forks seguidos, 8 filhos so de leitura ao mesmo tempo. O
 copias, que e o que permite a regressao provar que o fork ficou barato e que o
 compartilhamento volta a zero no fim.
 
-### 4.6 Rede - inicio 06:20
+### 4.6 Rede - 06:20 as 12:05 - commit 32b9937 - FEITO
+Driver e1000 (82540EM do QEMU): aneis de 32 descritores de RX e TX, MAC lido de
+RAL/RAH depois do reset, interrupcao registrada mais um laco de recepcao que
+espera 20 ms como rede de seguranca.
+Pilha em `kernel/src/net`: uma interface, cache ARP de 16 entradas (a resolucao
+dorme esperando a resposta, em vez de devolver "tente de novo"), IPv4 com
+checksum, resposta a ICMP echo dentro do kernel, e demux de UDP por porta.
+Sockets `SOCK_DGRAM` e `SOCK_RAW` com fila de 8 pacotes e `poll`; syscalls
+socket(41), connect(42), sendto(44), recvfrom(45), bind(49). A configuracao da
+interface vai e vem por ioctl no proprio socket, como no Unix.
+Cliente DHCP no kernel (precisa mandar de 0.0.0.0 para 255.255.255.255 antes de
+a interface ter endereco). Programas `ifconfig`, `ping`, `nslookup` e `dhcp`;
+comandos `net`, `arp`, `dhcp` e `ifconfig` no shell do kernel.
+Funcionando de ponta a ponta: DHCP pega 10.0.2.15/24 com gateway 10.0.2.2 e DNS
+10.0.2.3; `ping 10.0.2.2` faz 3 de 3 com 0,7 ms; `nslookup example.com` devolve
+172.66.147.243, ou seja, sai de verdade para a internet do hospedeiro.
+Tres problemas achados, os dois primeiros graves:
+(1) Ao habilitar a IRQ 11 da placa, o boot passou a travar de forma
+intermitente. A IRQ 11 e compartilhada com o AHCI, que e um driver de polling e
+nunca limpava `PxIS`: a linha (nivel, ativa alta) ficava presa em alto e a CPU
+entrava em tempestade de interrupcoes. O AHCI passou a desligar as proprias
+interrupcoes (`GHC.IE`, `PxIE`) e a limpar `PxIS`/`IS` depois de cada comando.
+(2) `wait_sleep_timeout` pegava a `runq_lock` com `spin_lock` puro. Todos os
+chamadores existentes ja vinham com interrupcao desabilitada (seguravam uma
+trava tomada com `spin_lock_irqsave`), entao nunca deu problema; a rede foi a
+primeira a chamar sem trava, com interrupcao ligada, e um tick do timer dentro
+dessa janela travava a CPU contra ela mesma. Agora ela salva e restaura o
+estado das interrupcoes, como o `poll_table_sleep` ja fazia.
+(3) O console do kernel nao entendia sequencia ANSI nenhuma: o `edit` e o
+historico do `sh` despejavam os escapes como texto, e cada tecla fazia a tela
+rolar varias vezes - rolar 1280x800 e um memmove de 4 MiB, entao o editor
+ficava segundos atras do teclado (era isso que fazia a sequencia C acusar 69
+paginas a mais, com o `edit` ainda vivo no `mem` final). Ganhou o mesmo parser
+CSI do terminal grafico; conferido por captura de tela.
+Fora do escopo: TCP e `wget` (o passo pedia como opcional e a maquina de estados
+com retransmissao nao cabia no tempo). A verificacao do `nslookup` na regressao
+depende de o hospedeiro ter DNS funcionando.
+
+### 4.7 GUI: boot direto e apps - inicio 12:05
