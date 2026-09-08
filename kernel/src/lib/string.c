@@ -1,3 +1,9 @@
+/*
+ * string.c - implementação freestanding de memcpy/memset & cia.
+ *
+ * memcpy/memset usam "rep movsb"/"rep stosb": em CPUs modernas (ERMSB) isso é
+ * tão rápido quanto código SSE, e nós compilamos com SSE desligado no kernel.
+ */
 #include <lib/string.h>
 
 void *memcpy(void *restrict dst, const void *restrict src, size_t n)
@@ -29,6 +35,7 @@ void *memmove(void *dst, const void *src, size_t n)
         return dst;
 
     if (d < s || d >= s + n) {
+        /* Sem sobreposição perigosa: cópia para frente. */
         __asm__ volatile("rep movsb"
                          : "+D"(d), "+S"(s), "+c"(n)
                          :
@@ -36,6 +43,7 @@ void *memmove(void *dst, const void *src, size_t n)
         return dst;
     }
 
+    /* dst está dentro de src: copia de trás para frente. */
     d += n;
     s += n;
     while (n--)
@@ -108,6 +116,7 @@ char *strcpy(char *restrict dst, const char *restrict src)
     return ret;
 }
 
+/* Copia no máximo size-1 chars e sempre termina com NUL. Retorna strlen(src). */
 size_t strlcpy(char *dst, const char *src, size_t size)
 {
     size_t len = strlen(src);

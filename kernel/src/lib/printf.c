@@ -1,3 +1,6 @@
+/*
+ * printf.c - motor de formatação do kernel.
+ */
 #include <lib/printf.h>
 #include <lib/string.h>
 #include <drivers/serial.h>
@@ -5,12 +8,14 @@
 #include <kernel/spinlock.h>
 #include <arch/x86_64/percpu.h>
 
-#define FLAG_LEFT   (1 << 0)  
-#define FLAG_ZERO   (1 << 1)  
-#define FLAG_ALT    (1 << 2)  
-#define FLAG_SPACE  (1 << 3)  
-#define FLAG_PLUS   (1 << 4)  
-#define FLAG_UPPER  (1 << 5)  
+/* ---------- Estado de uma conversão ---------- */
+
+#define FLAG_LEFT   (1 << 0)  /* '-' */
+#define FLAG_ZERO   (1 << 1)  /* '0' */
+#define FLAG_ALT    (1 << 2)  /* '#' */
+#define FLAG_SPACE  (1 << 3)  /* ' ' */
+#define FLAG_PLUS   (1 << 4)  /* '+' */
+#define FLAG_UPPER  (1 << 5)  /* %X */
 
 struct out {
     printf_putc_fn put;
@@ -30,6 +35,7 @@ static void emit_padding(struct out *o, char c, int n)
         emit(o, c);
 }
 
+/* Emite `s` (len chars) respeitando largura e alinhamento. */
 static void emit_field(struct out *o, const char *s, int len, int width, unsigned flags)
 {
     int pad = width - len;
@@ -41,6 +47,10 @@ static void emit_field(struct out *o, const char *s, int len, int width, unsigne
         emit_padding(o, ' ', pad);
 }
 
+/*
+ * Formata um inteiro. `negative` indica se deve prefixar '-'.
+ * `precision` < 0 significa "não especificada".
+ */
 static void emit_number(struct out *o, uint64_t value, bool negative, unsigned base,
                         unsigned flags, int width, int precision)
 {
@@ -48,6 +58,7 @@ static void emit_number(struct out *o, uint64_t value, bool negative, unsigned b
     const char *alphabet = (flags & FLAG_UPPER) ? "0123456789ABCDEF" : "0123456789abcdef";
     int ndigits = 0;
 
+    /* Gera os dígitos de trás para frente. */
     if (value == 0) {
         digits[ndigits++] = '0';
     } else {
@@ -57,11 +68,13 @@ static void emit_number(struct out *o, uint64_t value, bool negative, unsigned b
         }
     }
 
+    /* printf: precisão 0 com valor 0 não imprime nada. */
     if (precision == 0 && ndigits == 1 && digits[0] == '0')
         ndigits = 0;
 
     int zeros = (precision > ndigits) ? precision - ndigits : 0;
 
+    /* Prefixo: sinal e/ou 0x */
     char prefix[3];
     int prefix_len = 0;
     if (negative)
@@ -80,6 +93,8 @@ static void emit_number(struct out *o, uint64_t value, bool negative, unsigned b
 
     int total = prefix_len + zeros + ndigits;
 
+    /* Flag '0' preenche com zeros (após o prefixo), exceto se houve precisão
+     * explícita ou alinhamento à esquerda. */
     if ((flags & FLAG_ZERO) && !(flags & FLAG_LEFT) && precision < 0 && width > total) {
         zeros += width - total;
         total = width;
@@ -111,8 +126,9 @@ int kvformat(printf_putc_fn put, void *ctx, const char *fmt, va_list ap)
             continue;
         }
 
-        p++;
+        p++; /* pula o '%' */
 
+        /* Flags */
         unsigned flags = 0;
         for (;; p++) {
             if (*p == '-')      flags |= FLAG_LEFT;
@@ -123,6 +139,7 @@ int kvformat(printf_putc_fn put, void *ctx, const char *fmt, va_list ap)
             else break;
         }
 
+        /* Largura */
         int width = 0;
         if (*p == '*') {
             width = va_arg(ap, int);
@@ -136,6 +153,7 @@ int kvformat(printf_putc_fn put, void *ctx, const char *fmt, va_list ap)
                 width = width * 10 + (*p++ - '0');
         }
 
+        /* Precisão */
         int precision = -1;
         if (*p == '.') {
             p++;
@@ -151,6 +169,7 @@ int kvformat(printf_putc_fn put, void *ctx, const char *fmt, va_list ap)
             }
         }
 
+        /* Modificador de tamanho */
         enum length_mod len = LEN_NONE;
         if (*p == 'h') {
             p++;
@@ -164,6 +183,7 @@ int kvformat(printf_putc_fn put, void *ctx, const char *fmt, va_list ap)
             len = LEN_T; p++;
         }
 
+        /* Conversão */
         switch (*p) {
         case 'd':
         case 'i': {
@@ -204,6 +224,7 @@ int kvformat(printf_putc_fn put, void *ctx, const char *fmt, va_list ap)
         }
         case 'p': {
             uintptr_t v = (uintptr_t)va_arg(ap, void *);
+            /* Ponteiros sempre como 0x + 16 dígitos hex: fica alinhado em dumps. */
             emit_number(&o, v, false, 16, flags | FLAG_ALT, width, 16);
             break;
         }
@@ -224,9 +245,11 @@ int kvformat(printf_putc_fn put, void *ctx, const char *fmt, va_list ap)
             emit(&o, '%');
             break;
         case '\0':
+            /* '%' no fim da string: imprime literalmente e sai. */
             emit(&o, '%');
             return o.count;
         default:
+            /* Conversão desconhecida: imprime como veio. */
             emit(&o, '%');
             emit(&o, *p);
             break;
@@ -235,6 +258,8 @@ int kvformat(printf_putc_fn put, void *ctx, const char *fmt, va_list ap)
 
     return o.count;
 }
+
+/* ---------- snprintf ---------- */
 
 struct buf_ctx {
     char *buf;
@@ -267,6 +292,8 @@ int ksnprintf(char *buf, size_t size, const char *fmt, ...)
     va_end(ap);
     return n;
 }
+
+/* ---------- Saída padrão do kernel ---------- */
 
 void kputc(char c)
 {

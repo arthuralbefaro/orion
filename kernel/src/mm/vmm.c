@@ -1,3 +1,9 @@
+/*
+ * vmm.c - manipulação das tabelas de página.
+ *
+ * Layout de um endereço virtual de 48 bits:
+ *   [47:39] índice PML4 | [38:30] PDPT | [29:21] PD | [20:12] PT | [11:0] offset
+ */
 #include <mm/vmm.h>
 #include <mm/pmm.h>
 #include <mm/memory.h>
@@ -7,17 +13,19 @@
 #include <kernel/smp.h>
 
 #define ENTRIES 512
-#define EFER_NXE (1ull << 11)
 
 static uint64_t kernel_pml4_phys;
 static uint64_t mmio_next;
 static bool     nx_supported;
+
+#define EFER_NXE (1ull << 11)
 
 static inline size_t pml4_index(uint64_t v) { return (v >> 39) & 0x1FF; }
 static inline size_t pdpt_index(uint64_t v) { return (v >> 30) & 0x1FF; }
 static inline size_t pd_index(uint64_t v)   { return (v >> 21) & 0x1FF; }
 static inline size_t pt_index(uint64_t v)   { return (v >> 12) & 0x1FF; }
 
+/* Desce um nível: devolve a tabela filha (virtual), criando-a se `create`. */
 static uint64_t *next_level(uint64_t *table, size_t index, bool create, const char *what)
 {
     uint64_t entry = table[index];
@@ -37,6 +45,8 @@ static uint64_t *next_level(uint64_t *table, size_t index, bool create, const ch
     uint64_t *child = phys_to_virt(phys);
     memset(child, 0, PAGE_SIZE);
 
+    /* Tabelas intermediárias sempre com permissão total; a restrição fica
+     * na entrada final (PT). */
     table[index] = phys | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
     return child;
 }
@@ -71,7 +81,7 @@ void vmm_map_page_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t 
     uint64_t *pt   = next_level(pd,   pd_index(virt),   true, "PD");
 
     if (!nx_supported)
-        flags &= ~PTE_NX;
+        flags &= ~PTE_NX; /* bit reservado sem EFER.NXE -> #PF */
 
     pt[pt_index(virt)] = (phys & PTE_ADDR_MASK) | (flags & ~PTE_HUGE);
     if (pml4_phys == (read_cr3() & PTE_ADDR_MASK))
@@ -199,6 +209,7 @@ void *vmm_map_mmio(uint64_t phys, size_t size)
     uint64_t end    = PAGE_ALIGN_UP(phys + size);
     uint64_t len    = end - start;
 
+    /* (cuidado: BASE + SIZE estoura 64 bits, por isso a conta é assim) */
     uint64_t used = mmio_next - KERNEL_MMIO_BASE;
     if (len > KERNEL_MMIO_SIZE - used)
         panic("vmm: janela de MMIO esgotada");

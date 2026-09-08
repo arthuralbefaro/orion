@@ -1,20 +1,27 @@
+/*
+ * string.h - funções de memória/strings para ambiente freestanding.
+ *
+ * IMPORTANTE: memcpy/memset/memmove/memcmp precisam existir com esses nomes
+ * exatos, porque o compilador pode emitir chamadas a elas por conta própria
+ * (ex.: cópia de struct, inicialização de array).
+ */
 #pragma once
 
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 
-void    *memcpy(void *restrict dst, const void *restrict src, size_t n);
-void    *memmove(void *dst, const void *src, size_t n);
-void    *memset(void *dst, int c, size_t n);
-int      memcmp(const void *a, const void *b, size_t n);
+void  *memcpy(void *restrict dst, const void *restrict src, size_t n);
+void  *memmove(void *dst, const void *src, size_t n);
+void  *memset(void *dst, int c, size_t n);
+int    memcmp(const void *a, const void *b, size_t n);
 
 size_t strlen(const char *s);
 size_t strnlen(const char *s, size_t max);
 int    strcmp(const char *a, const char *b);
 int    strncmp(const char *a, const char *b, size_t n);
-char   *strchr(const char *s, int c);
-char   *strcpy(char *restrict dst, const char *restrict src);
+char  *strchr(const char *s, int c);
+char  *strcpy(char *restrict dst, const char *restrict src);
 size_t strlcpy(char *dst, const char *src, size_t size);
 
 bool   str_starts_with(const char *s, const char *prefix);

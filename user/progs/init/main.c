@@ -1,16 +1,29 @@
-#include <ulib.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
-int main(void)
+int main(int argc, char **argv)
 {
-    puts("hello from ring 3! sou o processo pid ");
-    print_num(getpid());
-    puts("\n");
-    for (int i = 1; i <= 3; i++) {
-        puts("init: iteracao ");
-        print_num(i);
-        puts(" (dormindo 500 ms)\n");
-        sleep_ms(500);
+    (void)argc;
+    (void)argv;
+    printf("init: pid %d, iniciando /bin/sh\n", getpid());
+    for (;;) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("init: fork");
+            sleep(1);
+            continue;
+        }
+        if (pid == 0) {
+            char *args[] = { "sh", NULL };
+            execv("/bin/sh", args);
+            perror("init: execv /bin/sh");
+            _exit(1);
+        }
+        int status = 0;
+        waitpid(pid, &status, 0);
+        printf("init: sh terminou (codigo %d), reiniciando\n", status);
+        usleep(500000);
     }
-    puts("init: saindo com codigo 42\n");
-    return 42;
 }

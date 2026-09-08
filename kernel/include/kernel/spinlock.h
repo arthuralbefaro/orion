@@ -1,3 +1,9 @@
+/*
+ * spinlock.h - trava de exclusão mútua por espera ativa.
+ *
+ * Em uma CPU só, a versão *_irqsave é a que interessa: desligar interrupções
+ * já impede preempção. As instruções atômicas (xchg) ficam prontas para SMP.
+ */
 #pragma once
 
 #include <kernel/compiler.h>
@@ -30,6 +36,7 @@ static inline void spin_unlock(spinlock_t *l)
     __sync_lock_release(&l->locked);
 }
 
+/* Desliga interrupções, trava, e devolve o estado anterior das flags. */
 static inline uint64_t spin_lock_irqsave(spinlock_t *l)
 {
     uint64_t flags = irq_save();

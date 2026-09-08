@@ -1,7 +1,9 @@
+/*
+ * interrupts.c - IDT + despacho de interrupções/exceções.
+ */
 #include <arch/x86_64/interrupts.h>
 #include <arch/x86_64/gdt.h>
 #include <arch/x86_64/cpu.h>
-#include <arch/x86_64/percpu.h>
 #include <drivers/pic.h>
 #include <drivers/ioapic.h>
 #include <arch/x86_64/lapic.h>
@@ -9,14 +11,17 @@
 #include <lib/string.h>
 #include <kernel/log.h>
 #include <kernel/sched.h>
-#include <kernel/smp.h>
 #include <kernel/process.h>
+#include <kernel/smp.h>
+#include <arch/x86_64/percpu.h>
+
+/* ---------- IDT ---------- */
 
 struct idt_entry {
     uint16_t offset_low;
     uint16_t selector;
-    uint8_t  ist;
-    uint8_t  type_attr;
+    uint8_t  ist;        /* bits 0-2: índice na IST do TSS (0 = pilha normal) */
+    uint8_t  type_attr;  /* P | DPL | 0 | tipo (0xE = interrupt gate) */
     uint16_t offset_mid;
     uint32_t offset_high;
     uint32_t reserved;
@@ -34,6 +39,7 @@ struct idtr {
 
 static struct idt_entry idt[256] ALIGNED(16);
 
+/* Definidos em isr_stubs.S: os 256 stubs ocupam ISR_STUB_SIZE bytes cada. */
 extern uint8_t isr_stubs_begin[];
 #define ISR_STUB_SIZE 16
 #define ISR_STUB(vec) ((uint64_t)isr_stubs_begin + (uint64_t)(vec) * ISR_STUB_SIZE)
@@ -49,6 +55,8 @@ static void idt_set_gate(uint8_t vector, uint64_t handler, uint8_t dpl)
     e->offset_high = (handler >> 32) & 0xFFFFFFFF;
     e->reserved    = 0;
 }
+
+/* ---------- Handlers registrados ---------- */
 
 struct handler_slot {
     interrupt_handler_t fn;
@@ -75,6 +83,9 @@ uint64_t interrupts_count(uint8_t vector)
 {
     return counters[vector];
 }
+
+/* ---------- IRQs de dispositivos ---------- */
+
 static enum irq_mode irq_mode = IRQ_MODE_PIC;
 
 void irq_set_mode(enum irq_mode mode)
@@ -105,6 +116,7 @@ void irq_disable(uint8_t irq)
         pic_mask(irq);
 }
 
+/* ---------- Exceções ---------- */
 
 static const char *const exception_names[32] = {
     [0]  = "#DE Divide Error",
@@ -158,6 +170,8 @@ static void dump_frame(const struct interrupt_frame *f)
 
 static void handle_exception(struct interrupt_frame *f)
 {
+    /* Se alguém registrou um handler específico (ex.: page fault handler
+     * do futuro VMM), deixa ele decidir. */
     if (handlers[f->int_no].fn) {
         handlers[f->int_no].fn(f, handlers[f->int_no].ctx);
         return;
@@ -166,15 +180,16 @@ static void handle_exception(struct interrupt_frame *f)
     if ((f->cs & 3) == 3) {
         struct process *p = process_current();
         log_error("proc", "pid %u '%s' morto: %s em RIP=%016lx (err=%lx, CR2=%016lx)",
-                    p->pid, p->name, exception_name((uint8_t)f->int_no), f->rip, f->err_code,
-                    read_cr2());
+                  p->pid, p->name, exception_name((uint8_t)f->int_no), f->rip, f->err_code,
+                  read_cr2());
         process_exit(-1);
     }
-    smp_halt_others();
+
     cli();
+    smp_halt_others();
     console_set_colors(COLOR_WHITE, COLOR_RED);
-    kprintf("\n*** EXCECAO NAO TRATADA: %s (vetor %lu) ***\n",
-            exception_name((uint8_t)f->int_no), f->int_no);
+    kprintf("\n*** EXCECAO NAO TRATADA: %s (vetor %lu) na CPU %u ***\n",
+            exception_name((uint8_t)f->int_no), f->int_no, percpu_cpu_id());
 
     if (f->int_no == EXC_PAGE_FAULT) {
         uint64_t err = f->err_code;
@@ -191,6 +206,8 @@ static void handle_exception(struct interrupt_frame *f)
     halt_forever();
 }
 
+/* ---------- Despacho (chamado de isr_stubs.S) ---------- */
+
 void isr_dispatch(struct interrupt_frame *frame)
 {
     uint8_t vec = (uint8_t)frame->int_no;
@@ -204,6 +221,8 @@ void isr_dispatch(struct interrupt_frame *frame)
     if (vec >= VECTOR_IRQ_BASE && vec < VECTOR_IRQ_BASE + VECTOR_IRQ_COUNT) {
         uint8_t irq = vec - VECTOR_IRQ_BASE;
 
+        /* Modo PIC: IRQ 7/15 podem ser espúrias (ruído / timing do 8259).
+         * Nesse caso não há bit no ISR e não se manda EOI. */
         if (irq_mode == IRQ_MODE_PIC && pic_is_spurious(irq))
             return;
 
@@ -216,21 +235,24 @@ void isr_dispatch(struct interrupt_frame *frame)
             lapic_eoi();
         else
             pic_send_eoi(irq);
-        sched_check_preempt();
+        sched_check_preempt();  /* pode trocar de thread aqui (volta depois) */
         return;
     }
 
     if (vec == VECTOR_SPURIOUS)
-        return;
+        return; /* espúria do LAPIC: ignorar, sem EOI */
 
     if (handlers[vec].fn)
         handlers[vec].fn(frame, handlers[vec].ctx);
     else
         log_warn("int", "vetor %u sem handler", vec);
-        
+
+    /* Vetores acima das IRQs ISA vêm do LAPIC (timer, IPIs...): EOI nele. */
     lapic_eoi();
     sched_check_preempt();
 }
+
+/* ---------- Init ---------- */
 
 void idt_init(void)
 {
@@ -241,10 +263,10 @@ void idt_init(void)
     for (int i = 0; i < 256; i++)
         idt_set_gate((uint8_t)i, ISR_STUB(i), 0);
 
+    /* Breakpoint (int3) pode ser disparado de ring 3 no futuro. */
     idt_set_gate(EXC_BREAKPOINT, ISR_STUB(EXC_BREAKPOINT), 3);
 
     idt_load();
-
     log_info("idt", "IDT carregada: 256 vetores em %p", (void *)idt);
 }
 

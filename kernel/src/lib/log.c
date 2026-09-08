@@ -1,7 +1,10 @@
+/*
+ * log.c - klog() e panic().
+ */
 #include <kernel/log.h>
-#include <kernel/smp.h>
 #include <arch/x86_64/cpu.h>
 #include <drivers/console.h>
+#include <kernel/smp.h>
 
 static const char *level_tag[] = {
     [LOG_DEBUG] = "dbg ",

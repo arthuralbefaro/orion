@@ -1,3 +1,11 @@
+/*
+ * memory.h - constantes e conversões de endereço.
+ *
+ * O Limine mapeia toda a RAM útil no "Higher Half Direct Map" (HHDM):
+ *   virtual = físico + hhdm_offset
+ * Enquanto não temos o nosso próprio VMM, é assim que acessamos memória
+ * física (tabelas, bitmap do PMM, framebuffer...).
+ */
 #pragma once
 
 #include <kernel/compiler.h>

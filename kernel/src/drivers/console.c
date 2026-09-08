@@ -1,3 +1,6 @@
+/*
+ * console.c - console de texto sobre framebuffer.
+ */
 #include <drivers/console.h>
 #include <drivers/font8x8.h>
 #include <lib/string.h>
@@ -6,7 +9,7 @@
 #define MAX_COLS 240
 #define MAX_ROWS 135
 #define TAB_WIDTH 4
-#define LINE_GAP  1 
+#define LINE_GAP  1   /* linhas de pixel (x zoom) entre uma linha de texto e outra */
 
 struct cell {
     char     ch;
@@ -16,16 +19,19 @@ struct cell {
 
 static struct framebuffer fb;
 static bool     initialized = false;
-static uint32_t scale = 1;
-static uint32_t cell_w, cell_h;
-static uint32_t cols, rows;
-static uint32_t cur_col, cur_row;  
+static uint32_t scale = 1;          /* fator de zoom da fonte */
+static uint32_t cell_w, cell_h;     /* tamanho da célula em pixels */
+static uint32_t cols, rows;         /* tamanho da grade */
+static uint32_t cur_col, cur_row;   /* cursor */
 static uint32_t cur_fg = COLOR_LIGHT_GRAY;
 static uint32_t cur_bg = COLOR_BACKGROUND;
 static bool     cursor_visible = true;
 
 static struct cell grid[MAX_ROWS][MAX_COLS];
 
+/* ---------- Pixels ---------- */
+
+/* Converte 0x00RRGGBB para o formato de pixel do framebuffer. */
 static inline uint32_t pack_color(uint32_t rgb)
 {
     uint32_t r = (rgb >> 16) & 0xFF;
@@ -46,6 +52,7 @@ static inline void fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uin
     }
 }
 
+/* Desenha uma célula da grade (opcionalmente em vídeo inverso, p/ cursor). */
 static void draw_cell(uint32_t col, uint32_t row, bool inverse)
 {
     const struct cell *c = &grid[row][col];
@@ -60,6 +67,7 @@ static void draw_cell(uint32_t col, uint32_t row, bool inverse)
     uint32_t px = col * cell_w;
     uint32_t py = row * cell_h;
 
+    /* Espaço entre linhas: só fundo. */
     fill_rect(px, py + FONT_HEIGHT * scale, cell_w, LINE_GAP * scale, bg);
 
     for (uint32_t gy = 0; gy < FONT_HEIGHT; gy++) {
@@ -92,6 +100,8 @@ static void draw_cursor(bool on)
     if (cur_col < cols && cur_row < rows)
         draw_cell(cur_col, cur_row, on);
 }
+
+/* ---------- Grade ---------- */
 
 static void clear_row(uint32_t row)
 {
@@ -131,6 +141,8 @@ static void put_glyph(char ch)
     cur_col++;
 }
 
+/* ---------- API ---------- */
+
 void console_init(const struct framebuffer *info)
 {
     if (!info || !info->address || info->bpp != 32)
@@ -138,6 +150,7 @@ void console_init(const struct framebuffer *info)
 
     fb = *info;
 
+    /* Escolhe o zoom da fonte pela largura da tela. */
     if (fb.width >= 2560)
         scale = 3;
     else if (fb.width >= 1280)
@@ -156,6 +169,7 @@ void console_init(const struct framebuffer *info)
     cur_row = 0;
     initialized = true;
 
+    /* Limpa a tela inteira (inclusive a borda que não cabe na grade). */
     fill_rect(0, 0, (uint32_t)fb.width, (uint32_t)fb.height, pack_color(cur_bg));
     for (uint32_t r = 0; r < rows; r++)
         clear_row(r);

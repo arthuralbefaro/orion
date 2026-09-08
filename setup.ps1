@@ -1,7 +1,16 @@
+<#
+  setup.ps1 - prepara o ambiente do Orion no Windows.
+    1. instala LLVM (clang + ld.lld), QEMU e Git via winget
+    2. adiciona LLVM e QEMU ao PATH do usuario
+    3. baixa o bootloader Limine (binarios + limine.h) para third_party\limine
+
+  Rode uma vez, dentro da pasta do projeto:  .\setup.ps1
+  (se o PowerShell bloquear scripts: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned)
+#>
 $ErrorActionPreference = "Continue"
-$ProgressPreference = "SilentlyContinue"
 $Root = $PSScriptRoot
 
+# ---------- 1. Pacotes ----------
 if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
     Write-Host "winget nao encontrado. Instale o 'App Installer' pela Microsoft Store e rode de novo." -ForegroundColor Red
     exit 1
@@ -17,6 +26,7 @@ foreach ($p in $packages) {
     winget install --id $p.Id -e --silent --accept-source-agreements --accept-package-agreements
 }
 
+# ---------- 2. PATH ----------
 $dirs = @("$env:ProgramFiles\LLVM\bin", "$env:ProgramFiles\qemu")
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 $parts = @()
@@ -35,6 +45,7 @@ if ($changed) {
     Write-Host "PATH do usuario atualizado (abra um terminal novo para valer em todo lugar)."
 }
 
+# ---------- 3. Limine ----------
 $LimineVersion = "12.8.0"
 $LimineDir = Join-Path $Root "third_party\limine"
 $Tmp = Join-Path $env:TEMP "orion-limine"
@@ -52,6 +63,7 @@ foreach ($f in "BOOTX64.EFI", "BOOTIA32.EFI", "limine-bios.sys", "limine-bios-cd
     Copy-Item (Join-Path $Tmp "limine-binary\$f") $LimineDir -Force
 }
 
+# limine.h vem no tarball de fontes (Windows 10+ tem tar.exe)
 Invoke-WebRequest -Uri "$base/limine-$LimineVersion.tar.gz" -OutFile $srcTgz
 Push-Location $Tmp
 tar -xzf $srcTgz "limine-$LimineVersion/limine-protocol/include/limine.h"
@@ -66,6 +78,7 @@ if (Test-Path $hdr) {
 }
 Set-Content -Path (Join-Path $LimineDir "VERSION") -Value $LimineVersion
 
+# ---------- Verificacao ----------
 Write-Host ""
 foreach ($t in "clang", "ld.lld", "qemu-system-x86_64") {
     $c = Get-Command $t -ErrorAction SilentlyContinue

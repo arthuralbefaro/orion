@@ -2,6 +2,16 @@
 #include <kernel/log.h>
 #include <kernel/shell.h>
 #include <kernel/time.h>
+#include <kernel/sched.h>
+#include <kernel/syscall.h>
+#include <kernel/smp.h>
+#include <drivers/pci.h>
+#include <drivers/ahci.h>
+#include <fs/vfs.h>
+#include <drivers/tty.h>
+#include <drivers/rtc.h>
+#include <kernel/process.h>
+#include <arch/x86_64/percpu.h>
 #include <boot/bootinfo.h>
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/gdt.h>
@@ -18,10 +28,6 @@
 #include <mm/heap.h>
 #include <mm/memory.h>
 #include <limine.h>
-#include <kernel/syscall.h>
-#include <kernel/sched.h>
-#include <kernel/smp.h>
-#include <arch/x86_64/percpu.h>
 
 static void init_console(void)
 {
@@ -84,6 +90,7 @@ void kmain(void)
     pic_init();
     lapic_init();
 
+    
     if (acpi_init() && ioapic_init()) {
         pic_disable();
         lapic_set_lint0_extint(false);
@@ -93,9 +100,10 @@ void kmain(void)
         irq_set_mode(IRQ_MODE_PIC);
         log_info("main", "IRQs via 8259 (modo legado)");
     }
-    
+
     percpu_init_bsp(lapic_id());
     time_init();
+    rtc_init();
     keyboard_init();
     sched_init();
     syscall_init();
@@ -103,11 +111,15 @@ void kmain(void)
 
     sti();
     smp_init();
+    pci_init();
+    ahci_init();
+    vfs_init();
     cli();
 
     sti();
     log_info("main", "interrupcoes habilitadas");
 
+    
     bool irqs_ok = lapic_is_enabled();
     if (irqs_ok) {
         uint64_t t0 = time_ticks();
@@ -119,17 +131,35 @@ void kmain(void)
         log_warn("main", "sem IRQs: use a serial para o shell");
     }
 
-    shell_init();
+    tty_init();
+    bool kernel_shell = true;
+    if (vfs_mounted() && process_spawn_path("/bin/init", NULL)) {
+        kernel_shell = false;
+        log_info("main", "init iniciado; Ctrl+K alterna para o shell do kernel");
+    } else {
+        log_warn("main", "/bin/init nao encontrado; usando o shell do kernel");
+        shell_init();
+    }
 
     for (;;) {
         int c = keyboard_getchar();
         if (c < 0)
             c = serial_getc();
-        if (c >= 0)
-            shell_feed((char)c);
-        else if (irqs_ok)
+        if (c == 0x0B) {
+            kernel_shell = !kernel_shell;
+            if (kernel_shell)
+                shell_init();
+            else
+                kprintf("\n[tty]\n");
+        } else if (c >= 0) {
+            if (kernel_shell)
+                shell_feed((char)c);
+            else
+                tty_input((char)c);
+        } else if (irqs_ok) {
             hlt();
-        else
+        } else {
             pause();
+        }
     }
 }

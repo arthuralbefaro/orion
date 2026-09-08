@@ -1,3 +1,9 @@
+/*
+ * pic.h - controlador de interrupções legado 8259A (master + slave).
+ *
+ * Remapeamos as IRQs 0-15 para os vetores 32-47 (por padrão o firmware as
+ * deixa em 8-15, colidindo com exceções da CPU).
+ */
 #pragma once
 
 #include <stdbool.h>
@@ -18,4 +24,5 @@ void pic_send_eoi(uint8_t irq);
 bool pic_is_spurious(uint8_t irq);
 uint16_t pic_get_mask(void);
 
+/* Desliga o PIC por completo (quando migrarmos para o I/O APIC). */
 void pic_disable(void);

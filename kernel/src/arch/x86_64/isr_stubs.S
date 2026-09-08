@@ -1,3 +1,18 @@
+/*
+ * isr_stubs.S - pontos de entrada das 256 interrupções.
+ *
+ * Em vez de 256 labels, geramos os stubs com .rept dentro de um bloco
+ * alinhado: cada stub ocupa exatamente ISR_STUB_SIZE bytes, então o stub do
+ * vetor N fica em isr_stubs_begin + N * ISR_STUB_SIZE (é assim que idt.c
+ * preenche a IDT). Sintaxe GAS/AT&T, montado pelo próprio clang.
+ *
+ * Cada stub empilha (se a CPU não empilhou) um código de erro falso e o
+ * número do vetor, e salta para isr_common, que salva os registradores,
+ * chama isr_dispatch(frame) e restaura tudo antes do iretq.
+ *
+ * Exceções que já vêm com código de erro: 8, 10, 11, 12, 13, 14, 17, 21, 29, 30.
+ */
+
 #define ISR_STUB_SIZE 16
 
 .section .text
@@ -24,7 +39,6 @@ isr_common:
     testq $3, 144(%rsp)
     jz 1f
     swapgs
-
 1:
     cld
     movq %rsp, %rdi
@@ -33,8 +47,7 @@ isr_common:
     testq $3, 144(%rsp)
     jz 2f
     swapgs
-2:    
-
+2:
     popq %r15
     popq %r14
     popq %r13
@@ -51,7 +64,7 @@ isr_common:
     popq %rbx
     popq %rax
 
-    addq $16, %rsp
+    addq $16, %rsp              /* descarta int_no e err_code */
     iretq
 
 .align ISR_STUB_SIZE

@@ -64,7 +64,7 @@ static void reap_zombie(struct percpu *cpu)
         *pp = z->all_next;
 
     if (z->process)
-        process_free(z->process);
+        process_thread_reaped(z->process);
     kfree(z->stack);
     kfree(z);
 }
@@ -193,6 +193,8 @@ static void switch_to(struct percpu *cpu, struct thread *prev, struct thread *ne
         write_cr3(cr3);
     gdt_set_kernel_stack(next->kernel_stack_top);
     percpu_set_kernel_rsp(next->kernel_stack_top);
+    if (next->fs_base != prev->fs_base)
+        wrmsr(MSR_IA32_FS_BASE, next->fs_base);
 
     context_switch(&prev->rsp, next->rsp);
 }

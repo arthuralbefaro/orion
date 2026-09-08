@@ -34,6 +34,7 @@ struct thread {
     uint64_t wake_at;
     uint32_t cpu;
     bool     is_idle;
+    uint64_t fs_base;
 
     struct thread *next;
     struct thread *all_next;

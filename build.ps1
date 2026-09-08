@@ -87,17 +87,17 @@ if ($LASTEXITCODE -ne 0) { throw "Erro no link do kernel" }
 $UCFlags = @(
     "--target=x86_64-unknown-none-elf", "-std=gnu11", "-O2", "-g", "-Wall", "-Wextra",
     "-ffreestanding", "-nostdlibinc", "-fno-stack-protector", "-fno-pic", "-fno-pie",
-    "-mno-sse", "-mno-sse2", "-mno-mmx", "-mno-80387", "-I$UserDir\lib"
+    "-mno-sse", "-mno-sse2", "-mno-mmx", "-mno-80387", "-Wno-unused-parameter", "-I$UserDir\lib"
 )
 $ULdFlags = @(
     "-m", "elf_x86_64", "-nostdlib", "-static", "-z", "max-page-size=0x1000",
     "-z", "noexecstack", "-T", (Join-Path $UserDir "linker.ld")
 )
 $ulibSrcs = @(Get-ChildItem (Join-Path $UserDir "lib") -Filter *.c)
-$ulibHeaders = @(Get-ChildItem (Join-Path $UserDir "lib") -Filter *.h)
+$ulibHeaders = @(Get-ChildItem (Join-Path $UserDir "lib") -Recurse -Filter *.h)
 $newestUlibHeader = ($ulibHeaders | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
 
-$userElfs = @()
+$userBins = @{}
 foreach ($prog in Get-ChildItem (Join-Path $UserDir "progs") -Directory) {
     $uobjDir = Join-Path $BuildDir "user\$($prog.Name)"
     New-Item -ItemType Directory -Path $uobjDir -Force | Out-Null
@@ -120,15 +120,15 @@ foreach ($prog in Get-ChildItem (Join-Path $UserDir "progs") -Directory) {
     Write-Host "  ULD  out\$($prog.Name).elf"
     & $Lld @ULdFlags -o $uelf @uobjs
     if ($LASTEXITCODE -ne 0) { throw "Erro no link de $($prog.Name)" }
-    $userElfs += $uelf
+    $userBins[$prog.Name] = $uelf
 }
 
-New-Item -ItemType Directory -Force -Path (Join-Path $EspDir "EFI\BOOT"), (Join-Path $EspDir "boot\limine") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $EspDir "EFI\BOOT"), (Join-Path $EspDir "boot\limine"), (Join-Path $EspDir "bin") | Out-Null
 Copy-Item (Join-Path $LimineDir "BOOTX64.EFI") (Join-Path $EspDir "EFI\BOOT\BOOTX64.EFI") -Force
 Copy-Item $KernelElf (Join-Path $EspDir "boot\$Kernel.elf") -Force
-foreach ($e in $userElfs) { Copy-Item $e (Join-Path $EspDir "boot") -Force }
+foreach ($name in $userBins.Keys) { Copy-Item $userBins[$name] (Join-Path $EspDir "bin\$name") -Force }
 Copy-Item (Join-Path $Root "limine.conf") (Join-Path $EspDir "boot\limine\limine.conf") -Force
-Write-Host "OK: out\$Kernel.elf ($compiled arquivo(s) do kernel recompilado(s)), $($userElfs.Count) programa(s) de usuario" -ForegroundColor Green
+Write-Host "OK: out\$Kernel.elf ($compiled arquivo(s) do kernel recompilado(s)), $($userBins.Count) programa(s) em esp\bin" -ForegroundColor Green
 
 if ($Run) {
     $Qemu = Find-Tool "qemu-system-x86_64.exe" @("$env:ProgramFiles\qemu\qemu-system-x86_64.exe")

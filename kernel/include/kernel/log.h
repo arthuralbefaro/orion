@@ -1,3 +1,10 @@
+/*
+ * log.h - logging e panic.
+ *
+ * log_*: mensagens com prefixo de nível e do subsistema.
+ * panic(): erro irrecuperável -> imprime, trava a CPU.
+ * ASSERT(): panic se a condição falhar.
+ */
 #pragma once
 
 #include <lib/printf.h>

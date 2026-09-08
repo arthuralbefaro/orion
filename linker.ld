@@ -1,3 +1,10 @@
+/*
+ * linker.ld - layout do kernel na memória virtual (higher half).
+ *
+ * O Limine exige o kernel nos 2 GiB superiores do espaço de endereços;
+ * 0xffffffff80000000 é o começo dessa região. Cada seção vai num PT_LOAD
+ * separado para o bootloader aplicar as permissões certas (RX / R / RW).
+ */
 ENTRY(kmain)
 
 PHDRS

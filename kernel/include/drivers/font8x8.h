@@ -1,10 +1,18 @@
+/*
+ * Fonte bitmap 8x8 (ASCII imprimivel 0x20-0x7E).
+ * Origem: font8x8 de Daniel Hepper (domínio público), baseada em fontes VGA
+ * da IBM / Marcel Sondaar. https://github.com/dhepper/font8x8
+ *
+ * Formato: cada glifo tem 8 bytes (uma linha por byte), bit 0 = pixel mais à
+ * esquerda. Ou seja: pixel(x, y) = (glyph[y] >> x) & 1.
+ */
 #pragma once
 #include <stdint.h>
 
 #define FONT_WIDTH      8
 #define FONT_HEIGHT     8
 #define FONT_FIRST_CHAR 0x20   /* espaço */
-#define FONT_LAST_CHAR  0x7E
+#define FONT_LAST_CHAR  0x7E   /* '~' */
 #define FONT_GLYPHS     (FONT_LAST_CHAR - FONT_FIRST_CHAR + 1)
 
 static const uint8_t font8x8_basic[FONT_GLYPHS][FONT_HEIGHT] = {

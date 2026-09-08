@@ -1,3 +1,9 @@
+/*
+ * keyboard.c - driver de teclado PS/2 (scancode set 1).
+ *
+ * Layout: US QWERTY, com os dois scancodes extras do ABNT2 (barra e ponto
+ * do teclado numérico) mapeados. Um layout ABNT2 completo entra depois.
+ */
 #include <drivers/keyboard.h>
 #include <drivers/pic.h>
 #include <arch/x86_64/cpu.h>
@@ -8,8 +14,8 @@
 #define PS2_STATUS 0x64
 #define PS2_STATUS_OUTPUT_FULL (1 << 0)
 
-#define SC_RELEASE   0x80
-#define SC_EXTENDED  0xE0
+#define SC_RELEASE   0x80  /* bit 7 = tecla solta */
+#define SC_EXTENDED  0xE0  /* prefixo de scancode estendido */
 #define SC_LSHIFT    0x2A
 #define SC_RSHIFT    0x36
 #define SC_CTRL      0x1D
@@ -32,7 +38,7 @@ static const char keymap[128] = {
     [0x47] = '7', [0x48] = '8', [0x49] = '9', [0x4A] = '-',
     [0x4B] = '4', [0x4C] = '5', [0x4D] = '6', [0x4E] = '+',
     [0x4F] = '1', [0x50] = '2', [0x51] = '3', [0x52] = '0', [0x53] = '.',
-    [0x73] = '/', [0x7E] = '.',
+    [0x73] = '/', [0x7E] = '.',   /* extras do ABNT2 */
 };
 
 static const char keymap_shift[128] = {
@@ -54,9 +60,10 @@ static const char keymap_shift[128] = {
     [0x73] = '?', [0x7E] = '.',
 };
 
+/* Ring buffer de caracteres já traduzidos. */
 #define BUF_SIZE 256
 static char buf[BUF_SIZE];
-static volatile uint32_t buf_head, buf_tail;
+static volatile uint32_t buf_head, buf_tail; /* head = escrita, tail = leitura */
 
 static uint8_t modifiers;
 static bool extended_pending;
@@ -65,7 +72,7 @@ static void push_char(char c)
 {
     uint32_t next = (buf_head + 1) % BUF_SIZE;
     if (next == buf_tail)
-        return;
+        return; /* cheio: descarta */
     buf[buf_head] = c;
     buf_head = next;
 }
@@ -82,6 +89,7 @@ static void keyboard_irq(struct interrupt_frame *frame, void *ctx)
         return;
     }
     if (extended_pending) {
+        /* Setas, Home, End, Delete etc. Ainda não mapeados. */
         extended_pending = false;
         return;
     }
@@ -115,9 +123,11 @@ static void keyboard_irq(struct interrupt_frame *frame, void *ctx)
     if (!c)
         return;
 
+    /* Caps Lock só inverte letras. */
     if ((modifiers & KBD_MOD_CAPS) && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')))
         c ^= 0x20;
 
+    /* Ctrl+letra -> código de controle (Ctrl+C = 0x03 etc.). */
     if ((modifiers & KBD_MOD_CTRL) && c >= 'a' && c <= 'z')
         c = c - 'a' + 1;
 
@@ -126,6 +136,7 @@ static void keyboard_irq(struct interrupt_frame *frame, void *ctx)
 
 void keyboard_init(void)
 {
+    /* Descarta o que estiver pendente no controlador. */
     int guard = 64;
     while ((inb(PS2_STATUS) & PS2_STATUS_OUTPUT_FULL) && guard--)
         inb(PS2_DATA);
@@ -135,7 +146,7 @@ void keyboard_init(void)
     extended_pending = false;
 
     interrupts_register(VECTOR_IRQ_BASE + IRQ_KEYBOARD, keyboard_irq, NULL);
-    pic_unmask(IRQ_KEYBOARD);
+    irq_enable(IRQ_KEYBOARD);
 
     log_info("kbd", "teclado PS/2 na IRQ1 (scancode set 1, layout US)");
 }

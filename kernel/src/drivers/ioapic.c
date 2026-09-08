@@ -1,3 +1,10 @@
+/*
+ * ioapic.c - driver do I/O APIC (82093AA e compatíveis).
+ *
+ * Acesso é indireto: escreve-se o índice do registrador em IOREGSEL e
+ * lê/escreve-se o valor em IOWIN. Cada entrada da tabela de redirecionamento
+ * (IOREDTBL) tem 64 bits, em dois registradores de 32.
+ */
 #include <drivers/ioapic.h>
 #include <drivers/acpi.h>
 #include <mm/vmm.h>
@@ -15,7 +22,7 @@
 #define RED_ACTIVE_LOW (1u << 13)
 
 struct ioapic {
-    volatile uint8_t *base;
+    volatile uint8_t *base;   /* MMIO mapeado */
     uint32_t phys;
     uint32_t gsi_base;
     uint32_t gsi_count;

@@ -1,3 +1,10 @@
+/*
+ * limine_requests.c - requests do protocolo Limine.
+ *
+ * O bootloader varre o executável entre os marcadores START/END, encontra
+ * cada request pelo seu ID e preenche o campo `response`. As variáveis são
+ * `volatile` + `used` para o compilador não as descartar.
+ */
 #include <boot/bootinfo.h>
 #include <arch/x86_64/cpu.h>
 #include <mm/memory.h>
@@ -31,11 +38,9 @@ LIMINE_REQ struct limine_executable_address_request executable_address_request =
 LIMINE_REQ struct limine_rsdp_request rsdp_request = {
     .id = LIMINE_RSDP_REQUEST_ID, .revision = 0
 };
-
 LIMINE_REQ struct limine_module_request module_request = {
     .id = LIMINE_MODULE_REQUEST_ID, .revision = 0
 };
-
 LIMINE_REQ struct limine_mp_request mp_request = {
     .id = LIMINE_MP_REQUEST_ID, .revision = 0, .flags = 0
 };
@@ -43,17 +48,20 @@ LIMINE_REQ struct limine_mp_request mp_request = {
 __attribute__((used, section(".limine_requests_end")))
 static volatile uint64_t requests_end_marker[] = LIMINE_REQUESTS_END_MARKER;
 
+/* ---------- ---------- */
+
 struct boot_info boot_info;
 uint64_t hhdm_offset;
 
 void boot_info_init(void)
 {
+    /* Qual revisão o bootloader realmente usou? */
     if (LIMINE_BASE_REVISION_SUPPORTED(base_revision))
         boot_info.base_revision = 6;
     else if (LIMINE_LOADED_BASE_REVISION_VALID(base_revision))
         boot_info.base_revision = LIMINE_LOADED_BASE_REVISION(base_revision);
     else
-        halt_forever();
+        halt_forever(); /* bootloader antigo demais; não temos nem como avisar */
 
     if (boot_info.base_revision < 3)
         halt_forever();

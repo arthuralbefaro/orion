@@ -1,12 +1,15 @@
+/*
+ * time.c - tick do sistema e TSC.
+ */
 #include <kernel/time.h>
 #include <kernel/log.h>
 #include <kernel/sched.h>
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/interrupts.h>
 #include <arch/x86_64/lapic.h>
-#include <arch/x86_64/percpu.h>
 #include <drivers/pit.h>
 #include <drivers/pic.h>
+#include <arch/x86_64/percpu.h>
 
 static volatile uint64_t ticks;
 static const char *source = "nenhuma";
@@ -22,12 +25,8 @@ static void tick_handler(struct interrupt_frame *frame, void *ctx)
     sched_tick(ticks);
 }
 
-void time_init_ap(void)
-{
-    if (lapic_timer_frequency())
-        lapic_timer_start_periodic(VECTOR_LAPIC_TIMER, TIME_TICK_HZ);
-}
-
+/* Mede quantos ciclos de TSC cabem em 10 ms (usando o canal 2 do PIT em
+ * polling, sem depender de interrupções). */
 static uint64_t calibrate_tsc(void)
 {
     uint64_t t0 = rdtsc();
@@ -53,6 +52,12 @@ void time_init(void)
 
     log_info("time", "tick de %u Hz via %s; TSC a %lu.%03lu MHz",
              TIME_TICK_HZ, source, tsc_hz / 1000000, (tsc_hz / 1000) % 1000);
+}
+
+void time_init_ap(void)
+{
+    if (lapic_timer_frequency())
+        lapic_timer_start_periodic(VECTOR_LAPIC_TIMER, TIME_TICK_HZ);
 }
 
 uint64_t time_ticks(void)

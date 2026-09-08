@@ -1,3 +1,10 @@
+# Makefile - build no Linux/WSL (no Windows use build.ps1).
+#   make          -> out/orion.elf + out/esp/
+#   make run      -> QEMU (UEFI, boot pela pasta out/esp)
+#   make iso      -> out/orion.iso (BIOS + UEFI, precisa de xorriso)
+#   make run-iso  -> QEMU bootando a ISO em modo BIOS
+#   make clean
+
 KERNEL   := orion
 CC       := clang
 LD       := ld.lld
@@ -25,13 +32,28 @@ DEPS := $(OBJS:.o=.d)
 ESP := $(OUT_DIR)/esp
 ELF := $(OUT_DIR)/$(KERNEL).elf
 
+UCFLAGS := --target=x86_64-unknown-none-elf -std=gnu11 -O2 -g -Wall -Wextra \
+    -ffreestanding -nostdlibinc -fno-stack-protector -fno-pic -fno-pie \
+    -mno-sse -mno-sse2 -mno-mmx -mno-80387 -Iuser/lib -Wno-unused-parameter
+ULDFLAGS := -m elf_x86_64 -nostdlib -static -z max-page-size=0x1000 -z noexecstack -T user/linker.ld
+ULIB_SRCS := $(wildcard user/lib/*.c)
+UPROGS := $(notdir $(wildcard user/progs/*))
+UELFS := $(patsubst %,$(OUT_DIR)/%.elf,$(UPROGS))
+
 OVMF_CODE := $(firstword $(wildcard /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/edk2/x64/OVMF_CODE.fd /usr/share/edk2-ovmf/x64/OVMF_CODE.fd))
 OVMF_VARS := $(firstword $(wildcard /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/OVMF/OVMF_VARS.fd /usr/share/edk2/x64/OVMF_VARS.fd /usr/share/edk2-ovmf/x64/OVMF_VARS.fd))
 QEMUFLAGS ?= -M q35 -m 512M -serial stdio -no-reboot -no-shutdown
 
-.PHONY: all esp run iso run-iso clean
+.PHONY: all esp run iso run-iso clean user
 
 all: esp
+
+user: $(UELFS)
+
+$(OUT_DIR)/%.elf: user/progs/%/*.c $(ULIB_SRCS) user/linker.ld
+	@mkdir -p $(BUILD_DIR)/user/$*
+	for f in $(ULIB_SRCS) $(wildcard user/progs/$*/*.c); do $(CC) $(UCFLAGS) -c $$f -o $(BUILD_DIR)/user/$*/$$(basename $$f).o || exit 1; done
+	$(LD) $(ULDFLAGS) -o $@ $(BUILD_DIR)/user/$*/*.o
 
 $(ELF): $(OBJS) linker.ld
 	@mkdir -p $(dir $@)
@@ -45,10 +67,12 @@ $(BUILD_DIR)/%.S.o: $(SRC_DIR)/%.S
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-esp: $(ELF) limine.conf
-	@mkdir -p $(ESP)/EFI/BOOT $(ESP)/boot/limine
+esp: $(ELF) $(UELFS) limine.conf
+	@mkdir -p $(ESP)/EFI/BOOT $(ESP)/boot/limine $(ESP)/bin
 	cp $(LIMINE)/BOOTX64.EFI $(ESP)/EFI/BOOT/
 	cp $(ELF) $(ESP)/boot/$(KERNEL).elf
+	rm -f $(ESP)/boot/*.elf.bak
+	for e in $(UELFS); do cp $$e $(ESP)/bin/$$(basename $$e .elf); done
 	cp limine.conf $(ESP)/boot/limine/
 
 run: esp

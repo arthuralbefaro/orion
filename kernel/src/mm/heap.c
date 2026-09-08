@@ -1,3 +1,6 @@
+/*
+ * heap.c - slab allocator + alocações grandes.
+ */
 #include <mm/heap.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
@@ -6,17 +9,21 @@
 #include <lib/string.h>
 #include <kernel/log.h>
 
-#define SLAB_MAGIC   0x534C4142u
+/* ====================== SLABS ====================== */
+
+#define SLAB_MAGIC   0x534C4142u  /* "SLAB" */
 #define SLAB_MAX_OBJ 2048
 
+/* Cabeçalho no início da página do slab. */
 struct slab {
     uint32_t     magic;
     uint16_t     obj_size;
     uint16_t     free_count;
     uint16_t     total;
     uint16_t     cache_idx;
-    void        *free_list;
-    struct slab *next;
+    void        *free_list;   /* lista simples: os 8 primeiros bytes de cada
+                                 objeto livre apontam para o próximo */
+    struct slab *next;        /* lista de slabs parciais do cache */
     struct slab *prev;
 };
 
@@ -24,7 +31,7 @@ struct slab {
 
 struct slab_cache {
     uint16_t     obj_size;
-    struct slab *partial;
+    struct slab *partial;     /* slabs com ao menos um objeto livre */
     uint64_t     slab_count;
     uint64_t     objs_total;
     uint64_t     objs_used;
@@ -75,6 +82,7 @@ static struct slab *slab_create(struct slab_cache *c, int idx)
     s->free_count = s->total;
     s->next = s->prev = NULL;
 
+    /* Encadeia todos os objetos na lista livre. */
     uint8_t *base = (uint8_t *)s + SLAB_HDR_SIZE;
     s->free_list = base;
     for (uint16_t i = 0; i < s->total; i++) {
@@ -113,7 +121,7 @@ static void *slab_alloc(int idx)
     c->objs_used++;
 
     if (s->free_count == 0)
-        partial_remove(c, s);
+        partial_remove(c, s); /* cheio: sai da lista de parciais */
 
     return obj;
 }
@@ -130,6 +138,8 @@ static void slab_free(struct slab *s, void *ptr)
 
     struct slab_cache *c = &caches[s->cache_idx];
 
+    /* Detecta double free varrendo a lista livre (custa O(n), só em debug
+     * seria melhor; mas double free é caro demais para não pegar cedo). */
     for (void **p = s->free_list; p; p = *p)
         if ((void *)p == ptr)
             panic("kfree: double free de %p (slab %u)", ptr, s->obj_size);
@@ -140,7 +150,10 @@ static void slab_free(struct slab *s, void *ptr)
     c->objs_used--;
 
     if (s->free_count == 1)
-        partial_insert(c, s);
+        partial_insert(c, s); /* estava cheio: volta para a lista */
+
+    /* Slab totalmente vazio: devolve a página, mas mantém pelo menos um
+     * slab parcial no cache para não ficar alocando/liberando página à toa. */
     if (s->free_count == s->total && (c->partial != s || s->next))
         slab_destroy(c, s);
 }
@@ -150,22 +163,27 @@ static inline bool in_hhdm(uintptr_t a)
     return a >= hhdm_offset && a < hhdm_offset + GiB(64);
 }
 
-#define LARGE_MAGIC  0x4C415247u 
-#define LARGE_HDR    64
+/* ====================== LARGE ====================== */
+
+#define LARGE_MAGIC  0x4C415247u  /* "LARG" */
+#define LARGE_HDR    64           /* cabeçalho ocupa 64 bytes; ptr = base + 64 */
+
 struct large_hdr {
     uint32_t magic;
     uint32_t pad;
-    uint64_t pages;
-    uint64_t size;    
+    uint64_t pages;   /* páginas mapeadas (inclui o cabeçalho) */
+    uint64_t size;    /* tamanho pedido */
 };
 
+/* Faixas virtuais livres dentro de [KERNEL_HEAP_BASE, +SIZE). Os nós vêm do
+ * próprio slab allocator (que não depende de nada disso). */
 struct vrange {
     uint64_t base;
     uint64_t pages;
     struct vrange *next;
 };
 
-static struct vrange *free_ranges;
+static struct vrange *free_ranges;   /* ordenada por base */
 static uint64_t large_count, large_pages, large_bytes;
 
 static uint64_t vrange_alloc(uint64_t pages)
@@ -194,9 +212,11 @@ static void vrange_free(uint64_t base, uint64_t pages)
 
     struct vrange *next = *pp;
 
+    /* Funde com o vizinho da direita? */
     if (next && base + pages * PAGE_SIZE == next->base) {
         next->base = base;
         next->pages += pages;
+        /* ... e com o da esquerda? */
         struct vrange *prev = free_ranges;
         if (prev != next) {
             while (prev->next != next) prev = prev->next;
@@ -209,6 +229,7 @@ static void vrange_free(uint64_t base, uint64_t pages)
         return;
     }
 
+    /* Funde com o vizinho da esquerda? */
     if (pp != &free_ranges) {
         struct vrange *prev = free_ranges;
         while (prev->next != next) prev = prev->next;
@@ -239,6 +260,7 @@ static void *large_alloc(size_t size)
     for (uint64_t i = 0; i < pages; i++) {
         uint64_t phys = pmm_alloc_page();
         if (!phys) {
+            /* Desfaz o que já mapeou. */
             vmm_unmap_range(base, i, true);
             vrange_free(base, pages);
             log_error("heap", "sem memoria fisica para %lu paginas", pages);
@@ -280,6 +302,8 @@ static inline bool in_heap_region(uintptr_t a)
     return a >= KERNEL_HEAP_BASE && a < KERNEL_HEAP_BASE + KERNEL_HEAP_SIZE;
 }
 
+/* ====================== API ====================== */
+
 void heap_init(void)
 {
     for (size_t i = 0; i < CACHE_COUNT; i++) {
@@ -288,6 +312,7 @@ void heap_init(void)
         caches[i].slab_count = caches[i].objs_total = caches[i].objs_used = 0;
     }
 
+    /* Toda a região virtual do heap começa livre. */
     free_ranges = kmalloc(sizeof(*free_ranges));
     free_ranges->base = KERNEL_HEAP_BASE;
     free_ranges->pages = KERNEL_HEAP_SIZE / PAGE_SIZE;
@@ -371,7 +396,7 @@ void *krealloc(void *ptr, size_t size)
     }
     size_t old = kmalloc_size(ptr);
     if (size <= old && (old <= SLAB_MAX_OBJ || size > old / 2))
-        return ptr;
+        return ptr; /* cabe no bloco atual, sem desperdício grosseiro */
 
     void *np = kmalloc(size);
     if (!np)
@@ -415,6 +440,8 @@ void heap_dump(void)
     kprintf("  chamadas: %lu kmalloc, %lu kfree\n", alloc_calls, free_calls);
 }
 
+/* ====================== Auto-teste ====================== */
+
 static uint32_t rng_state = 0x12345678;
 static uint32_t rng(void)
 {
@@ -436,6 +463,7 @@ bool heap_selftest(void)
     static uint32_t sizes[N];
     bool ok = true;
 
+    /* 1. Aloca N blocos de tamanhos aleatórios (1..12000) com padrão. */
     for (int i = 0; i < N; i++) {
         sizes[i] = 1 + rng() % 12000;
         ptrs[i] = kmalloc(sizes[i]);
@@ -444,6 +472,7 @@ bool heap_selftest(void)
         memset(ptrs[i], (int)(i & 0xFF), sizes[i]);
     }
 
+    /* 2. Libera metade (os ímpares) e realoca com outros tamanhos. */
     for (int i = 1; i < N; i += 2) {
         kfree(ptrs[i]);
         sizes[i] = 1 + rng() % 3000;
@@ -452,6 +481,7 @@ bool heap_selftest(void)
         memset(ptrs[i], (int)(i & 0xFF), sizes[i]);
     }
 
+    /* 3. Verifica os padrões (detecta blocos sobrepostos). */
     for (int i = 0; i < N; i++) {
         for (uint32_t j = 0; j < sizes[i]; j++) {
             if (ptrs[i][j] != (uint8_t)(i & 0xFF)) {
@@ -462,12 +492,14 @@ bool heap_selftest(void)
         }
     }
 
+    /* 4. krealloc preserva conteúdo. */
     uint8_t *r = kmalloc(100);
     memset(r, 0xAB, 100);
     r = krealloc(r, 5000);
     for (int i = 0; i < 100; i++) if (r[i] != 0xAB) { ok = false; kprintf("  FALHA: krealloc perdeu dados\n"); break; }
     kfree(r);
 
+    /* 5. Libera tudo e confere que nada vazou (nem página física). */
     for (int i = 0; i < N; i++)
         kfree(ptrs[i]);
 
@@ -478,6 +510,8 @@ bool heap_selftest(void)
                 hs0.slab_objs_used, hs1.slab_objs_used, hs0.large_count, hs1.large_count);
         ok = false;
     }
+    /* Slabs vazios podem ficar em cache (1 por tamanho), então toleramos até
+     * CACHE_COUNT páginas a mais que no início. */
     if (pm1.used_pages > pm0.used_pages + CACHE_COUNT) {
         kprintf("  FALHA: vazamento de paginas fisicas (%lu -> %lu)\n", pm0.used_pages, pm1.used_pages);
         ok = false;

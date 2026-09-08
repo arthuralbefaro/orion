@@ -8,11 +8,14 @@
 #include <drivers/console.h>
 #include <drivers/acpi.h>
 #include <drivers/ioapic.h>
-#include <kernel/process.h>
-#include <kernel/sched.h>
-#include <kernel/smp.h>
-#include <arch/x86_64/percpu.h>
 #include <kernel/time.h>
+#include <kernel/sched.h>
+#include <kernel/process.h>
+#include <kernel/smp.h>
+#include <drivers/pci.h>
+#include <fs/block.h>
+#include <fs/vfs.h>
+#include <arch/x86_64/percpu.h>
 #include <drivers/pic.h>
 #include <mm/pmm.h>
 #include <mm/heap.h>
@@ -67,6 +70,7 @@ static void cmd_memmap(const char *args)
 static void cmd_alloc(const char *args)
 {
     (void)args;
+    
     uint64_t pages[4];
     for (int i = 0; i < 4; i++) {
         pages[i] = pmm_alloc_page();
@@ -123,10 +127,15 @@ static void cmd_uptime(const char *args)
 static void cmd_irq(const char *args)
 {
     (void)args;
-        kprintf("Modo: %s | mascara do PIC: %04x\n",
+    kprintf("Modo: %s | mascara do PIC: %04x\n",
             irq_get_mode() == IRQ_MODE_IOAPIC ? "I/O APIC" : "8259 PIC", pic_get_mask());
     if (irq_get_mode() == IRQ_MODE_IOAPIC)
         ioapic_dump();
+    for (int v = 0; v < 256; v++) {
+        uint64_t n = interrupts_count((uint8_t)v);
+        if (n)
+            kprintf("  vetor %3d: %lu\n", v, n);
+    }
 }
 
 static void cmd_fb(const char *args)
@@ -174,7 +183,7 @@ static void cmd_ps(const char *args)
 static void worker_sleepy(void *arg)
 {
     uint64_t id = (uint64_t)arg;
-    for (int i = 0; i <= 4; i++) {
+    for (int i = 1; i <= 4; i++) {
         kprintf("  [thread %lu] iteracao %d (t=%lu ms)\n", id, i, time_uptime_ms());
         thread_sleep_ms(200 * id);
     }
@@ -216,7 +225,7 @@ static void cmd_preempt(const char *args)
     kprintf("Duas threads em loop infinito (tids %u e %u); dormindo 1 s...\n", a->tid, b->tid);
     thread_sleep_ms(1000);
     busy_stop = true;
-    thread_sleep_ms(50);
+    thread_sleep_ms(50); 
     kprintf("  A contou %lu (cpu %u), B contou %lu (cpu %u) -> %s\n",
             busy_count[0], busy_cpu[0], busy_count[1], busy_cpu[1],
             (busy_count[0] && busy_count[1]) ? "OK (as duas rodaram)" : "FALHA");
@@ -262,6 +271,80 @@ static void cmd_smp(const char *args)
     smp_dump();
 }
 
+static void cmd_pci(const char *args)
+{
+    (void)args;
+    pci_dump();
+}
+
+static void cmd_lsblk(const char *args)
+{
+    (void)args;
+    blockdev_dump();
+}
+
+static bool ls_cb(const struct vfs_node *e, void *ctx)
+{
+    uint32_t *count = ctx;
+    (*count)++;
+    if (e->is_dir)
+        kprintf("  <DIR>          %s/\n", e->name);
+    else
+        kprintf("  %10lu     %s\n", e->size, e->name);
+    return true;
+}
+
+static void cmd_ls(const char *args)
+{
+    const char *path = *args ? args : "/";
+    uint32_t count = 0;
+    if (!vfs_readdir(path, ls_cb, &count)) {
+        kprintf("ls: '%s' nao encontrado ou nao e diretorio\n", path);
+        return;
+    }
+    kprintf("  %u entrada(s)\n", count);
+}
+
+static void cmd_cat(const char *args)
+{
+    if (!*args) {
+        kprintf("uso: cat <arquivo>\n");
+        return;
+    }
+    uint64_t size;
+    char *data = vfs_read_all(args, &size);
+    if (!data) {
+        kprintf("cat: nao foi possivel ler '%s'\n", args);
+        return;
+    }
+    for (uint64_t i = 0; i < size; i++)
+        kputc(data[i]);
+    if (size && data[size - 1] != '\n')
+        kputc('\n');
+    kfree(data);
+}
+
+static void cmd_exec(const char *args)
+{
+    if (!*args) {
+        kprintf("uso: exec <caminho do ELF>\n");
+        return;
+    }
+    uint64_t size;
+    void *image = vfs_read_all(args, &size);
+    if (!image) {
+        kprintf("exec: nao foi possivel ler '%s'\n", args);
+        return;
+    }
+    const char *name = args;
+    for (const char *c = args; *c; c++)
+        if (*c == '/')
+            name = c + 1;
+    if (!process_create_elf(name, image, size))
+        kprintf("exec: falha ao criar o processo\n");
+    kfree(image);
+}
+
 static void cmd_boot(const char *args)
 {
     (void)args;
@@ -280,6 +363,7 @@ static void cmd_crash(const char *args)
 {
     (void)args;
     kprintf("Provocando divisao por zero...\n");
+    
     __asm__ volatile("xorl %%edx, %%edx\n\t"
                      "movl $1, %%eax\n\t"
                      "xorl %%ecx, %%ecx\n\t"
@@ -299,7 +383,9 @@ static void cmd_reboot(const char *args)
 {
     (void)args;
     kprintf("Reiniciando...\n");
+    
     outb(0x64, 0xFE);
+    
     struct { uint16_t limit; uint64_t base; } PACKED null_idt = { 0, 0 };
     __asm__ volatile("lidt %0\n\tint3" : : "m"(null_idt));
     halt_forever();
@@ -335,6 +421,11 @@ static const struct command commands[] = {
     { "mods",   "modulos carregados pelo bootloader",   cmd_mods },
     { "run",    "executa um modulo ELF em ring 3",      cmd_run },
     { "procs",  "lista os processos",                   cmd_procs },
+    { "pci",    "dispositivos PCI",                     cmd_pci },
+    { "lsblk",  "discos e particoes",                   cmd_lsblk },
+    { "ls",     "lista um diretorio do disco",          cmd_ls },
+    { "cat",    "mostra um arquivo do disco",           cmd_cat },
+    { "exec",   "executa um ELF do disco em ring 3",    cmd_exec },
     { "panic",  "dispara um kernel panic",              cmd_panic },
     { "crash",  "divisao por zero (testa excecao #DE)", cmd_crash },
     { "pf",     "page fault proposital (testa #PF)",    cmd_pf },
@@ -351,11 +442,13 @@ static void cmd_help(const char *args)
 
 static void execute(char *cmdline)
 {
+    
     while (*cmdline == ' ')
         cmdline++;
     if (!*cmdline)
         return;
 
+    
     char *args = cmdline;
     while (*args && *args != ' ')
         args++;
@@ -392,17 +485,17 @@ void shell_feed(char c)
         kputs(PROMPT);
         break;
     case '\b':
-    case 0x7F:
+    case 0x7F: 
         if (line_len > 0) {
             line_len--;
             kputs("\b \b");
         }
         break;
-    case 0x03:
+    case 0x03: 
         kputs("^C\n" PROMPT);
         line_len = 0;
         break;
-    case 0x0C:
+    case 0x0C: 
         console_clear();
         kputs(PROMPT);
         line[line_len] = '\0';
