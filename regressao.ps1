@@ -3,6 +3,7 @@ param(
     [switch]$NoBuild,
     [switch]$OnlyA,
     [switch]$OnlyB,
+    [switch]$OnlyC,
     [switch]$Verbose
 )
 
@@ -10,6 +11,7 @@ $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 $failures = @()
 $checks = 0
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -25,7 +27,7 @@ function Expect([string]$log, [string]$pattern, [string]$what) {
     }
 }
 
-function Expect-MemDelta([string]$log, [string]$what, [int]$max) {
+function Test-MemDelta([string]$log, [string]$what, [int]$max) {
     $script:checks++
     $m = [regex]::Matches($log, "Paginas: \d+ total, (\d+) usadas")
     if ($m.Count -lt 2) {
@@ -48,7 +50,7 @@ $buildFlag = @{}
 if ($NoBuild) { $buildFlag = @{ NoBuild = $true } }
 
 # ---------------- Sequencia A: texto ----------------
-if (-not $OnlyB) {
+if ($runAll -or $OnlyA) {
     Write-Host "== Sequencia A (texto) ==" -ForegroundColor Cyan
     $stepsA = @(
         "key:0B", "cmd:mem", "key:0B", "wait:1",
@@ -81,9 +83,9 @@ if (-not $OnlyB) {
     Expect $a "morto por sinal 2" "Ctrl\+C matou o sleep com SIGINT"
     Expect $a "hello from ring 3" "hello rodou"
     Expect $a "argv\[2\] = dois" "argumentos chegaram ao hello"
-    Expect $a "UTC 2026|UTC 20\d\d" "date imprimiu a data"
+    Expect $a "UTC 20\d\d" "date imprimiu a data"
     Expect $a "fb0" "ls /dev listou fb0"
-    Expect $a "input" "ls /dev listou input"
+    Expect $a "sda" "ls /dev listou o disco"
     Expect $a "polltest: TUDO OK" "polltest TUDO OK"
     Expect $a "fbtest: gradiente \+ retangulo desenhados" "fbtest desenhou"
     Expect $a "tecla-desce" "evtest recebeu tecla"
@@ -93,11 +95,11 @@ if (-not $OnlyB) {
     Expect $a ": OK" "heaptest OK"
     Expect $a "OK \(as duas rodaram\)" "preempt OK"
     Expect $a "0 pty\(s\) viva\(s\)" "nenhuma pty vazada"
-    Expect-MemDelta $a "memoria estavel na sequencia A" 16
+    Test-MemDelta $a "memoria estavel na sequencia A" 16
 }
 
 # ---------------- Sequencia B: grafica ----------------
-if (-not $OnlyA) {
+if ($runAll -or $OnlyB) {
     Write-Host "== Sequencia B (grafica) ==" -ForegroundColor Cyan
     $stepsB = @(
         "key:0B", "cmd:mem", "key:0B", "wait:1",
@@ -129,7 +131,43 @@ if (-not $OnlyA) {
     Expect $b "TTY-DE-VOLTA\r?\nTTY-DE-VOLTA|echo TTY-DE-VOLTA[\s\S]{0,40}TTY-DE-VOLTA" "TTY respondeu depois do wm"
     Expect $b "0 pty\(s\) viva\(s\)" "nenhuma pty vazada"
     Expect $b "(?s)pid\s+ppid\s+estado[^\n]*\n\s+2\s+1\s+running\s+\d+\s+sh\s*\n\s+1\s+0\s+running\s+\d+\s+init" "procs so tem init e sh"
-    Expect-MemDelta $b "memoria estavel na sequencia B" 16
+    Test-MemDelta $b "memoria estavel na sequencia B" 16
+}
+
+# ---------------- Sequencia C: disco e shell ----------------
+if ($runAll -or $OnlyC) {
+    Write-Host "== Sequencia C (disco cru, escrita e shell) ==" -ForegroundColor Cyan
+    Remove-Item (Join-Path $Root "out\disk.img") -ErrorAction SilentlyContinue
+    $stepsC = @(
+        "cmd:mkfs /dev/sdb ORION", "wait:10",
+        "key:0B", "cmd:mount", "cmd:mem", "key:0B", "wait:1",
+        "cmd:fstest -a /mnt", "wait:220",
+        "cmd:echo abc > /mnt/a.txt", "cmd:echo def >> /mnt/a.txt", "wait:1",
+        "cmd:cat /mnt/a.txt | sort -r | tee /mnt/b.txt | wc", "wait:2",
+        "cmd:cat /mnt/b.txt", "cmd:wc < /mnt/a.txt",
+        "cmd:cat /nao-existe 2> /mnt/e.txt", "cmd:cat /mnt/e.txt",
+        "cmd:mkdir /mnt/d", "cmd:cp /bin/hello /mnt/d/h", "cmd:/mnt/d/h", "wait:1",
+        "cmd:rm -r /mnt/d", "cmd:rm /mnt/a.txt /mnt/b.txt /mnt/e.txt",
+        "cmd:sync", "cmd:ls /mnt", "wait:1",
+        "key:0B", "cmd:mem", "cmd:lsblk"
+    )
+    & (Join-Path $Root "test.ps1") -Smp $Smp -NoBuild -Disk -LogPath "out\reg-c.log" `
+        -Script $stepsC -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
+    $c = Get-Log "out\reg-c.log"
+    if ($Verbose) { Write-Output $c }
+
+    Expect $c "mkfs: /dev/sdb" "mkfs formatou o disco cru"
+    Expect $c "/mnt montado: FAT16 em sdb" "segundo disco montado em /mnt"
+    Expect $c "fstest: TUDO OK" "fstest TUDO OK"
+    Expect $c "criou 300 arquivos com nome longo\s+ok" "300 arquivos com nome longo"
+    Expect $c "readdir devolve todos de volta\s+ok" "readdir devolve os 300"
+    Expect $c "escreveu 3 MiB\s+ok" "arquivo de 3 MiB"
+    Expect $c "tamanho de 3 MiB\s+ok" "wc do arquivo de 3 MiB"
+    Expect $c "(?s)tee /mnt/b\.txt \| wc.{0,60}?2\s+2\s+8" "pipeline de 4 estagios"
+    Expect $c "(?s)cat /mnt/b\.txt.{0,20}?def\s+abc" "redirecionamento > e >> com tee"
+    Expect $c "cat: /nao-existe: Arquivo ou diretorio inexistente" "redirecionamento 2>"
+    Expect $c "hello from ring 3" "binario copiado para /mnt roda"
+    Test-MemDelta $c "memoria estavel na sequencia C" 24
 }
 
 Write-Host ""

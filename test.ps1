@@ -13,7 +13,8 @@ param(
     [string]$LogPath = "out\test-serial.log",
     [switch]$NoBuild,
     [switch]$NoPrint,
-    [switch]$KernelShell
+    [switch]$KernelShell,
+    [switch]$Disk
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,8 +41,36 @@ $ovmfVars = Join-Path $OutDir "ovmf-vars-test.fd"
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 if (-not (Test-Path $ovmfVars)) { Copy-Item $ovmfVarsTemplate $ovmfVars }
 
+
+if ($Disk) {
+    $img = Join-Path $OutDir "disk.img"
+    if (-not (Test-Path $img)) {
+        $fs = [System.IO.File]::Create($img)
+        $fs.SetLength(64MB)
+        $fs.Close()
+        Write-Host "Criado out\disk.img (64 MiB, zerado)." -ForegroundColor Yellow
+    }
+}
 Get-Process qemu-system-x86_64 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 300
+
+function Wait-PortFree([int]$port, [int]$timeoutSec) {
+    $end = (Get-Date).AddSeconds($timeoutSec)
+    while ((Get-Date) -lt $end) {
+        try {
+            $l = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $port)
+            $l.Start()
+            $l.Stop()
+            return $true
+        } catch {
+            Start-Sleep -Milliseconds 300
+        }
+    }
+    return $false
+}
+
+Start-Sleep -Milliseconds 500
+if (-not (Wait-PortFree $SerialPort 20)) { Write-Host "AVISO: porta $SerialPort ainda ocupada" -ForegroundColor Yellow }
+if (-not (Wait-PortFree $MonitorPort 20)) { Write-Host "AVISO: porta $MonitorPort ainda ocupada" -ForegroundColor Yellow }
 
 $qemuArgs = @(
     "-M", "q35", "-cpu", "qemu64", "-smp", "$Smp", "-m", "${Memory}M",
@@ -54,8 +83,10 @@ $qemuArgs = @(
     "-no-reboot", "-no-shutdown"
 )
 
+if ($Disk) { $qemuArgs += @("-drive", "format=raw,file=out/disk.img") }
+
 $qemuErr = Join-Path $OutDir "test-qemu.log"
-$quoted = $qemuArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
+$quoted = $qemuArgs | Where-Object { $_ } | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
 $proc = Start-Process -FilePath $Qemu -ArgumentList $quoted -PassThru -WindowStyle Hidden `
     -WorkingDirectory $Root -RedirectStandardError $qemuErr
 Write-Host "QEMU pid $($proc.Id), smp $Smp" -ForegroundColor DarkGray

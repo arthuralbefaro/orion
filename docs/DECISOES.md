@@ -118,3 +118,30 @@ Uma linha por decisao, na ordem em que foram tomadas.
   entao um `waitpid` concorrente podia colher e liberar o mesmo `struct process`
   - dava `kfree` duplo. Agora a limpeza e a decisao de quem libera acontecem
   dentro da trava.
+
+## v1.3 (escrita no FAT e redirecionamentos)
+
+- A FAT inteira ja ficava em RAM desde a v0.9; a escrita mantem esse desenho e so
+  marca a faixa de setores suja, descarregada no `sync` e pelo `bdflush` (2 s).
+  Escrever a FAT a cada `write()` custava caro demais (era o gargalo do teste de
+  3 MiB) e nao trazia garantia real sem journal.
+- `struct vfs_node` passou a carregar onde a entrada de diretorio mora
+  (`dir_ino` + `dir_offset`), que e o que permite atualizar tamanho e cluster
+  depois de escrever sem varrer o diretorio de novo.
+- Nome curto 8.3 gerado no estilo do Windows: duas letras, quatro digitos de um
+  hash FNV do nome longo e `~N`. Tentar `NOME~1`, `NOME~2`... exigia varrer o
+  diretorio inteiro por candidato, o que fazia criar 300 arquivos virar O(n^3).
+- O cache de setores fica na camada de blocos (256 entradas, write-back, LRU) e
+  nao no FAT: assim o `mkfs` e qualquer leitura crua tambem se beneficiam.
+- `bdflush` mora no VFS, nao na camada de blocos, porque precisa descarregar a
+  FAT antes dos setores.
+- Dispositivos de bloco aparecem em `/dev` (`sda`, `sda1`, `sdb`) com read/write
+  por deslocamento, o que permitiu escrever o `mkfs` em espaco de usuario.
+- Um segundo sistema de arquivos e montado em `/mnt` (o primeiro FAT que nao for
+  o do disco de boot). Um unico ponto de montagem extra cobre o caso de uso sem
+  precisar de uma tabela de montagem de verdade.
+- O `vvfat` do QEMU (`fat:rw:out/esp`) nao aguenta escrita de verdade: cria
+  poucos arquivos e depois aborta o proprio QEMU
+  (`check_directory_consistency: assertion failed`) ou falha com
+  `Error handling renames (-2)`. Por isso os testes pesados usam `-Disk`, um
+  disco cru de 64 MiB formatado pelo `mkfs` dentro do Orion e montado em `/mnt`.

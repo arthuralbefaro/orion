@@ -13,6 +13,13 @@
 #define SYS_KILL          62
 #define SYS_SETPGID       109
 #define SYS_GETPGID       121
+#define SYS_RENAME        82
+#define SYS_MKDIR         83
+#define SYS_RMDIR         84
+#define SYS_UNLINK        87
+#define SYS_FSYNC         74
+#define SYS_FTRUNCATE     77
+#define SYS_SYNC          162
 #define SYS_WRITE         1
 #define SYS_OPEN          2
 #define SYS_CLOSE         3

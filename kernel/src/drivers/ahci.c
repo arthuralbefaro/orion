@@ -40,6 +40,8 @@
 #define SIG_SATA    0x00000101
 
 #define ATA_READ_DMA_EXT 0x25
+#define ATA_WRITE_DMA_EXT 0x35
+#define ATA_FLUSH_CACHE_EXT 0xEA
 #define ATA_IDENTIFY     0xEC
 #define FIS_TYPE_H2D     0x27
 
@@ -122,7 +124,8 @@ static void port_start(struct ahci_port *p)
     wr(p->regs, PX_CMD, rd(p->regs, PX_CMD) | CMD_ST);
 }
 
-static bool port_command(struct ahci_port *p, uint8_t ata_cmd, uint64_t lba, uint16_t count, uint32_t bytes)
+static bool port_command(struct ahci_port *p, uint8_t ata_cmd, uint64_t lba, uint16_t count,
+                         uint32_t bytes, bool write)
 {
     struct cmd_header *h = &p->cmd_list[0];
     struct cmd_table *t = p->cmd_table;
@@ -146,7 +149,7 @@ static bool port_command(struct ahci_port *p, uint8_t ata_cmd, uint64_t lba, uin
     t->prdt[0].dbau = (uint32_t)(p->dma_phys >> 32);
     t->prdt[0].dbc = (bytes - 1) & 0x3FFFFF;
 
-    h->flags = 5;
+    h->flags = write ? (5 | (1 << 6)) : 5;
     h->prdtl = 1;
     h->prdbc = 0;
 
@@ -174,7 +177,7 @@ static bool ahci_read(struct blockdev *dev, uint64_t lba, uint32_t count, void *
     spin_lock(&p->lock);
     while (count) {
         uint32_t n = count > MAX_SECTORS_PER_CMD ? MAX_SECTORS_PER_CMD : count;
-        if (!port_command(p, ATA_READ_DMA_EXT, lba, (uint16_t)n, n * 512)) {
+        if (!port_command(p, ATA_READ_DMA_EXT, lba, (uint16_t)n, n * 512, false)) {
             spin_unlock(&p->lock);
             log_error("ahci", "porta %u: erro lendo LBA %lu", p->index, lba);
             return false;
@@ -188,9 +191,31 @@ static bool ahci_read(struct blockdev *dev, uint64_t lba, uint32_t count, void *
     return true;
 }
 
+static bool ahci_write(struct blockdev *dev, uint64_t lba, uint32_t count, const void *buf)
+{
+    struct ahci_port *p = dev->priv;
+    const uint8_t *in = buf;
+    spin_lock(&p->lock);
+    while (count) {
+        uint32_t n = count > MAX_SECTORS_PER_CMD ? MAX_SECTORS_PER_CMD : count;
+        memcpy(p->dma_buf, in, n * 512);
+        if (!port_command(p, ATA_WRITE_DMA_EXT, lba, (uint16_t)n, n * 512, true)) {
+            spin_unlock(&p->lock);
+            log_error("ahci", "porta %u: erro escrevendo LBA %lu", p->index, lba);
+            return false;
+        }
+        in += n * 512;
+        lba += n;
+        count -= n;
+    }
+    port_command(p, ATA_FLUSH_CACHE_EXT, 0, 0, 512, false);
+    spin_unlock(&p->lock);
+    return true;
+}
+
 static bool port_identify(struct ahci_port *p)
 {
-    if (!port_command(p, ATA_IDENTIFY, 0, 1, 512))
+    if (!port_command(p, ATA_IDENTIFY, 0, 1, 512, false))
         return false;
     uint16_t *id = (uint16_t *)p->dma_buf;
 
@@ -247,7 +272,7 @@ static void port_init(uint32_t index)
 
     char name[BLOCK_NAME_MAX];
     ksnprintf(name, sizeof(name), "sd%c", 'a' + port_count);
-    struct blockdev *dev = blockdev_register(name, 512, p->sectors, ahci_read, p);
+    struct blockdev *dev = blockdev_register(name, 512, p->sectors, ahci_read, ahci_write, p);
     if (!dev)
         return;
     log_info("ahci", "%s: porta %u, '%s', %lu setores (%lu MiB)", name, index, p->model,

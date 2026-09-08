@@ -5,7 +5,8 @@ param(
     [int]$Memory = 512,
     [int]$Smp = 1,
     [string]$Cpu = "qemu64",
-    [string]$Accel = ""
+    [string]$Accel = "",
+    [switch]$Disk
 )
 
 $ErrorActionPreference = "Stop"
@@ -131,6 +132,17 @@ Copy-Item (Join-Path $Root "limine.conf") (Join-Path $EspDir "boot\limine\limine
 Write-Host "OK: out\$Kernel.elf ($compiled arquivo(s) do kernel recompilado(s)), $($userBins.Count) programa(s) em esp\bin" -ForegroundColor Green
 
 if ($Run) {
+
+if ($Disk) {
+    $img = Join-Path $OutDir "disk.img"
+    if (-not (Test-Path $img)) {
+        New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+        $fs = [System.IO.File]::Create($img)
+        $fs.SetLength(64MB)
+        $fs.Close()
+        Write-Host "Criado out\disk.img (64 MiB, zerado). Formate com 'mkfs /dev/sdb' no Orion." -ForegroundColor Yellow
+    }
+}
     $Qemu = Find-Tool "qemu-system-x86_64.exe" @("$env:ProgramFiles\qemu\qemu-system-x86_64.exe")
     $QemuDir = Split-Path $Qemu -Parent
     $ovmfCode = Join-Path $QemuDir "share\edk2-x86_64-code.fd"
@@ -147,9 +159,10 @@ if ($Run) {
         "-drive", "if=pflash,format=raw,unit=0,file=$ovmfCode,readonly=on",
         "-drive", "if=pflash,format=raw,unit=1,file=$ovmfVars",
         "-drive", "format=raw,file=fat:rw:out/esp",
-        "-serial", "stdio",
+            "-serial", "stdio",
         "-no-reboot", "-no-shutdown"
     )
+    if ($Disk) { $qemuArgs += @("-drive", "format=raw,file=out/disk.img") }
     if ($Accel) { $qemuArgs += @("-accel", $Accel) }
     if ($Gdb)   { $qemuArgs += @("-s", "-S"); Write-Host "QEMU parado; conecte o debugger em localhost:1234" -ForegroundColor Yellow }
 

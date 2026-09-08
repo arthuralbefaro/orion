@@ -76,20 +76,83 @@ static long sys_write(int fd, const void *buf, size_t len)
     return file_write(f, buf, len);
 }
 
-static long sys_open(const char *path)
+static long sys_open(const char *path, int flags)
 {
     if (!user_str_ok(path, 512))
         return -EFAULT;
     char full[PROCESS_CWD_MAX];
     if (!process_resolve_path(process_current(), path, full, sizeof(full)))
         return -ENOENT;
-    struct file *f = file_open_path(full);
+    struct file *f = file_open_path(full, flags);
     if (!f)
         return -ENOENT;
     int fd = process_fd_install(process_current(), f);
     if (fd < 0)
         file_unref(f);
     return fd;
+}
+
+static long resolved(const char *path, char *out, size_t size)
+{
+    if (!user_str_ok(path, 512))
+        return -EFAULT;
+    if (!process_resolve_path(process_current(), path, out, size))
+        return -ENOENT;
+    return 0;
+}
+
+static long sys_mkdir(const char *path)
+{
+    char full[PROCESS_CWD_MAX];
+    long r = resolved(path, full, sizeof(full));
+    if (r < 0)
+        return r;
+    struct vfs_node n;
+    if (vfs_lookup(full, &n))
+        return -EEXIST;
+    if (!vfs_writable())
+        return -EROFS;
+    return vfs_create(full, true, NULL) ? 0 : -EIO;
+}
+
+static long sys_unlink(const char *path, bool is_dir)
+{
+    char full[PROCESS_CWD_MAX];
+    long r = resolved(path, full, sizeof(full));
+    if (r < 0)
+        return r;
+    struct vfs_node n;
+    if (!vfs_lookup(full, &n))
+        return -ENOENT;
+    if (n.is_dir != is_dir)
+        return is_dir ? -ENOTDIR : -EISDIR;
+    if (!vfs_writable())
+        return -EROFS;
+    return vfs_unlink(full, is_dir) ? 0 : (is_dir ? -ENOTEMPTY : -EIO);
+}
+
+static long sys_rename(const char *from, const char *to)
+{
+    char a[PROCESS_CWD_MAX], b[PROCESS_CWD_MAX];
+    long r = resolved(from, a, sizeof(a));
+    if (r < 0)
+        return r;
+    r = resolved(to, b, sizeof(b));
+    if (r < 0)
+        return r;
+    if (!vfs_writable())
+        return -EROFS;
+    return vfs_rename(a, b) ? 0 : -EIO;
+}
+
+static long sys_ftruncate(int fd, uint64_t size)
+{
+    struct file *f = process_fd_get(process_current(), fd);
+    if (!f)
+        return -EBADF;
+    if (!f->has_node)
+        return -EINVAL;
+    return vfs_truncate(&f->node, size) ? 0 : -EIO;
 }
 
 static long sys_close(int fd)
@@ -541,7 +604,7 @@ void syscall_dispatch(struct interrupt_frame *f)
     switch (f->rax) {
     case SYS_READ:        ret = sys_read((int)f->rdi, (void *)f->rsi, (size_t)f->rdx); break;
     case SYS_WRITE:       ret = sys_write((int)f->rdi, (const void *)f->rsi, (size_t)f->rdx); break;
-    case SYS_OPEN:        ret = sys_open((const char *)f->rdi); break;
+    case SYS_OPEN:        ret = sys_open((const char *)f->rdi, (int)f->rsi); break;
     case SYS_CLOSE:       ret = sys_close((int)f->rdi); break;
     case SYS_STAT:        ret = sys_stat((const char *)f->rdi, (struct user_stat *)f->rsi); break;
     case SYS_FSTAT:       ret = sys_fstat((int)f->rdi, (struct user_stat *)f->rsi); break;
@@ -575,6 +638,13 @@ void syscall_dispatch(struct interrupt_frame *f)
     case SYS_RT_SIGRETURN: ret = signal_sigreturn(f); break;
     case SYS_ALARM:       ret = process_alarm(f->rdi); break;
     case SYS_SETPGID:     ret = process_setpgid((int)f->rdi, (int)f->rsi); break;
+    case SYS_MKDIR:       ret = sys_mkdir((const char *)f->rdi); break;
+    case SYS_RMDIR:       ret = sys_unlink((const char *)f->rdi, true); break;
+    case SYS_UNLINK:      ret = sys_unlink((const char *)f->rdi, false); break;
+    case SYS_RENAME:      ret = sys_rename((const char *)f->rdi, (const char *)f->rsi); break;
+    case SYS_FTRUNCATE:   ret = sys_ftruncate((int)f->rdi, f->rsi); break;
+    case SYS_FSYNC:
+    case SYS_SYNC:        ret = vfs_sync() ? 0 : -EIO; break;
     case SYS_GETPGID:     ret = process_getpgid((int)f->rdi); break;
     default:
         log_warn("syscall", "pid %u: syscall %lu desconhecida", process_current()->pid, f->rax);

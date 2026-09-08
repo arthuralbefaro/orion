@@ -20,11 +20,16 @@ FILE *fdopen(int fd, const char *mode)
 
 FILE *fopen(const char *path, const char *mode)
 {
-    if (mode[0] != 'r') {
-        errno = EACCES;
+    int flags;
+    switch (mode[0]) {
+    case 'r': flags = mode[1] == '+' ? O_RDWR : O_RDONLY; break;
+    case 'w': flags = O_CREAT | O_TRUNC | (mode[1] == '+' ? O_RDWR : O_WRONLY); break;
+    case 'a': flags = O_CREAT | O_APPEND | (mode[1] == '+' ? O_RDWR : O_WRONLY); break;
+    default:
+        errno = EINVAL;
         return NULL;
     }
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, flags);
     if (fd < 0)
         return NULL;
     FILE *f = fdopen(fd, mode);

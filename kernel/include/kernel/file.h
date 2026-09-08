@@ -33,7 +33,7 @@ void file_unref(struct file *f);
 
 bool file_is_tty(const struct file *f);
 struct file *file_open_tty(void);
-struct file *file_open_path(const char *path);
+struct file *file_open_path(const char *path, int flags);
 bool file_make_pipe(struct file **reader, struct file **writer);
 
 int64_t file_read(struct file *f, void *buf, uint64_t len);

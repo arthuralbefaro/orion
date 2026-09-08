@@ -347,6 +347,21 @@ static void cmd_pci(const char *args)
     pci_dump();
 }
 
+static void cmd_mount(const char *args)
+{
+    (void)args;
+    if (vfs_mount_extra())
+        kprintf("  /mnt: %s\n", vfs_mnt_device());
+    else
+        kprintf("  nenhum sistema de arquivos extra encontrado\n");
+}
+
+static void cmd_sync(const char *args)
+{
+    (void)args;
+    kprintf(vfs_sync() ? "  cache descarregado\n" : "  falha ao descarregar o cache\n");
+}
+
 static void cmd_lsblk(const char *args)
 {
     (void)args;
@@ -497,6 +512,8 @@ static const struct command commands[] = {
     { "procs",  "lista os processos",                   cmd_procs },
     { "pci",    "dispositivos PCI",                     cmd_pci },
     { "lsblk",  "discos e particoes",                   cmd_lsblk },
+    { "mount",  "monta o primeiro FS extra em /mnt",     cmd_mount },
+    { "sync",   "descarrega o cache de disco",           cmd_sync },
     { "ls",     "lista um diretorio do disco",          cmd_ls },
     { "cat",    "mostra um arquivo do disco",           cmd_cat },
     { "exec",   "executa um ELF do disco em ring 3",    cmd_exec },

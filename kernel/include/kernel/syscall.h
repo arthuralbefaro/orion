@@ -12,6 +12,13 @@
 #define SYS_KILL          62
 #define SYS_SETPGID       109
 #define SYS_GETPGID       121
+#define SYS_RENAME        82
+#define SYS_MKDIR         83
+#define SYS_RMDIR         84
+#define SYS_UNLINK        87
+#define SYS_FSYNC         74
+#define SYS_FTRUNCATE     77
+#define SYS_SYNC          162
 #define SYS_WRITE         1
 #define SYS_OPEN          2
 #define SYS_CLOSE         3
@@ -63,6 +70,11 @@
 #define ENOEXEC 8
 #define ENODEV  19
 #define EINTR   4
+#define EIO     5
+#define EEXIST  17
+#define ENOTEMPTY 39
+#define EROFS   30
+#define ENOSPC  28
 
 #define USER_ADDR_MAX 0x0000800000000000ull
 #define USER_MMAP_BASE 0x0000100000000000ull
@@ -83,6 +95,9 @@ struct user_pollfd {
 #define O_RDONLY   0
 #define O_WRONLY   1
 #define O_RDWR     2
+#define O_CREAT    0x40
+#define O_TRUNC    0x200
+#define O_APPEND   0x400
 #define O_NONBLOCK 0x800
 
 #define F_GETFL 3
@@ -109,6 +124,7 @@ struct user_pollfd {
 #define S_IFDIR 0040000
 #define S_IFREG 0100000
 #define S_IFCHR 0020000
+#define S_IFBLK 0060000
 #define S_IFIFO 0010000
 
 struct user_dirent {

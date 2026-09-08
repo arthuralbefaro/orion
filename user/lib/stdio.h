@@ -38,6 +38,7 @@ int    fileno(FILE *f);
 int    fseek(FILE *f, long off, int whence);
 long   ftell(FILE *f);
 void   perror(const char *s);
+int    remove(const char *path);
 
 int printf(const char *fmt, ...);
 int fprintf(FILE *f, const char *fmt, ...);

@@ -22,5 +22,10 @@ extern int errno;
 #define EPIPE   32
 #define ERANGE  34
 #define ENOSYS  38
+#define EIO     5
+#define EEXIST  17
+#define ENOTEMPTY 39
+#define EROFS   30
+#define ENOSPC  28
 
 const char *strerror(int err);

@@ -1,14 +1,25 @@
+#include <errno.h>
+#include <fcntl.h>
+#include <pty.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <errno.h>
-#include <signal.h>
-#include <sys/wait.h>
 #include <sys/ioctl.h>
-#include <pty.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
-#define MAX_ARGS 16
+#define MAX_ARGS   24
+#define MAX_STAGES 8
+
+struct cmd {
+    char *argv[MAX_ARGS];
+    int argc;
+    const char *in_file;
+    const char *out_file;
+    const char *err_file;
+    int append;
+};
 
 static volatile int interrupted;
 static pid_t shell_pgid;
@@ -25,24 +36,17 @@ static void set_foreground(pid_t pgid)
     ioctl(STDIN_FILENO, TIOCSPGRP, &g);
 }
 
-static void report(pid_t pid, int status)
+static void report(int status)
 {
-    (void)pid;
-    if (WIFSIGNALED(status))
-        fprintf(stderr, "[morto por sinal %d: %s]\n", WTERMSIG(status),
-                strsignal(WTERMSIG(status)));
-    else if (WEXITSTATUS(status) != 0)
+    if (WIFSIGNALED(status)) {
+        if (WTERMSIG(status) != SIGINT)
+            fprintf(stderr, "[morto por sinal %d: %s]\n", WTERMSIG(status),
+                    strsignal(WTERMSIG(status)));
+        else
+            fprintf(stderr, "[morto por sinal %d]\n", WTERMSIG(status));
+    } else if (WEXITSTATUS(status) != 0) {
         fprintf(stderr, "[saiu com %d]\n", WEXITSTATUS(status));
-}
-
-static int split(char *line, char **argv)
-{
-    int argc = 0;
-    char *save;
-    for (char *tok = strtok_r(line, " \t", &save); tok && argc < MAX_ARGS - 1; tok = strtok_r(NULL, " \t", &save))
-        argv[argc++] = tok;
-    argv[argc] = NULL;
-    return argc;
+    }
 }
 
 static void resolve(const char *cmd, char *out, size_t size)
@@ -53,33 +57,91 @@ static void resolve(const char *cmd, char *out, size_t size)
         snprintf(out, size, "/bin/%s", cmd);
 }
 
-static pid_t spawn(char **argv, int in_fd, int out_fd, int extra_close)
+/* Separa a linha em tokens e retira os redirecionamentos. */
+static int parse_cmd(char *text, struct cmd *c)
 {
-    char path[256];
-    resolve(argv[0], path, sizeof(path));
-    pid_t pid = fork();
-    if (pid < 0)
-        return -1;
-    if (pid == 0) {
-        setpgid(0, 0);
-        signal(SIGINT, SIG_DFL);
-        if (in_fd != STDIN_FILENO) { dup2(in_fd, STDIN_FILENO); close(in_fd); }
-        if (out_fd != STDOUT_FILENO) { dup2(out_fd, STDOUT_FILENO); close(out_fd); }
-        if (extra_close >= 0)
-            close(extra_close);
-        execv(path, argv);
-        fprintf(stderr, "sh: %s: %s\n", argv[0], strerror(errno));
-        _exit(127);
+    memset(c, 0, sizeof(*c));
+    char *save;
+    char *tok = strtok_r(text, " \t", &save);
+    while (tok) {
+        const char **target = NULL;
+        int append = 0;
+        if (strcmp(tok, "<") == 0) {
+            target = &c->in_file;
+        } else if (strcmp(tok, ">") == 0) {
+            target = &c->out_file;
+        } else if (strcmp(tok, ">>") == 0) {
+            target = &c->out_file;
+            append = 1;
+        } else if (strcmp(tok, "2>") == 0) {
+            target = &c->err_file;
+        } else if (tok[0] == '<' && tok[1]) {
+            c->in_file = tok + 1;
+        } else if (tok[0] == '>' && tok[1] == '>' && tok[2]) {
+            c->out_file = tok + 2;
+            c->append = 1;
+        } else if (tok[0] == '>' && tok[1]) {
+            c->out_file = tok + 1;
+        } else if (c->argc < MAX_ARGS - 1) {
+            c->argv[c->argc++] = tok;
+        }
+        if (target) {
+            tok = strtok_r(NULL, " \t", &save);
+            if (!tok) {
+                fputs("sh: falta o nome do arquivo depois do redirecionamento\n", stderr);
+                return -1;
+            }
+            *target = tok;
+            if (append)
+                c->append = 1;
+        }
+        tok = strtok_r(NULL, " \t", &save);
     }
-    return pid;
+    c->argv[c->argc] = NULL;
+    return c->argc;
 }
 
-static int builtin(int argc, char **argv)
+static int open_redirect(const char *path, int flags)
 {
+    int fd = open(path, flags);
+    if (fd < 0)
+        fprintf(stderr, "sh: %s: %s\n", path, strerror(errno));
+    return fd;
+}
+
+static void apply_redirects(const struct cmd *c)
+{
+    if (c->in_file) {
+        int fd = open_redirect(c->in_file, O_RDONLY);
+        if (fd < 0)
+            _exit(1);
+        dup2(fd, STDIN_FILENO);
+        close(fd);
+    }
+    if (c->out_file) {
+        int flags = O_WRONLY | O_CREAT | (c->append ? O_APPEND : O_TRUNC);
+        int fd = open_redirect(c->out_file, flags);
+        if (fd < 0)
+            _exit(1);
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+    }
+    if (c->err_file) {
+        int fd = open_redirect(c->err_file, O_WRONLY | O_CREAT | O_TRUNC);
+        if (fd < 0)
+            _exit(1);
+        dup2(fd, STDERR_FILENO);
+        close(fd);
+    }
+}
+
+static int builtin(struct cmd *c)
+{
+    char **argv = c->argv;
     if (strcmp(argv[0], "exit") == 0)
-        exit(argc > 1 ? atoi(argv[1]) : 0);
+        exit(c->argc > 1 ? atoi(argv[1]) : 0);
     if (strcmp(argv[0], "cd") == 0) {
-        const char *dir = argc > 1 ? argv[1] : "/";
+        const char *dir = c->argc > 1 ? argv[1] : "/";
         if (chdir(dir) < 0)
             fprintf(stderr, "cd: %s: %s\n", dir, strerror(errno));
         return 1;
@@ -90,74 +152,135 @@ static int builtin(int argc, char **argv)
             puts(buf);
         return 1;
     }
+    if (strcmp(argv[0], "sync") == 0) {
+        sync();
+        return 1;
+    }
     if (strcmp(argv[0], "help") == 0) {
-        puts("builtins: cd, pwd, exit, help");
-        puts("programas em /bin: echo cat ls hello date wc memtest crash");
-        puts("graficos: wm (compositor), fbtest, evtest, ptytest, polltest");
-        puts("pipe simples: ls | wc");
+        puts("builtins: cd, pwd, sync, exit, help");
+        puts("arquivos: ls cat cp mv rm mkdir touch head tail grep sort uniq tee wc echo");
+        puts("sistema:  date sleep hello memtest crash fstest polltest sigtest ptytest");
+        puts("graficos: wm (compositor), fbtest, evtest");
+        puts("redireciona: cmd > arq, cmd >> arq, cmd < arq, cmd 2> arq");
+        puts("pipeline:    ls /bin | grep test | wc");
         return 1;
     }
     return 0;
 }
 
+static void run_pipeline(struct cmd *cmds, int n)
+{
+    pid_t pids[MAX_STAGES];
+    pid_t pgid = 0;
+    int prev_read = -1;
+
+    for (int i = 0; i < n; i++) {
+        int fds[2] = { -1, -1 };
+        if (i + 1 < n && pipe(fds) < 0) {
+            perror("sh: pipe");
+            break;
+        }
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("sh: fork");
+            break;
+        }
+        if (pid == 0) {
+            setpgid(0, pgid);
+            signal(SIGINT, SIG_DFL);
+            if (prev_read >= 0) {
+                dup2(prev_read, STDIN_FILENO);
+                close(prev_read);
+            }
+            if (fds[1] >= 0) {
+                dup2(fds[1], STDOUT_FILENO);
+                close(fds[1]);
+            }
+            if (fds[0] >= 0)
+                close(fds[0]);
+            apply_redirects(&cmds[i]);
+            char path[256];
+            resolve(cmds[i].argv[0], path, sizeof(path));
+            execv(path, cmds[i].argv);
+            fprintf(stderr, "sh: %s: %s\n", cmds[i].argv[0], strerror(errno));
+            _exit(127);
+        }
+        if (!pgid)
+            pgid = pid;
+        setpgid(pid, pgid);
+        pids[i] = pid;
+        if (prev_read >= 0)
+            close(prev_read);
+        if (fds[1] >= 0)
+            close(fds[1]);
+        prev_read = fds[0];
+    }
+    if (prev_read >= 0)
+        close(prev_read);
+
+    if (!pgid)
+        return;
+    set_foreground(pgid);
+    int status = 0;
+    for (int i = 0; i < n; i++) {
+        int st = 0;
+        while (waitpid(pids[i], &st, 0) < 0 && errno == EINTR)
+            ;
+        if (i == n - 1)
+            status = st;
+    }
+    set_foreground(shell_pgid);
+    report(status);
+}
+
 static void run_line(char *line)
 {
-    char *bar = strchr(line, '|');
-    char *argv1[MAX_ARGS], *argv2[MAX_ARGS];
-
-    if (bar) {
+    char *stages[MAX_STAGES];
+    int n = 0;
+    char *p = line;
+    while (n < MAX_STAGES) {
+        stages[n++] = p;
+        char *bar = strchr(p, '|');
+        if (!bar)
+            break;
         *bar = '\0';
-        if (split(line, argv1) == 0 || split(bar + 1, argv2) == 0) {
-            fputs("sh: sintaxe invalida\n", stderr);
-            return;
-        }
-        int fds[2];
-        if (pipe(fds) < 0) {
-            perror("sh: pipe");
-            return;
-        }
-        pid_t p1 = spawn(argv1, STDIN_FILENO, fds[1], fds[0]);
-        pid_t p2 = spawn(argv2, fds[0], STDOUT_FILENO, fds[1]);
-        close(fds[0]);
-        close(fds[1]);
-        if (p1 > 0) setpgid(p1, p1);
-        if (p2 > 0) setpgid(p2, p1 > 0 ? p1 : p2);
-        if (p1 > 0) set_foreground(p1);
-        int st = 0;
-        if (p1 > 0) while (waitpid(p1, &st, 0) < 0 && errno == EINTR) ;
-        if (p2 > 0) while (waitpid(p2, &st, 0) < 0 && errno == EINTR) ;
-        set_foreground(shell_pgid);
-        return;
+        p = bar + 1;
     }
 
-    int argc = split(line, argv1);
-    if (argc == 0 || builtin(argc, argv1))
-        return;
-
-    pid_t pid = spawn(argv1, STDIN_FILENO, STDOUT_FILENO, -1);
-    if (pid < 0) {
-        perror("sh: fork");
-        return;
+    struct cmd cmds[MAX_STAGES];
+    int count = 0;
+    for (int i = 0; i < n; i++) {
+        int argc = parse_cmd(stages[i], &cmds[count]);
+        if (argc < 0)
+            return;
+        if (argc == 0) {
+            if (n > 1) {
+                fputs("sh: sintaxe invalida\n", stderr);
+                return;
+            }
+            continue;
+        }
+        count++;
     }
-    setpgid(pid, pid);
-    set_foreground(pid);
-    int status = 0;
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
-        ;
-    set_foreground(shell_pgid);
-    report(pid, status);
+    if (count == 0)
+        return;
+    if (count == 1 && builtin(&cmds[0]))
+        return;
+    run_pipeline(cmds, count);
 }
 
 int main(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
-    char line[256], cwd[256];
+    char line[512], cwd[256];
+
     setpgid(0, 0);
     shell_pgid = getpgrp();
     set_foreground(shell_pgid);
     signal(SIGINT, on_sigint);
     printf("Orion sh (pid %d). Digite 'help'.\n", getpid());
+
     for (;;) {
         if (!getcwd(cwd, sizeof(cwd)))
             strcpy(cwd, "?");

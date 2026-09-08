@@ -8,6 +8,7 @@
 #include <drivers/pci.h>
 #include <drivers/ahci.h>
 #include <fs/vfs.h>
+#include <fs/block.h>
 #include <fs/devfs.h>
 #include <drivers/tty.h>
 #include <drivers/rtc.h>
@@ -116,7 +117,9 @@ void kmain(void)
     smp_init();
     pci_init();
     ahci_init();
+    blockdev_cache_init();
     vfs_init();
+    vfs_flush_init();
     devfs_init();
     cli();
 

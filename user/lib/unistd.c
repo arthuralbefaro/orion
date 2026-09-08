@@ -66,9 +66,17 @@ int execv(const char *path, char *const argv[])
 
 int open(const char *path, int flags, ...)
 {
-    (void)flags;
-    return (int)__syscall_ret(syscall1(SYS_OPEN, (long)path));
+    return (int)__syscall_ret(syscall2(SYS_OPEN, (long)path, flags));
 }
+
+int  unlink(const char *path)                { return (int)__syscall_ret(syscall1(SYS_UNLINK, (long)path)); }
+int  rmdir(const char *path)                 { return (int)__syscall_ret(syscall1(SYS_RMDIR, (long)path)); }
+int  rename(const char *a, const char *b)    { return (int)__syscall_ret(syscall2(SYS_RENAME, (long)a, (long)b)); }
+int  mkdir(const char *path, unsigned mode)  { (void)mode; return (int)__syscall_ret(syscall1(SYS_MKDIR, (long)path)); }
+int  ftruncate(int fd, off_t len)            { return (int)__syscall_ret(syscall2(SYS_FTRUNCATE, fd, len)); }
+int  fsync(int fd)                           { return (int)__syscall_ret(syscall1(SYS_FSYNC, fd)); }
+void sync(void)                              { syscall0(SYS_SYNC); }
+int  remove(const char *path)                { return unlink(path); }
 
 pid_t waitpid(pid_t pid, int *status, int options)
 {
@@ -177,7 +185,9 @@ static const char *const errors[] = {
     [EFAULT] = "Endereco invalido", [ENOTDIR] = "Nao e um diretorio", [EISDIR] = "E um diretorio",
     [EINVAL] = "Argumento invalido", [EMFILE] = "Muitos arquivos abertos", [ENOTTY] = "Nao e um terminal",
     [ESPIPE] = "Seek invalido", [EPIPE] = "Pipe quebrado", [ERANGE] = "Fora do intervalo",
-    [ENOSYS] = "Funcao nao implementada",
+    [ENOSYS] = "Funcao nao implementada", [EIO] = "Erro de entrada/saida",
+    [EEXIST] = "Arquivo ja existe", [ENOTEMPTY] = "Diretorio nao vazio",
+    [EROFS] = "Sistema de arquivos somente leitura", [EINTR] = "Chamada interrompida",
 };
 
 const char *strerror(int err)

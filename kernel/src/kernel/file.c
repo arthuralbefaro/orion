@@ -162,23 +162,49 @@ static int vfs_file_readdir(struct file *f, uint64_t index, struct vfs_node *out
     return r.found ? 1 : 0;
 }
 
+static int64_t vfs_file_write(struct file *f, const void *buf, uint64_t len)
+{
+    if (f->node.is_dir)
+        return -EISDIR;
+    if (f->flags & O_APPEND)
+        f->offset = f->node.size;
+    int64_t n = vfs_write(&f->node, f->offset, buf, len);
+    if (n > 0)
+        f->offset += (uint64_t)n;
+    return n < 0 ? -EIO : n;
+}
+
 static const struct file_ops vfs_ops = {
     .read = vfs_file_read,
+    .write = vfs_file_write,
     .readdir = vfs_file_readdir,
 };
 
-struct file *file_open_path(const char *path)
+struct file *file_open_path(const char *path, int flags)
 {
     if (devfs_owns(path))
         return devfs_open(path);
+
     struct vfs_node node;
-    if (!vfs_lookup(path, &node))
-        return NULL;
+    bool found = vfs_lookup(path, &node);
+    if (!found) {
+        if (!(flags & O_CREAT))
+            return NULL;
+        if (!vfs_create(path, false, &node))
+            return NULL;
+    } else if ((flags & O_TRUNC) && !node.is_dir && (flags & (O_WRONLY | O_RDWR))) {
+        if (!vfs_truncate(&node, 0))
+            return NULL;
+    }
+
     struct file *f = file_alloc(&vfs_ops, NULL);
     if (!f)
         return NULL;
     f->node = node;
     f->has_node = true;
+    f->flags = (uint32_t)flags;
+    if (flags & O_APPEND)
+        f->offset = node.size;
     return f;
 }
 

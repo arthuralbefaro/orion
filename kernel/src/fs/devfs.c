@@ -4,6 +4,7 @@
 #include <kernel/log.h>
 #include <drivers/fbdev.h>
 #include <drivers/input.h>
+#include <fs/block.h>
 #include <lib/string.h>
 
 struct device {
@@ -23,6 +24,9 @@ static const struct device devices[] = {
     { "input", input_open,     size_zero,  S_IFCHR | 0640 },
     { "tty",   file_open_tty,  size_zero,  S_IFCHR | 0620 },
 };
+
+struct file *blkdev_file_open(struct blockdev *dev);
+uint64_t blkdev_file_size(struct blockdev *dev);
 
 static const char *tail_of(const char *path)
 {
@@ -45,6 +49,24 @@ static const struct device *find(const char *path)
         if (strcmp(devices[i].name, name) == 0)
             return &devices[i];
     return NULL;
+}
+
+static struct blockdev *find_block(const char *path)
+{
+    const char *name = tail_of(path);
+    if (!name || !*name)
+        return NULL;
+    return blockdev_find(name);
+}
+
+static void fill_block_node(struct blockdev *d, uint64_t ino, struct vfs_node *out)
+{
+    memset(out, 0, sizeof(*out));
+    strlcpy(out->name, d->name, sizeof(out->name));
+    out->is_dir = false;
+    out->size = blkdev_file_size(d);
+    out->ino = ino;
+    out->fs = NULL;
 }
 
 static void fill_node(const struct device *d, uint64_t ino, struct vfs_node *out)
@@ -77,10 +99,16 @@ bool devfs_lookup(const char *path, struct vfs_node *out)
         return true;
     }
     const struct device *d = find(path);
-    if (!d)
-        return false;
-    fill_node(d, (uint64_t)(d - devices) + 1, out);
-    return true;
+    if (d) {
+        fill_node(d, (uint64_t)(d - devices) + 1, out);
+        return true;
+    }
+    struct blockdev *b = find_block(path);
+    if (b) {
+        fill_block_node(b, 100, out);
+        return true;
+    }
+    return false;
 }
 
 uint32_t devfs_mode(const char *path)
@@ -88,15 +116,23 @@ uint32_t devfs_mode(const char *path)
     if (devfs_is_root(path))
         return S_IFDIR | 0755;
     const struct device *d = find(path);
-    return d ? d->mode : 0;
+    if (d)
+        return d->mode;
+    return find_block(path) ? (S_IFBLK | 0600) : 0;
 }
 
 static int devdir_readdir(struct file *f, uint64_t index, struct vfs_node *out)
 {
     (void)f;
-    if (index >= ARRAY_SIZE(devices))
+    if (index < ARRAY_SIZE(devices)) {
+        fill_node(&devices[index], index + 1, out);
+        return 1;
+    }
+    uint32_t bi = (uint32_t)(index - ARRAY_SIZE(devices));
+    struct blockdev *b = blockdev_at(bi);
+    if (!b)
         return 0;
-    fill_node(&devices[index], index + 1, out);
+    fill_block_node(b, 100 + bi, out);
     return 1;
 }
 
@@ -116,22 +152,29 @@ struct file *devfs_open(const char *path)
         return f;
     }
     const struct device *d = find(path);
-    if (!d)
-        return NULL;
-    struct file *f = d->open();
-    if (!f)
-        return NULL;
-    fill_node(d, (uint64_t)(d - devices) + 1, &f->node);
-    f->has_node = true;
-    f->mode = d->mode;
-    return f;
+    if (d) {
+        struct file *f = d->open();
+        if (!f)
+            return NULL;
+        fill_node(d, (uint64_t)(d - devices) + 1, &f->node);
+        f->has_node = true;
+        f->mode = d->mode;
+        return f;
+    }
+    struct blockdev *b = find_block(path);
+    return b ? blkdev_file_open(b) : NULL;
 }
 
 bool devfs_readdir(vfs_dir_cb cb, void *ctx)
 {
+    struct vfs_node n;
     for (size_t i = 0; i < ARRAY_SIZE(devices); i++) {
-        struct vfs_node n;
         fill_node(&devices[i], i + 1, &n);
+        if (!cb(&n, ctx))
+            return true;
+    }
+    for (uint32_t i = 0; i < blockdev_count(); i++) {
+        fill_block_node(blockdev_at(i), 100 + i, &n);
         if (!cb(&n, ctx))
             break;
     }
