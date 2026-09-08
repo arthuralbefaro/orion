@@ -12,6 +12,7 @@
 #include <sys/input.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -82,6 +83,8 @@ static bool spawn_shell(struct window *w)
     }
     close(slave);
     fcntl(master, F_SETFL, O_NONBLOCK);
+    struct winsize ws = { TERM_ROWS, TERM_COLS, 0, 0 };
+    ioctl(master, TIOCSWINSZ, &ws);
     w->master = master;
     w->pid = pid;
     fprintf(stderr, "wm: terminal %d -> sh pid %d (master fd %d)\n", w->id, pid, master);
@@ -231,6 +234,24 @@ static void handle_motion(int32_t dx, int32_t dy)
     desk_move(&desk, drag_win, nx, ny);
 }
 
+static const char *extended_sequence(int32_t code)
+{
+    switch (code) {
+    case 0x48: return "\x1b[A";
+    case 0x50: return "\x1b[B";
+    case 0x4D: return "\x1b[C";
+    case 0x4B: return "\x1b[D";
+    case 0x47: return "\x1b[H";
+    case 0x4F: return "\x1b[F";
+    case 0x49: return "\x1b[5~";
+    case 0x51: return "\x1b[6~";
+    case 0x52: return "\x1b[2~";
+    case 0x53: return "\x1b[3~";
+    case 0x1C: return "\n";
+    default:   return NULL;
+    }
+}
+
 static void handle_key(int32_t scancode, int32_t ascii, int32_t mods)
 {
     (void)scancode;
@@ -250,11 +271,17 @@ static void handle_key(int32_t scancode, int32_t ascii, int32_t mods)
             return;
         }
     }
-    if (!ascii)
-        return;
-
     struct window *w = desk_focused(&desk);
     if (!w || w->kind != WIN_TERM || w->master < 0)
+        return;
+
+    if (mods & INPUT_MOD_EXTENDED) {
+        const char *seq = extended_sequence(scancode);
+        if (seq)
+            write(w->master, seq, strlen(seq));
+        return;
+    }
+    if (!ascii)
         return;
     char c = (char)ascii;
     write(w->master, &c, 1);

@@ -8,6 +8,7 @@
 #include <kernel/signal.h>
 #include <lib/printf.h>
 #include <mm/heap.h>
+#include <lib/string.h>
 
 #define PTY_OUT_MAX 8192
 
@@ -21,6 +22,7 @@ struct pty {
     uint32_t tail;
     int32_t masters;
     int32_t slaves;
+    struct user_winsize size;
 };
 
 static uint32_t next_id = 1;
@@ -125,11 +127,43 @@ static long pty_pgrp_ioctl(struct pty *p, uint64_t request, uint64_t arg)
     return 0;
 }
 
+static long pty_winsize_ioctl(struct pty *p, uint64_t request, uint64_t arg)
+{
+    if (arg >= USER_ADDR_MAX)
+        return -EFAULT;
+    struct user_winsize *ws = (struct user_winsize *)arg;
+    if (request == TIOCGWINSZ)
+        *ws = p->size;
+    else
+        p->size = *ws;
+    return 0;
+}
+
+long ldisc_termios_ioctl(struct line_discipline *ld, uint64_t request, uint64_t arg)
+{
+    if (arg >= USER_ADDR_MAX)
+        return -EFAULT;
+    struct user_termios *t = (struct user_termios *)arg;
+    bool canonical, echo_on;
+    if (request == TCGETS) {
+        ldisc_get_mode(ld, &canonical, &echo_on);
+        memset(t, 0, sizeof(*t));
+        t->c_lflag = (canonical ? TIO_ICANON : 0) | (echo_on ? TIO_ECHO : 0);
+        return 0;
+    }
+    ldisc_set_mode(ld, (t->c_lflag & TIO_ICANON) != 0, (t->c_lflag & TIO_ECHO) != 0);
+    return 0;
+}
+
 static long master_ioctl(struct file *f, uint64_t request, uint64_t arg)
 {
     struct pty *p = f->priv;
     if (request == TIOCGPGRP || request == TIOCSPGRP)
         return pty_pgrp_ioctl(p, request, arg);
+    if (request == TCGETS || request == TCSETS)
+        return ldisc_termios_ioctl(&p->ld, request, arg);
+    if (request == TIOCGWINSZ || request == TIOCSWINSZ)
+        return pty_winsize_ioctl(p, request, arg);
     if (request == TIOCINQ) {
         if (arg >= USER_ADDR_MAX)
             return -EFAULT;
@@ -199,6 +233,10 @@ static long slave_ioctl(struct file *f, uint64_t request, uint64_t arg)
     struct pty *p = f->priv;
     if (request == TIOCGPGRP || request == TIOCSPGRP)
         return pty_pgrp_ioctl(p, request, arg);
+    if (request == TCGETS || request == TCSETS)
+        return ldisc_termios_ioctl(&p->ld, request, arg);
+    if (request == TIOCGWINSZ || request == TIOCSWINSZ)
+        return pty_winsize_ioctl(p, request, arg);
     if (request != TIOCINQ)
         return 0;
     if (arg >= USER_ADDR_MAX)
@@ -248,6 +286,8 @@ int pty_open_pair(struct file **master, struct file **slave)
     ldisc_init(&p->ld, pty_echo, p);
     p->masters = 1;
     p->slaves = 1;
+    p->size.ws_row = 24;
+    p->size.ws_col = 80;
     __atomic_fetch_add(&next_id, 1, __ATOMIC_SEQ_CST);
 
     *master = file_alloc(&master_ops, p);

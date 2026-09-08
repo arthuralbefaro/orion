@@ -173,6 +173,17 @@ void gfx_text(struct gfx *g, int x, int y, const char *s, uint32_t pixel, int zo
     gfx_text_n(g, x, y, s, (int)strlen(s), pixel, zoom);
 }
 
+void gfx_char(struct gfx *g, int x, int y, char c, uint32_t pixel, int zoom)
+{
+    if (c == ' ' || c == 0)
+        return;
+    if (x + GFX_FONT_W * zoom <= g->clip.x || x >= g->clip.x + g->clip.w)
+        return;
+    if (y + GFX_FONT_H * zoom <= g->clip.y || y >= g->clip.y + g->clip.h)
+        return;
+    draw_glyph(g, x, y, (unsigned char)c, pixel, zoom);
+}
+
 struct rect gfx_cursor_rect(const struct gfx *g)
 {
     return rect_make(g->cursor_x, g->cursor_y, CURSOR_W, CURSOR_H);

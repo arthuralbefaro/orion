@@ -20,6 +20,8 @@ struct line_discipline {
     bool eof;
     bool hangup;
     int32_t fg_pgid;
+    bool canonical;
+    bool echo_on;
     ldisc_echo_fn echo;
     void *ctx;
 };
@@ -32,4 +34,6 @@ uint32_t ldisc_available(struct line_discipline *l);
 short ldisc_poll(struct line_discipline *l, struct poll_table *pt);
 void ldisc_hangup(struct line_discipline *l);
 void ldisc_set_pgrp(struct line_discipline *l, int32_t pgid);
+void ldisc_set_mode(struct line_discipline *l, bool canonical, bool echo_on);
+void ldisc_get_mode(struct line_discipline *l, bool *canonical, bool *echo_on);
 int32_t ldisc_get_pgrp(struct line_discipline *l);

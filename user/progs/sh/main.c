@@ -9,6 +9,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "edit.h"
+
 #define MAX_ARGS   24
 #define MAX_STAGES 8
 
@@ -156,13 +158,23 @@ static int builtin(struct cmd *c)
         sync();
         return 1;
     }
+    if (strcmp(argv[0], "history") == 0) {
+        for (int i = 0; i < editor_history_count(); i++)
+            printf("%4d  %s\n", i + 1, editor_history_at(i));
+        return 1;
+    }
+    if (strcmp(argv[0], "clear") == 0) {
+        fputs("\x1b[2J\x1b[H", stdout);
+        return 1;
+    }
     if (strcmp(argv[0], "help") == 0) {
-        puts("builtins: cd, pwd, sync, exit, help");
+        puts("builtins: cd, pwd, sync, clear, history, exit, help");
         puts("arquivos: ls cat cp mv rm mkdir touch head tail grep sort uniq tee wc echo");
         puts("sistema:  date sleep hello memtest crash fstest polltest sigtest ptytest");
         puts("graficos: wm (compositor), fbtest, evtest");
         puts("redireciona: cmd > arq, cmd >> arq, cmd < arq, cmd 2> arq");
         puts("pipeline:    ls /bin | grep test | wc");
+        puts("edicao:      setas, Home, End, Delete, Ctrl+L limpa, Ctrl+D sai");
         return 1;
     }
     return 0;
@@ -273,33 +285,30 @@ int main(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
-    char line[512], cwd[256];
+    char line[LINE_SIZE], cwd[256], prompt[300];
 
     setpgid(0, 0);
     shell_pgid = getpgrp();
     set_foreground(shell_pgid);
     signal(SIGINT, on_sigint);
+    editor_init();
     printf("Orion sh (pid %d). Digite 'help'.\n", getpid());
 
     for (;;) {
         if (!getcwd(cwd, sizeof(cwd)))
             strcpy(cwd, "?");
-        printf("%s $ ", cwd);
-        if (!fgets(line, sizeof(line), stdin)) {
+        snprintf(prompt, sizeof(prompt), "%s $ ", cwd);
+        if (editor_readline(prompt, line, sizeof(line)) < 0) {
             if (interrupted) {
                 interrupted = 0;
                 stdin->err = 0;
                 stdin->eof = 0;
-                putchar('\n');
                 continue;
             }
             putchar('\n');
             return 0;
         }
         interrupted = 0;
-        char *nl = strchr(line, '\n');
-        if (nl)
-            *nl = '\0';
         run_line(line);
     }
 }

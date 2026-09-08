@@ -66,6 +66,16 @@ if ($runAll -or $OnlyA) {
         "cmd:fbtest 2", "wait:1", "shot:out\shots\reg-fbtest.ppm", "wait:2",
         "cmd:evtest 3", "wait:0.8", "mon:sendkey a", "mon:mouse_move 10 5", "wait:4",
         "cmd:ptytest", "wait:8",
+        "cmd:echo alfa", "wait:1",
+        "keys:1B5B41", "raw: beta", "key:0D", "wait:1.5",
+        "keys:1B5B41", "keys:1B5B44", "keys:1B5B44", "keys:1B5B44", "keys:1B5B44",
+        "raw:X", "key:0D", "wait:1.5",
+        "keys:1B5B41", "keys:1B5B48", "keys:1B5B46",
+        "key:7F", "key:7F", "key:7F", "key:7F", "key:0D", "wait:1.5",
+        "raw:cho homeok", "keys:1B5B48", "raw:e", "key:0D", "wait:1.5",
+        "raw:eccho delok", "keys:1B5B48", "keys:1B5B43", "keys:1B5B43", "keys:1B5B337E",
+        "key:0D", "wait:1.5",
+        "cmd:history", "wait:1",
         "key:0B", "cmd:heaptest", "wait:1", "cmd:preempt", "wait:2",
         "cmd:dev", "cmd:pty", "cmd:mem"
     )
@@ -92,6 +102,12 @@ if ($runAll -or $OnlyA) {
     Expect $a "mouse-move" "evtest recebeu movimento do mouse"
     Expect $a "\nola" "ptytest imprimiu ola"
     Expect $a "ptytest: sh saiu com 0" "ptytest encerrou o sh"
+    Expect $a "\nalfa beta" "seta para cima recuperou o comando e o texto foi anexado"
+    Expect $a "\nalfa Xbeta" "seta para a esquerda insere no meio da linha"
+    Expect $a "\nalfa X\n" "Home, End e backspace cortaram o fim da linha"
+    Expect $a "\nhomeok" "Home voltou ao inicio e inseriu ali"
+    Expect $a "\ndelok" "seta para a direita e Delete apagaram no meio"
+    Expect $a "(?s)\n   1  ls /bin \| wc.{0,900}?\n\s+\d+  echo delok" "history listou os comandos numerados"
     Expect $a ": OK" "heaptest OK"
     Expect $a "OK \(as duas rodaram\)" "preempt OK"
     Expect $a "0 pty\(s\) viva\(s\)" "nenhuma pty vazada"
@@ -148,6 +164,10 @@ if ($runAll -or $OnlyC) {
         "cmd:cat /nao-existe 2> /mnt/e.txt", "cmd:cat /mnt/e.txt",
         "cmd:mkdir /mnt/d", "cmd:cp /bin/hello /mnt/d/h", "cmd:/mnt/d/h", "wait:1",
         "cmd:rm -r /mnt/d", "cmd:rm /mnt/a.txt /mnt/b.txt /mnt/e.txt",
+        "cmd:edit /mnt/nota.txt", "wait:3",
+        "raw:linha um", "key:0D", "raw:linha dois", "wait:1",
+        "key:13", "wait:3", "key:18", "wait:4",
+        "cmd:cat /mnt/nota.txt", "wait:2", "cmd:rm /mnt/nota.txt",
         "cmd:sync", "cmd:ls /mnt", "wait:1",
         "key:0B", "cmd:mem", "cmd:lsblk"
     )
@@ -167,6 +187,9 @@ if ($runAll -or $OnlyC) {
     Expect $c "(?s)cat /mnt/b\.txt.{0,20}?def\s+abc" "redirecionamento > e >> com tee"
     Expect $c "cat: /nao-existe: Arquivo ou diretorio inexistente" "redirecionamento 2>"
     Expect $c "hello from ring 3" "binario copiado para /mnt roda"
+    Expect $c "/mnt/nota\.txt salvo \(2 linha\(s\)\)" "edit salvou com Ctrl\+S"
+    Expect $c "edit: pronto" "edit saiu com Ctrl\+X"
+    Expect $c "(?s)cat /mnt/nota\.txt.{0,40}?linha um\s+linha dois" "cat mostra o que o edit gravou"
     Test-MemDelta $c "memoria estavel na sequencia C" 24
 }
 

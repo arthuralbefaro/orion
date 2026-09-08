@@ -206,18 +206,28 @@ static void draw_terminal(struct desktop *d, struct window *w, bool focused)
     gfx_fill(g, rect_make(c.x - WIN_PAD, c.y - WIN_PAD, c.w + 2 * WIN_PAD, c.h + 2 * WIN_PAD),
              gfx_rgb(g, COL_TERM_BG));
 
-    uint32_t fg = gfx_rgb(g, COL_TERM_FG);
-    for (int r = 0; r < w->term.rows; r++)
-        gfx_text_n(g, c.x, c.y + r * GFX_CELL_H, w->term.cells[r], w->term.cols, fg, GFX_ZOOM);
+    for (int r = 0; r < w->term.rows; r++) {
+        int y = c.y + r * GFX_CELL_H;
+        if (y + GFX_CELL_H <= g->clip.y || y >= g->clip.y + g->clip.h)
+            continue;
+        for (int col = 0; col < w->term.cols; col++) {
+            const struct term_cell *cell = &w->term.cells[r][col];
+            int x = c.x + col * GFX_CELL_W;
+            if (cell->bg != TERM_DEFAULT_BG)
+                gfx_fill(g, rect_make(x, y, GFX_CELL_W, GFX_CELL_H),
+                         gfx_rgb(g, term_color(cell->bg)));
+            gfx_char(g, x, y, cell->ch, gfx_rgb(g, term_color(cell->fg)), GFX_ZOOM);
+        }
+    }
 
     if (!focused || !w->term.cursor_on)
         return;
     int cx = c.x + w->term.cur_col * GFX_CELL_W;
     int cy = c.y + w->term.cur_row * GFX_CELL_H;
-    gfx_fill(g, rect_make(cx, cy, GFX_CELL_W, GFX_FONT_H * GFX_ZOOM), fg);
-    char under = w->term.cells[w->term.cur_row][w->term.cur_col];
-    if (under != ' ')
-        gfx_text_n(g, cx, cy, &under, 1, gfx_rgb(g, COL_TERM_BG), GFX_ZOOM);
+    const struct term_cell *under = &w->term.cells[w->term.cur_row][w->term.cur_col];
+    gfx_fill(g, rect_make(cx, cy, GFX_CELL_W, GFX_FONT_H * GFX_ZOOM),
+             gfx_rgb(g, term_color(under->fg)));
+    gfx_char(g, cx, cy, under->ch, gfx_rgb(g, term_color(under->bg)), GFX_ZOOM);
 }
 
 static void draw_clock_window(struct desktop *d, struct window *w)

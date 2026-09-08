@@ -19,4 +19,5 @@ int keyboard_getchar(void);
 #define KBD_MOD_CTRL  (1 << 1)
 #define KBD_MOD_ALT   (1 << 2)
 #define KBD_MOD_CAPS  (1 << 3)
+#define KBD_MOD_EXTENDED (1 << 4)
 uint8_t keyboard_modifiers(void);

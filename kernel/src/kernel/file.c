@@ -8,6 +8,7 @@
 #include <fs/devfs.h>
 #include <drivers/tty.h>
 #include <drivers/pty.h>
+#include <drivers/console.h>
 #include <mm/heap.h>
 #include <lib/string.h>
 
@@ -95,6 +96,21 @@ static long tty_file_ioctl(struct file *f, uint64_t request, uint64_t arg)
             *(int32_t *)arg = tty_get_pgrp();
         else
             tty_set_pgrp(*(int32_t *)arg);
+        return 0;
+    }
+    if (request == TCGETS || request == TCSETS)
+        return tty_termios(request, arg);
+    if (request == TIOCGWINSZ) {
+        if (arg >= USER_ADDR_MAX)
+            return -EFAULT;
+        struct user_winsize *ws = (struct user_winsize *)arg;
+        uint32_t cols, rows;
+        console_get_size(&cols, &rows);
+        ws->ws_col = (uint16_t)(cols ? cols : 80);
+        ws->ws_row = (uint16_t)(rows ? rows : 24);
+        ws->ws_xpixel = 0;
+        ws->ws_ypixel = 0;
+        return 0;
     }
     return 0;
 }

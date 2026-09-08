@@ -78,6 +78,25 @@ static void push_char(char c)
     buf_head = next;
 }
 
+static const char *extended_sequence(uint8_t code)
+{
+    switch (code) {
+    case 0x48: return "\x1b[A";
+    case 0x50: return "\x1b[B";
+    case 0x4D: return "\x1b[C";
+    case 0x4B: return "\x1b[D";
+    case 0x47: return "\x1b[H";
+    case 0x4F: return "\x1b[F";
+    case 0x49: return "\x1b[5~";
+    case 0x51: return "\x1b[6~";
+    case 0x52: return "\x1b[2~";
+    case 0x53: return "\x1b[3~";
+    case 0x1C: return "\n";
+    case 0x35: return "/";
+    default:   return NULL;
+    }
+}
+
 static void keyboard_irq(struct interrupt_frame *frame, void *ctx)
 {
     (void)frame;
@@ -90,8 +109,18 @@ static void keyboard_irq(struct interrupt_frame *frame, void *ctx)
         return;
     }
     if (extended_pending) {
-        /* Setas, Home, End, Delete etc. Ainda não mapeados. */
         extended_pending = false;
+        bool up = sc & SC_RELEASE;
+        uint8_t ext = sc & 0x7F;
+        const char *seq = extended_sequence(ext);
+        if (!seq)
+            return;
+        if (input_post_key((uint8_t)ext, 0, modifiers | KBD_MOD_EXTENDED, !up))
+            return;
+        if (up)
+            return;
+        while (*seq)
+            push_char(*seq++);
         return;
     }
 

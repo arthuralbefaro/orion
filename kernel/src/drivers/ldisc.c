@@ -25,6 +25,27 @@ void ldisc_init(struct line_discipline *l, ldisc_echo_fn echo, void *ctx)
     waitqueue_init(&l->readers);
     l->echo = echo;
     l->ctx = ctx;
+    l->canonical = true;
+    l->echo_on = true;
+}
+
+void ldisc_set_mode(struct line_discipline *l, bool canonical, bool echo_on)
+{
+    uint64_t flags = spin_lock_irqsave(&l->lock);
+    l->canonical = canonical;
+    l->echo_on = echo_on;
+    if (!canonical && l->line_len) {
+        ready_push(l, l->line, l->line_len);
+        l->line_len = 0;
+    }
+    spin_unlock_irqrestore(&l->lock, flags);
+    wake_up_all(&l->readers);
+}
+
+void ldisc_get_mode(struct line_discipline *l, bool *canonical, bool *echo_on)
+{
+    *canonical = l->canonical;
+    *echo_on = l->echo_on;
 }
 
 void ldisc_input(struct line_discipline *l, char c)
@@ -37,6 +58,26 @@ void ldisc_input(struct line_discipline *l, char c)
         c = '\n';
 
     uint64_t flags = spin_lock_irqsave(&l->lock);
+    if (!l->canonical) {
+        if (c == 0x03) {
+            interrupt_pgid = l->fg_pgid;
+        } else {
+            ready_push(l, &c, 1);
+            if (l->echo_on && c >= 0x20 && c < 0x7F) {
+                out[0] = c;
+                out_len = 1;
+            }
+        }
+        bool woke = l->head != l->tail;
+        spin_unlock_irqrestore(&l->lock, flags);
+        if (woke)
+            wake_up_all(&l->readers);
+        if (out_len && l->echo)
+            l->echo(l->ctx, out, out_len);
+        if (interrupt_pgid > 0)
+            process_kill(-interrupt_pgid, SIGINT);
+        return;
+    }
     switch (c) {
     case '\b':
     case 0x7F:
@@ -80,7 +121,7 @@ void ldisc_input(struct line_discipline *l, char c)
 
     if (ready)
         wake_up_all(&l->readers);
-    if (out_len && l->echo)
+    if (out_len && l->echo && l->echo_on)
         l->echo(l->ctx, out, out_len);
     if (interrupt_pgid > 0)
         process_kill(-interrupt_pgid, SIGINT);

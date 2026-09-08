@@ -7,10 +7,22 @@
 #define INPUT_EV_MOUSE_MOVE   3
 #define INPUT_EV_MOUSE_BUTTON 4
 
+#define KEY_UP     0x148
+#define KEY_DOWN   0x150
+#define KEY_LEFT   0x14B
+#define KEY_RIGHT  0x14D
+#define KEY_HOME   0x147
+#define KEY_END    0x14F
+#define KEY_PGUP   0x149
+#define KEY_PGDN   0x151
+#define KEY_INSERT 0x152
+#define KEY_DELETE 0x153
+
 #define INPUT_MOD_SHIFT (1 << 0)
 #define INPUT_MOD_CTRL  (1 << 1)
 #define INPUT_MOD_ALT   (1 << 2)
 #define INPUT_MOD_CAPS  (1 << 3)
+#define INPUT_MOD_EXTENDED (1 << 4)
 
 #define INPUT_BUTTON_LEFT   (1 << 0)
 #define INPUT_BUTTON_RIGHT  (1 << 1)

@@ -45,6 +45,11 @@ short tty_poll(struct poll_table *pt)
     return ldisc_poll(&ldisc, pt);
 }
 
+long tty_termios(uint64_t request, uint64_t arg)
+{
+    return ldisc_termios_ioctl(&ldisc, request, arg);
+}
+
 void tty_set_pgrp(int32_t pgid)
 {
     ldisc_set_pgrp(&ldisc, pgid);

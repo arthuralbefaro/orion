@@ -237,7 +237,7 @@ try {
     if ($Screenshot) { $steps += "wait:$Settle"; $steps += "shot:$Screenshot" }
 
     $needPrompt = $false
-    foreach ($s in $steps) { if ($s -like "cmd:*" -or $s -like "raw:*" -or $s -like "key:*") { $needPrompt = $true } }
+    foreach ($s in $steps) { if ($s -like "cmd:*" -or $s -like "raw:*" -or $s -like "key:*" -or $s -like "keys:*") { $needPrompt = $true } }
 
     if ($needPrompt -or $steps.Count -eq 0) {
         if (Wait-For '$ ' $BootTimeout) {
@@ -258,6 +258,13 @@ try {
             "cmd"  { Write-Host "  cmd  > $arg" -ForegroundColor DarkGray; Send-Serial ($arg + "`r"); Pump-Serial $CommandDelay }
             "raw"  { Write-Host "  raw  > $arg" -ForegroundColor DarkGray; Send-Serial $arg; Pump-Serial 0.3 }
             "key"  { Write-Host "  key  > $arg" -ForegroundColor DarkGray; Send-Bytes @([byte][Convert]::ToInt32($arg, 16)); Pump-Serial 0.6 }
+            "keys" {
+                Write-Host "  keys > $arg" -ForegroundColor DarkGray
+                $bytes = @()
+                for ($k = 0; $k + 1 -lt $arg.Length; $k += 2) { $bytes += [byte][Convert]::ToInt32($arg.Substring($k, 2), 16) }
+                Send-Bytes $bytes
+                Pump-Serial 0.6
+            }
             "mon"  { Write-Host "  mon  > $arg" -ForegroundColor DarkGray; Send-Monitor $arg; Pump-Serial 0.35 }
             "wait" { Pump-Serial ([double]$arg) }
             "shot" { Pump-Serial 0.4; Take-Screenshot $arg }

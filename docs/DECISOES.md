@@ -145,3 +145,40 @@ Uma linha por decisao, na ordem em que foram tomadas.
   (`check_directory_consistency: assertion failed`) ou falha com
   `Error handling renames (-2)`. Por isso os testes pesados usam `-Disk`, um
   disco cru de 64 MiB formatado pelo `mkfs` dentro do Orion e montado em `/mnt`.
+
+## v1.4 (teclas estendidas e edicao de linha)
+
+- O modo raw e do termios, nao um modo novo: `cfmakeraw` so limpa `ICANON` e
+  `ECHO`. Quem quer teclas cruas desliga o cozimento da linha, e a disciplina de
+  linha continua sendo a mesma para o TTY e para a PTY.
+- O teclado nao ganhou codigos proprios para as teclas estendidas: o driver
+  traduz seta, Home, End, Delete, PageUp e PageDown para as sequencias ANSI
+  (`ESC [ A`, `ESC [ H`, `ESC [ 3 ~`, ...). Assim o mesmo byte chega pelo teclado
+  fisico, pela serial e pela PTY, e um unico parser em espaco de usuario serve
+  para os tres.
+- A edicao de linha e do `sh`, nao do kernel. A disciplina de linha cozida
+  continua simples (backspace e mais nada); historico, cursor e redesenho ficam
+  no `edit.c` do `sh`, que e onde da para evoluir sem mexer no kernel.
+- O redesenho da linha e sempre `\r`, `ESC [ K` e a linha inteira de novo, em vez
+  de calcular o menor conjunto de movimentos. E O(largura) por tecla, o que nao
+  se nota em 80 colunas, e elimina uma classe inteira de bugs de cursor.
+- O historico guarda 50 linhas, ignora repetidas seguidas e mora so na memoria:
+  gravar em disco exigiria um `$HOME` que ainda nao existe.
+- O terminal grafico do `wm` ganhou um parser CSI de verdade (cursor, apagamento,
+  16 cores, video reverso) porque o `edit` e o historico do `sh` mandam as mesmas
+  sequencias para os dois terminais. Sem isso o editor so funcionaria no TTY.
+- Cada celula do terminal grafico guarda caractere, cor de frente e cor de fundo
+  (3 bytes). Custa 3x a memoria de antes por celula (~23 KiB numa janela de
+  80x24) e evita ter que reprocessar as sequencias para redesenhar uma linha.
+- O `edit` sai com `Ctrl+X`, nao `Ctrl+Q`: o `wm` reserva `Ctrl+Q` para fechar a
+  janela focada, entao dentro do terminal grafico o `Ctrl+Q` nunca chegaria ao
+  editor. `Ctrl+X` funciona igual nos dois terminais.
+- O `edit` carrega o arquivo inteiro em memoria (512 linhas de 256 colunas, 128
+  KiB estaticos) e regrava tudo ao salvar. E um editor de notas, nao de fontes;
+  edicao incremental exigiria muito mais do que o passo pede.
+- O `test.ps1` ganhou o passo `keys:<hex>` (varios bytes de uma vez) porque uma
+  seta e tres bytes e mandar um `key:` por byte deixava 0,6 s entre eles.
+- O `edit` so redesenha a tela inteira quando as linhas se deslocam (abrir,
+  rolar, quebrar ou juntar linha); nas outras teclas reescreve so a linha do
+  cursor e as duas de status. Redesenhar as 24 linhas por tecla dava ~2 KiB por
+  tecla, o que numa serial de 115200 baud atrasava o editor em varios segundos.
