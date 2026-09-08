@@ -20,6 +20,14 @@ static bool     nx_supported;
 
 #define EFER_NXE (1ull << 11)
 
+/* A metade alta e compartilhada por todos os espacos de endereco: mexer nela
+ * pelo PML4 do kernel invalida traducoes que a CPU atual pode ter em cache
+ * mesmo com o CR3 de um processo carregado. */
+static inline bool tlb_needs_flush(uint64_t pml4_phys)
+{
+    return pml4_phys == kernel_pml4_phys || pml4_phys == (read_cr3() & PTE_ADDR_MASK);
+}
+
 static inline size_t pml4_index(uint64_t v) { return (v >> 39) & 0x1FF; }
 static inline size_t pdpt_index(uint64_t v) { return (v >> 30) & 0x1FF; }
 static inline size_t pd_index(uint64_t v)   { return (v >> 21) & 0x1FF; }
@@ -84,7 +92,7 @@ void vmm_map_page_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t 
         flags &= ~PTE_NX; /* bit reservado sem EFER.NXE -> #PF */
 
     pt[pt_index(virt)] = (phys & PTE_ADDR_MASK) | (flags & ~PTE_HUGE);
-    if (pml4_phys == (read_cr3() & PTE_ADDR_MASK))
+    if (tlb_needs_flush(pml4_phys))
         invlpg(virt);
 }
 
@@ -124,7 +132,7 @@ void vmm_unmap_page_in(uint64_t pml4_phys, uint64_t virt)
     if (!pt) return;
 
     pt[pt_index(virt)] = 0;
-    if (pml4_phys == (read_cr3() & PTE_ADDR_MASK))
+    if (tlb_needs_flush(pml4_phys))
         invlpg(virt);
 }
 

@@ -205,11 +205,8 @@ void sched_post_switch(void)
     spin_unlock(&sched_lock);
 }
 
-void schedule(void)
+static void schedule_locked(void)
 {
-    ASSERT(!interrupts_enabled());
-    spin_lock(&sched_lock);
-
     struct percpu *cpu = percpu_get();
     reap_zombie(cpu);
 
@@ -243,6 +240,13 @@ void schedule(void)
     sched_post_switch();
 }
 
+void schedule(void)
+{
+    ASSERT(!interrupts_enabled());
+    spin_lock(&sched_lock);
+    schedule_locked();
+}
+
 void thread_yield(void)
 {
     uint64_t flags = irq_save();
@@ -253,25 +257,22 @@ void thread_yield(void)
 void thread_sleep_ms(uint64_t ms)
 {
     uint64_t flags = irq_save();
-    struct thread *t = thread_current();
     spin_lock(&sched_lock);
+    struct thread *t = percpu_get()->current;
     t->wake_at = time_ticks() + DIV_ROUND_UP(ms * TIME_TICK_HZ, 1000);
     t->state = THREAD_SLEEPING;
     t->next = sleeping;
     sleeping = t;
-    spin_unlock(&sched_lock);
-    schedule();
+    schedule_locked();
     irq_restore(flags);
 }
 
 void thread_block(void)
 {
     uint64_t flags = irq_save();
-    struct thread *t = thread_current();
     spin_lock(&sched_lock);
-    t->state = THREAD_BLOCKED;
-    spin_unlock(&sched_lock);
-    schedule();
+    percpu_get()->current->state = THREAD_BLOCKED;
+    schedule_locked();
     irq_restore(flags);
 }
 
@@ -294,8 +295,7 @@ NORETURN void thread_exit(void)
         panic("thread_exit chamado pela thread %s", t->name);
     spin_lock(&sched_lock);
     t->state = THREAD_ZOMBIE;
-    spin_unlock(&sched_lock);
-    schedule();
+    schedule_locked();
     panic("thread zombie voltou a executar");
 }
 

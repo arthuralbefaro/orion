@@ -33,3 +33,21 @@ Uma linha por decisao, na ordem em que foram tomadas.
   define um timeout para quem precisa de um laco de eventos com relogio (o `wm`).
 - A entrada da serial continua sempre indo para o TTY/shell do kernel, mesmo com o
   teclado capturado: e o que permite depurar o compositor sem ver a tela.
+- A disciplina de linha virou `struct line_discipline` (`drivers/ldisc.c`), usada
+  pelo TTY fisico e pelos slaves de PTY. Trocou o buffer de uma linha so por um
+  anel de 1 KiB: da para digitar varias linhas antes do programa ler.
+- O eco da disciplina de linha e feito fora do spinlock (callback), para nao
+  aninhar a trava do kprintf com a da disciplina.
+- `read` no master de um PTY e nao-bloqueante: devolve -EAGAIN quando vazio e 0
+  quando o ultimo slave fechou. E o que permite ao compositor ter um unico laco
+  de eventos sem threads.
+- `SYS_WAIT4` passou a respeitar `WNOHANG`, para o compositor colher os shells
+  que morreram sem travar a interface.
+- Correcao: `vmm_map_page_in`/`vmm_unmap_page_in` so faziam `invlpg` quando o
+  PML4 alterado era o do CR3 atual. Como a metade alta e compartilhada, mexer no
+  heap do kernel rodando dentro de um processo deixava traducoes velhas na TLB
+  local (o sintoma era `kfree` achando lixo no cabecalho de uma alocacao grande).
+- Correcao: `thread_sleep_ms`, `thread_block` e `thread_exit` soltavam o
+  `sched_lock` antes de chamar `schedule()`. Nessa janela outra CPU podia acordar
+  a thread, enfileira-la e executa-la antes de ela salvar o contexto. Agora a
+  trava e mantida ate a troca de contexto (`schedule_locked`).

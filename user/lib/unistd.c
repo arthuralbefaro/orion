@@ -6,6 +6,7 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
+#include <pty.h>
 #include <string.h>
 #include "syscall.h"
 
@@ -56,8 +57,17 @@ int open(const char *path, int flags, ...)
 
 pid_t waitpid(pid_t pid, int *status, int options)
 {
-    (void)options;
-    return (pid_t)__syscall_ret(syscall2(SYS_WAIT4, pid, (long)status));
+    return (pid_t)__syscall_ret(syscall3(SYS_WAIT4, pid, (long)status, options));
+}
+
+int openpty(int *master, int *slave)
+{
+    int fds[2];
+    if (__syscall_ret(syscall1(SYS_OPENPTY, (long)fds)) < 0)
+        return -1;
+    *master = fds[0];
+    *slave = fds[1];
+    return 0;
 }
 
 pid_t wait(int *status)

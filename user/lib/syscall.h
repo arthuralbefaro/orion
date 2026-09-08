@@ -30,6 +30,7 @@
 #define SYS_ARCH_PRCTL    158
 #define SYS_CLOCK_GETTIME 228
 #define SYS_READDIR       1000
+#define SYS_OPENPTY       1001
 
 static inline long syscall6(long n, long a, long b, long c, long d, long e, long f)
 {

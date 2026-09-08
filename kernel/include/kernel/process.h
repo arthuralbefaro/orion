@@ -3,7 +3,7 @@
 #include <kernel/compiler.h>
 
 #define PROCESS_NAME_MAX 32
-#define PROCESS_MAX_FDS  16
+#define PROCESS_MAX_FDS  32
 #define USER_STACK_TOP   0x00007ffffffff000ull
 #define USER_STACK_SIZE  (64 * 1024)
 #define USER_HEAP_MAX    (64 * 1024 * 1024)
@@ -42,7 +42,7 @@ struct process *process_find(uint32_t pid);
 
 int  process_fork(struct interrupt_frame *frame);
 int  process_execve(const char *path, char *const *argv, char *const *envp, struct interrupt_frame *frame);
-int  process_waitpid(int pid, int *status);
+int  process_waitpid(int pid, int *status, int options);
 NORETURN void process_exit(int code);
 void process_thread_reaped(struct process *p);
 

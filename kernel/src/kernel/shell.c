@@ -10,6 +10,7 @@
 #include <drivers/ioapic.h>
 #include <drivers/mouse.h>
 #include <drivers/input.h>
+#include <drivers/pty.h>
 #include <fs/devfs.h>
 #include <kernel/time.h>
 #include <kernel/sched.h>
@@ -271,6 +272,12 @@ static void cmd_dev(const char *args)
             input_event_count(), input_dropped_count());
 }
 
+static void cmd_pty(const char *args)
+{
+    (void)args;
+    pty_dump();
+}
+
 static void cmd_input(const char *args)
 {
     (void)args;
@@ -480,6 +487,7 @@ static const struct command commands[] = {
     { "mouse",  "eventos do mouse PS/2 por 3 s",        cmd_mouse },
     { "dev",    "dispositivos de /dev",                 cmd_dev },
     { "input",  "le /dev/input por 3 s",                cmd_input },
+    { "pty",    "pseudo-terminais em uso",              cmd_pty },
     { "threads", "demo: 3 threads dormindo",            cmd_threads },
     { "preempt", "demo: preempcao de loops ocupados",   cmd_preempt },
     { "mods",   "modulos carregados pelo bootloader",   cmd_mods },

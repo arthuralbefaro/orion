@@ -14,6 +14,7 @@
 #include <drivers/rtc.h>
 #include <fs/vfs.h>
 #include <fs/devfs.h>
+#include <drivers/pty.h>
 
 extern void syscall_entry(void);
 
@@ -110,6 +111,27 @@ static long sys_pipe(int *fds)
     }
     fds[0] = rfd;
     fds[1] = wfd;
+    return 0;
+}
+
+static long sys_openpty(int *fds)
+{
+    if (!user_range_ok((uint64_t)fds, 2 * sizeof(int)))
+        return -EFAULT;
+    struct file *master, *slave;
+    int r = pty_open_pair(&master, &slave);
+    if (r < 0)
+        return r;
+    struct process *p = process_current();
+    int mfd = process_fd_install(p, master);
+    int sfd = process_fd_install(p, slave);
+    if (mfd < 0 || sfd < 0) {
+        if (mfd >= 0) process_fd_close(p, mfd); else file_unref(master);
+        if (sfd >= 0) process_fd_close(p, sfd); else file_unref(slave);
+        return -EMFILE;
+    }
+    fds[0] = mfd;
+    fds[1] = sfd;
     return 0;
 }
 
@@ -382,12 +404,12 @@ static long sys_execve(const char *path, char *const *argv, char *const *envp, s
     return process_execve(path, argv, envp, f);
 }
 
-static long sys_wait4(int pid, int *status)
+static long sys_wait4(int pid, int *status, int options)
 {
     if (status && !user_range_ok((uint64_t)status, 4))
         return -EFAULT;
     int st = 0;
-    int r = process_waitpid(pid, &st);
+    int r = process_waitpid(pid, &st, options);
     if (r > 0 && status)
         *status = st;
     return r;
@@ -440,8 +462,9 @@ void syscall_dispatch(struct interrupt_frame *f)
     case SYS_FORK:        ret = process_fork(f); break;
     case SYS_EXECVE:      ret = sys_execve((const char *)f->rdi, (char *const *)f->rsi, (char *const *)f->rdx, f); break;
     case SYS_EXIT:        process_exit((int)f->rdi);
-    case SYS_WAIT4:       ret = sys_wait4((int)f->rdi, (int *)f->rsi); break;
+    case SYS_WAIT4:       ret = sys_wait4((int)f->rdi, (int *)f->rsi, (int)f->rdx); break;
     case SYS_READDIR:     ret = sys_readdir((int)f->rdi, (struct user_dirent *)f->rsi, f->rdx); break;
+    case SYS_OPENPTY:     ret = sys_openpty((int *)f->rdi); break;
     default:
         log_warn("syscall", "pid %u: syscall %lu desconhecida", process_current()->pid, f->rax);
         ret = -ENOSYS;

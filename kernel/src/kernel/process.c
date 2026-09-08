@@ -513,7 +513,7 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
     return ret;
 }
 
-int process_waitpid(int pid, int *status)
+int process_waitpid(int pid, int *status, int options)
 {
     struct process *me = process_current();
     for (;;) {
@@ -543,6 +543,8 @@ int process_waitpid(int pid, int *status)
         }
         if (!have_child)
             return -ECHILD;
+        if (options & WNOHANG)
+            return 0;
         thread_sleep_ms(5);
     }
 }

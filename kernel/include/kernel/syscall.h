@@ -29,6 +29,9 @@
 #define SYS_ARCH_PRCTL    158
 #define SYS_CLOCK_GETTIME 228
 #define SYS_READDIR       1000
+#define SYS_OPENPTY       1001
+
+#define WNOHANG 1
 
 #define EPERM   1
 #define ENOENT  2

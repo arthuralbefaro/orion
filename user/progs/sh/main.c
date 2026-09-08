@@ -63,6 +63,7 @@ static int builtin(int argc, char **argv)
     if (strcmp(argv[0], "help") == 0) {
         puts("builtins: cd, pwd, exit, help");
         puts("programas em /bin: echo cat ls hello date wc memtest crash");
+        puts("graficos: wm (compositor), fbtest, evtest, ptytest");
         puts("pipe simples: ls | wc");
         return 1;
     }
@@ -120,8 +121,10 @@ int main(int argc, char **argv)
         if (!getcwd(cwd, sizeof(cwd)))
             strcpy(cwd, "?");
         printf("%s $ ", cwd);
-        if (!fgets(line, sizeof(line), stdin))
-            continue;
+        if (!fgets(line, sizeof(line), stdin)) {
+            putchar('\n');
+            return 0;
+        }
         char *nl = strchr(line, '\n');
         if (nl)
             *nl = '\0';
