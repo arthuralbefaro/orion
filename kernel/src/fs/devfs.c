@@ -13,20 +13,13 @@ struct device {
     uint32_t mode;
 };
 
-static struct file *open_fb(void)
-{
-    if (!fbdev_available())
-        return NULL;
-    return file_alloc(fbdev_ops(), NULL);
-}
-
 static uint64_t size_zero(void)
 {
     return 0;
 }
 
 static const struct device devices[] = {
-    { "fb0",   open_fb,        fbdev_size, S_IFCHR | 0660 },
+    { "fb0",   fbdev_open,     fbdev_size, S_IFCHR | 0660 },
     { "input", input_open,     size_zero,  S_IFCHR | 0640 },
     { "tty",   file_open_tty,  size_zero,  S_IFCHR | 0620 },
 };
@@ -152,7 +145,8 @@ void devfs_dump(void)
         const struct device *d = &devices[i];
         const char *state = "-";
         if (strcmp(d->name, "fb0") == 0)
-            state = fbdev_available() ? "pronto" : "sem framebuffer";
+            state = !fbdev_available() ? "sem framebuffer"
+                    : fbdev_graphics_users() ? "modo grafico" : "pronto";
         else if (strcmp(d->name, "input") == 0)
             state = input_grabbed() ? "em uso" : "livre";
         else if (strcmp(d->name, "tty") == 0)

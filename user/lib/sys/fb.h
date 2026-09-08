@@ -3,6 +3,7 @@
 #include <sys/types.h>
 
 #define FBIOGET_INFO 0x4600
+#define FBIOREDRAW   0x4601
 
 struct fb_info {
     uint32_t width;

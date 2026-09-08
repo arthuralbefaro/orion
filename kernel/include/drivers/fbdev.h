@@ -3,6 +3,7 @@
 #include <kernel/compiler.h>
 
 #define FBIOGET_INFO 0x4600
+#define FBIOREDRAW   0x4601
 
 struct fb_info {
     uint32_t width;
@@ -22,3 +23,5 @@ bool fbdev_get_info(struct fb_info *out);
 uint64_t fbdev_size(void);
 uint64_t fbdev_mapped_pages(void);
 const struct file_ops *fbdev_ops(void);
+struct file *fbdev_open(void);
+uint32_t fbdev_graphics_users(void);

@@ -8,6 +8,7 @@
 #include <mm/vmm.h>
 
 static uint64_t mapped_pages;
+static uint32_t graphics_users;
 
 bool fbdev_available(void)
 {
@@ -48,6 +49,10 @@ bool fbdev_get_info(struct fb_info *out)
 static long fb_ioctl(struct file *f, uint64_t request, uint64_t arg)
 {
     (void)f;
+    if (request == FBIOREDRAW) {
+        console_redraw();
+        return 0;
+    }
     if (request != FBIOGET_INFO)
         return -EINVAL;
     if (arg >= USER_ADDR_MAX || arg + sizeof(struct fb_info) > USER_ADDR_MAX)
@@ -59,7 +64,6 @@ static long fb_ioctl(struct file *f, uint64_t request, uint64_t arg)
 
 static int64_t fb_mmap(struct file *f, uint64_t len, int prot, uint64_t offset)
 {
-    (void)f;
     const struct framebuffer *fb = console_get_framebuffer();
     if (!fb)
         return -ENODEV;
@@ -88,15 +92,42 @@ static int64_t fb_mmap(struct file *f, uint64_t len, int prot, uint64_t offset)
 
     p->mmap_next = base + bytes;
     mapped_pages += bytes / PAGE_SIZE;
+    if (!f->priv) {
+        f->priv = (void *)1;
+        if (__atomic_fetch_add(&graphics_users, 1, __ATOMIC_SEQ_CST) == 0)
+            console_set_graphics(true);
+    }
     return (int64_t)base;
+}
+
+static void fb_close(struct file *f)
+{
+    if (!f->priv)
+        return;
+    f->priv = NULL;
+    if (__atomic_sub_fetch(&graphics_users, 1, __ATOMIC_SEQ_CST) == 0)
+        console_set_graphics(false);
 }
 
 static const struct file_ops fb_ops = {
     .ioctl = fb_ioctl,
     .mmap = fb_mmap,
+    .close = fb_close,
 };
 
 const struct file_ops *fbdev_ops(void)
 {
     return &fb_ops;
+}
+
+uint32_t fbdev_graphics_users(void)
+{
+    return graphics_users;
+}
+
+struct file *fbdev_open(void)
+{
+    if (!fbdev_available())
+        return NULL;
+    return file_alloc(&fb_ops, NULL);
 }

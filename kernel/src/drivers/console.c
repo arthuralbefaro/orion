@@ -26,6 +26,7 @@ static uint32_t cur_col, cur_row;   /* cursor */
 static uint32_t cur_fg = COLOR_LIGHT_GRAY;
 static uint32_t cur_bg = COLOR_BACKGROUND;
 static bool     cursor_visible = true;
+static bool     graphics_mode = false;
 
 static struct cell grid[MAX_ROWS][MAX_COLS];
 
@@ -55,6 +56,8 @@ static inline void fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uin
 /* Desenha uma célula da grade (opcionalmente em vídeo inverso, p/ cursor). */
 static void draw_cell(uint32_t col, uint32_t row, bool inverse)
 {
+    if (graphics_mode)
+        return;
     const struct cell *c = &grid[row][col];
     uint32_t fg = pack_color(inverse ? c->bg : c->fg);
     uint32_t bg = pack_color(inverse ? c->fg : c->bg);
@@ -95,7 +98,7 @@ static void redraw_all(void)
 
 static void draw_cursor(bool on)
 {
-    if (!cursor_visible)
+    if (!cursor_visible || graphics_mode)
         return;
     if (cur_col < cols && cur_row < rows)
         draw_cell(cur_col, cur_row, on);
@@ -232,8 +235,34 @@ void console_clear(void)
         clear_row(r);
     cur_col = 0;
     cur_row = 0;
-    fill_rect(0, 0, (uint32_t)fb.width, (uint32_t)fb.height, pack_color(cur_bg));
+    if (!graphics_mode)
+        fill_rect(0, 0, (uint32_t)fb.width, (uint32_t)fb.height, pack_color(cur_bg));
     draw_cursor(true);
+}
+
+void console_redraw(void)
+{
+    if (!initialized)
+        return;
+    graphics_mode = false;
+    fill_rect(0, 0, (uint32_t)fb.width, (uint32_t)fb.height, pack_color(cur_bg));
+    redraw_all();
+    draw_cursor(true);
+}
+
+void console_set_graphics(bool on)
+{
+    if (graphics_mode == on)
+        return;
+    if (on)
+        graphics_mode = true;
+    else
+        console_redraw();
+}
+
+bool console_graphics(void)
+{
+    return graphics_mode;
 }
 
 void console_set_colors(uint32_t fg, uint32_t bg)

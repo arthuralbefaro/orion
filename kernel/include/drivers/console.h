@@ -41,6 +41,9 @@ bool console_available(void);
 void console_putc(char c);
 void console_write(const char *s);
 void console_clear(void);
+void console_redraw(void);
+void console_set_graphics(bool on);
+bool console_graphics(void);
 
 void console_set_colors(uint32_t fg, uint32_t bg);
 void console_get_colors(uint32_t *fg, uint32_t *bg);

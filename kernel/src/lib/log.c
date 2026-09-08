@@ -47,6 +47,7 @@ NORETURN void panic(const char *fmt, ...)
     cli();
     smp_halt_others();
 
+    console_set_graphics(false);
     console_set_colors(COLOR_WHITE, COLOR_RED);
     kprintf("\n*** KERNEL PANIC ***\n");
 

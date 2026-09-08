@@ -51,3 +51,17 @@ Uma linha por decisao, na ordem em que foram tomadas.
   `sched_lock` antes de chamar `schedule()`. Nessa janela outra CPU podia acordar
   a thread, enfileira-la e executa-la antes de ela salvar o contexto. Agora a
   trava e mantida ate a troca de contexto (`schedule_locked`).
+- O console de texto entra em "modo grafico" enquanto alguem tem `/dev/fb0`
+  mapeado: continua atualizando a grade e escrevendo na serial, mas para de
+  desenhar no framebuffer. Ao fechar o ultimo fd (ou num panic) ele redesenha
+  tudo. Sem isso as mensagens do proprio `wm` apagavam pedacos da tela.
+- O compositor mantem um backbuffer proprio (`mmap` anonimo) e so copia para o
+  framebuffer os retangulos sujos; a composicao e feita com um retangulo de
+  recorte, entao repintar um pedaco custa proporcional ao pedaco.
+- O cursor do mouse nao entra no backbuffer: e desenhado direto no framebuffer
+  ao final de cada copia. Mover o mouse suja o retangulo antigo e o novo.
+- O terminal grafico marca sujeira por linha da grade, entao digitar custa uma
+  faixa de 960x18 pixels em vez da janela inteira.
+- Sem sinais no kernel: fechar uma janela de terminal fecha o master do PTY, o
+  `sh` recebe fim de arquivo na leitura e sai sozinho. Por isso o `/bin/sh` agora
+  encerra em EOF em vez de continuar o laco.
