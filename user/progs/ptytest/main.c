@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <pty.h>
 #include <stdio.h>
 #include <string.h>
@@ -50,6 +51,7 @@ int main(int argc, char **argv)
         _exit(127);
     }
     close(slave);
+    fcntl(master, F_SETFL, O_NONBLOCK);
 
     usleep(300000);
     drain(master, "");

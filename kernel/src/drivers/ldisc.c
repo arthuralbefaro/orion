@@ -1,8 +1,8 @@
 #include <drivers/ldisc.h>
 #include <kernel/sched.h>
+#include <kernel/wait.h>
+#include <kernel/syscall.h>
 #include <lib/string.h>
-
-#define POLL_MS 2
 
 static void ready_push(struct line_discipline *l, const char *src, uint32_t len)
 {
@@ -19,6 +19,7 @@ void ldisc_init(struct line_discipline *l, ldisc_echo_fn echo, void *ctx)
 {
     memset(l, 0, sizeof(*l));
     spinlock_init(&l->lock);
+    waitqueue_init(&l->readers);
     l->echo = echo;
     l->ctx = ctx;
 }
@@ -69,8 +70,11 @@ void ldisc_input(struct line_discipline *l, char c)
         }
         break;
     }
+    bool ready = l->head != l->tail || l->eof;
     spin_unlock_irqrestore(&l->lock, flags);
 
+    if (ready)
+        wake_up_all(&l->readers);
     if (out_len && l->echo)
         l->echo(l->ctx, out, out_len);
 }
@@ -95,34 +99,45 @@ void ldisc_hangup(struct line_discipline *l)
     uint64_t flags = spin_lock_irqsave(&l->lock);
     l->hangup = true;
     spin_unlock_irqrestore(&l->lock, flags);
+    wake_up_all(&l->readers);
 }
 
 int64_t ldisc_read(struct line_discipline *l, void *buf, uint64_t len)
 {
     char *out = buf;
+    uint64_t flags = spin_lock_irqsave(&l->lock);
     for (;;) {
-        uint64_t flags = spin_lock_irqsave(&l->lock);
         uint64_t n = 0;
         while (n < len && l->tail != l->head) {
             out[n++] = l->ready[l->tail];
             l->tail = (l->tail + 1) % LDISC_READY_MAX;
         }
-        bool got = n > 0;
-        bool at_end = false;
-        if (!got) {
-            if (l->eof) {
-                l->eof = false;
-                at_end = true;
-            } else if (l->hangup) {
-                at_end = true;
-            }
-        }
-        spin_unlock_irqrestore(&l->lock, flags);
-
-        if (got)
+        if (n) {
+            spin_unlock_irqrestore(&l->lock, flags);
             return (int64_t)n;
-        if (at_end)
+        }
+        if (l->eof) {
+            l->eof = false;
+            spin_unlock_irqrestore(&l->lock, flags);
             return 0;
-        thread_sleep_ms(POLL_MS);
+        }
+        if (l->hangup) {
+            spin_unlock_irqrestore(&l->lock, flags);
+            return 0;
+        }
+        wait_sleep(&l->readers, &l->lock);
     }
+}
+
+short ldisc_poll(struct line_discipline *l, struct poll_table *pt)
+{
+    poll_wait(pt, &l->readers);
+    uint64_t flags = spin_lock_irqsave(&l->lock);
+    short revents = 0;
+    if (l->tail != l->head || l->eof)
+        revents |= POLLIN;
+    if (l->hangup)
+        revents |= POLLHUP;
+    spin_unlock_irqrestore(&l->lock, flags);
+    return revents;
 }

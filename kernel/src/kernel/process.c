@@ -5,6 +5,7 @@
 #include <kernel/file.h>
 #include <kernel/syscall.h>
 #include <kernel/spinlock.h>
+#include <kernel/wait.h>
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/gdt.h>
 #include <arch/x86_64/interrupts.h>
@@ -21,6 +22,7 @@ extern void user_return(struct interrupt_frame *frame);
 static struct process *processes;
 static uint32_t next_pid = 1;
 static spinlock_t proc_lock = SPINLOCK_INIT;
+static struct waitqueue child_exit_wq = WAITQUEUE_INIT;
 
 static bool map_user_range(struct process *p, uint64_t virt, uint64_t len, uint64_t flags)
 {
@@ -236,9 +238,8 @@ static void process_register(struct process *p)
     spin_unlock_irqrestore(&proc_lock, flags);
 }
 
-static void process_unregister(struct process *p)
+static void unregister_locked(struct process *p)
 {
-    uint64_t flags = spin_lock_irqsave(&proc_lock);
     struct process **pp = &processes;
     while (*pp && *pp != p)
         pp = &(*pp)->next;
@@ -249,6 +250,12 @@ static void process_unregister(struct process *p)
             c->parent = NULL;
             c->autofree = c->state == PROC_ZOMBIE;
         }
+}
+
+static void process_unregister(struct process *p)
+{
+    uint64_t flags = spin_lock_irqsave(&proc_lock);
+    unregister_locked(p);
     spin_unlock_irqrestore(&proc_lock, flags);
 }
 
@@ -516,10 +523,10 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
 int process_waitpid(int pid, int *status, int options)
 {
     struct process *me = process_current();
+    uint64_t flags = spin_lock_irqsave(&proc_lock);
     for (;;) {
         bool have_child = false;
         struct process *found = NULL;
-        uint64_t flags = spin_lock_irqsave(&proc_lock);
         for (struct process *c = processes; c; c = c->next) {
             if (c->parent != me)
                 continue;
@@ -531,21 +538,24 @@ int process_waitpid(int pid, int *status, int options)
                 break;
             }
         }
-        spin_unlock_irqrestore(&proc_lock, flags);
-
         if (found) {
             int rpid = (int)found->pid;
             if (status)
                 *status = found->exit_code;
-            process_unregister(found);
+            unregister_locked(found);
+            spin_unlock_irqrestore(&proc_lock, flags);
             kfree(found);
             return rpid;
         }
-        if (!have_child)
+        if (!have_child) {
+            spin_unlock_irqrestore(&proc_lock, flags);
             return -ECHILD;
-        if (options & WNOHANG)
+        }
+        if (options & WNOHANG) {
+            spin_unlock_irqrestore(&proc_lock, flags);
             return 0;
-        thread_sleep_ms(5);
+        }
+        wait_sleep(&child_exit_wq, &proc_lock);
     }
 }
 
@@ -577,6 +587,7 @@ void process_thread_reaped(struct process *p)
         process_unregister(p);
         kfree(p);
     }
+    wake_up_all(&child_exit_wq);
 }
 
 void process_dump(void)

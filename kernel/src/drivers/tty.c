@@ -38,3 +38,8 @@ int64_t tty_read(void *buf, uint64_t len)
 {
     return ldisc_read(&ldisc, buf, len);
 }
+
+short tty_poll(struct poll_table *pt)
+{
+    return ldisc_poll(&ldisc, pt);
+}

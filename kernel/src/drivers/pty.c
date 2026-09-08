@@ -4,15 +4,17 @@
 #include <kernel/sched.h>
 #include <kernel/spinlock.h>
 #include <kernel/syscall.h>
+#include <kernel/wait.h>
 #include <lib/printf.h>
 #include <mm/heap.h>
 
 #define PTY_OUT_MAX 8192
-#define POLL_MS     2
 
 struct pty {
     struct line_discipline ld;
     spinlock_t lock;
+    struct waitqueue readers;
+    struct waitqueue writers;
     uint8_t out[PTY_OUT_MAX];
     uint32_t head;
     uint32_t tail;
@@ -47,6 +49,7 @@ static void pty_echo(void *ctx, const char *data, uint64_t len)
     uint64_t flags = spin_lock_irqsave(&p->lock);
     out_push(p, (const uint8_t *)data, (uint32_t)len);
     spin_unlock_irqrestore(&p->lock, flags);
+    wake_up_all(&p->readers);
 }
 
 static void pty_destroy(struct pty *p)
@@ -60,17 +63,27 @@ static int64_t master_read(struct file *f, void *buf, uint64_t len)
     struct pty *p = f->priv;
     uint8_t *out = buf;
     uint64_t flags = spin_lock_irqsave(&p->lock);
-    uint64_t n = 0;
-    while (n < len && p->tail != p->head) {
-        out[n++] = p->out[p->tail];
-        p->tail = (p->tail + 1) % PTY_OUT_MAX;
+    for (;;) {
+        uint64_t n = 0;
+        while (n < len && p->tail != p->head) {
+            out[n++] = p->out[p->tail];
+            p->tail = (p->tail + 1) % PTY_OUT_MAX;
+        }
+        if (n) {
+            spin_unlock_irqrestore(&p->lock, flags);
+            wake_up_all(&p->writers);
+            return (int64_t)n;
+        }
+        if (p->slaves == 0) {
+            spin_unlock_irqrestore(&p->lock, flags);
+            return 0;
+        }
+        if (f->flags & O_NONBLOCK) {
+            spin_unlock_irqrestore(&p->lock, flags);
+            return -EAGAIN;
+        }
+        wait_sleep(&p->readers, &p->lock);
     }
-    bool orphan = p->slaves == 0;
-    spin_unlock_irqrestore(&p->lock, flags);
-
-    if (n)
-        return (int64_t)n;
-    return orphan ? 0 : -EAGAIN;
 }
 
 static int64_t master_write(struct file *f, const void *buf, uint64_t len)
@@ -78,6 +91,21 @@ static int64_t master_write(struct file *f, const void *buf, uint64_t len)
     struct pty *p = f->priv;
     ldisc_write(&p->ld, buf, len);
     return (int64_t)len;
+}
+
+static short master_poll(struct file *f, struct poll_table *pt)
+{
+    struct pty *p = f->priv;
+    poll_wait(pt, &p->readers);
+    uint64_t flags = spin_lock_irqsave(&p->lock);
+    short revents = 0;
+    if (p->tail != p->head)
+        revents |= POLLIN;
+    if (p->slaves == 0)
+        revents |= POLLIN | POLLHUP;
+    revents |= POLLOUT;
+    spin_unlock_irqrestore(&p->lock, flags);
+    return revents;
 }
 
 static long master_ioctl(struct file *f, uint64_t request, uint64_t arg)
@@ -103,8 +131,10 @@ static void master_close(struct file *f)
     bool dead = p->masters == 0 && p->slaves == 0;
     bool notify = p->masters == 0 && !dead;
     spin_unlock_irqrestore(&p->lock, flags);
-    if (notify)
+    if (notify) {
         ldisc_hangup(&p->ld);
+        wake_up_all(&p->writers);
+    }
     if (dead)
         pty_destroy(p);
 }
@@ -120,18 +150,29 @@ static int64_t slave_write(struct file *f, const void *buf, uint64_t len)
     struct pty *p = f->priv;
     const uint8_t *in = buf;
     uint64_t done = 0;
-    while (done < len) {
-        uint64_t flags = spin_lock_irqsave(&p->lock);
-        if (p->masters == 0) {
-            spin_unlock_irqrestore(&p->lock, flags);
-            return (int64_t)len;
-        }
-        done += out_push(p, in + done, (uint32_t)(len - done));
-        spin_unlock_irqrestore(&p->lock, flags);
-        if (done < len)
-            thread_sleep_ms(POLL_MS);
+    uint64_t flags = spin_lock_irqsave(&p->lock);
+    while (done < len && p->masters > 0) {
+        uint32_t n = out_push(p, in + done, (uint32_t)(len - done));
+        done += n;
+        if (n)
+            wake_up_all(&p->readers);
+        else
+            wait_sleep(&p->writers, &p->lock);
     }
+    spin_unlock_irqrestore(&p->lock, flags);
     return (int64_t)len;
+}
+
+static short slave_poll(struct file *f, struct poll_table *pt)
+{
+    struct pty *p = f->priv;
+    short revents = ldisc_poll(&p->ld, pt);
+    poll_wait(pt, &p->writers);
+    uint64_t flags = spin_lock_irqsave(&p->lock);
+    if (out_used(p) < PTY_OUT_MAX - 1 || p->masters == 0)
+        revents |= POLLOUT;
+    spin_unlock_irqrestore(&p->lock, flags);
+    return revents;
 }
 
 static long slave_ioctl(struct file *f, uint64_t request, uint64_t arg)
@@ -151,7 +192,10 @@ static void slave_close(struct file *f)
     uint64_t flags = spin_lock_irqsave(&p->lock);
     p->slaves--;
     bool dead = p->masters == 0 && p->slaves == 0;
+    bool notify = p->slaves == 0 && !dead;
     spin_unlock_irqrestore(&p->lock, flags);
+    if (notify)
+        wake_up_all(&p->readers);
     if (dead)
         pty_destroy(p);
 }
@@ -161,6 +205,7 @@ static const struct file_ops master_ops = {
     .write = master_write,
     .close = master_close,
     .ioctl = master_ioctl,
+    .poll = master_poll,
 };
 
 static const struct file_ops slave_ops = {
@@ -168,6 +213,7 @@ static const struct file_ops slave_ops = {
     .write = slave_write,
     .close = slave_close,
     .ioctl = slave_ioctl,
+    .poll = slave_poll,
 };
 
 int pty_open_pair(struct file **master, struct file **slave)
@@ -176,6 +222,8 @@ int pty_open_pair(struct file **master, struct file **slave)
     if (!p)
         return -ENOMEM;
     spinlock_init(&p->lock);
+    waitqueue_init(&p->readers);
+    waitqueue_init(&p->writers);
     ldisc_init(&p->ld, pty_echo, p);
     p->masters = 1;
     p->slaves = 1;

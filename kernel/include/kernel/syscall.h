@@ -3,6 +3,8 @@
 #include <kernel/compiler.h>
 
 #define SYS_READ          0
+#define SYS_POLL          7
+#define SYS_FCNTL         72
 #define SYS_WRITE         1
 #define SYS_OPEN          2
 #define SYS_CLOSE         3
@@ -56,6 +58,27 @@
 
 #define USER_ADDR_MAX 0x0000800000000000ull
 #define USER_MMAP_BASE 0x0000100000000000ull
+
+#define POLLIN   0x0001
+#define POLLPRI  0x0002
+#define POLLOUT  0x0004
+#define POLLERR  0x0008
+#define POLLHUP  0x0010
+#define POLLNVAL 0x0020
+
+struct user_pollfd {
+    int32_t fd;
+    int16_t events;
+    int16_t revents;
+};
+
+#define O_RDONLY   0
+#define O_WRONLY   1
+#define O_RDWR     2
+#define O_NONBLOCK 0x800
+
+#define F_GETFL 3
+#define F_SETFL 4
 
 #define SEEK_SET 0
 #define SEEK_CUR 1

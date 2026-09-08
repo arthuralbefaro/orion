@@ -2,15 +2,16 @@
 #include <kernel/file.h>
 #include <kernel/spinlock.h>
 #include <kernel/sched.h>
+#include <kernel/wait.h>
 #include <kernel/time.h>
 #include <kernel/syscall.h>
 
 #define QUEUE_SIZE  256
-#define POLL_MS     2
 
 static spinlock_t lock = SPINLOCK_INIT;
 static struct input_event queue[QUEUE_SIZE];
 static uint32_t head, tail;
+static struct waitqueue readers = WAITQUEUE_INIT;
 static uint32_t grabs;
 static uint32_t timeout_ms;
 static uint64_t events;
@@ -31,6 +32,7 @@ static void push(uint32_t type, int32_t a, int32_t b, int32_t c)
     head = next;
     events++;
     spin_unlock_irqrestore(&lock, flags);
+    wake_up_all(&readers);
 }
 
 void input_init(void)
@@ -113,8 +115,29 @@ int64_t input_read(void *buf, uint64_t len)
             return (int64_t)(n * sizeof(struct input_event));
         if (limit && time_uptime_ms() >= deadline)
             return 0;
-        thread_sleep_ms(POLL_MS);
+
+        uint64_t flags = spin_lock_irqsave(&lock);
+        if (tail != head) {
+            spin_unlock_irqrestore(&lock, flags);
+            continue;
+        }
+        uint64_t wait_ms = 0;
+        if (limit) {
+            uint64_t now = time_uptime_ms();
+            wait_ms = now >= deadline ? 1 : deadline - now;
+        }
+        wait_sleep_timeout(&readers, &lock, wait_ms);
+        spin_unlock_irqrestore(&lock, flags);
     }
+}
+
+short input_poll(struct poll_table *pt)
+{
+    poll_wait(pt, &readers);
+    uint64_t flags = spin_lock_irqsave(&lock);
+    short revents = tail != head ? POLLIN : 0;
+    spin_unlock_irqrestore(&lock, flags);
+    return revents;
 }
 
 void input_set_timeout(uint32_t ms)
@@ -176,10 +199,17 @@ static long input_file_ioctl(struct file *f, uint64_t request, uint64_t arg)
     }
 }
 
+static short input_file_poll(struct file *f, struct poll_table *pt)
+{
+    (void)f;
+    return input_poll(pt);
+}
+
 static const struct file_ops input_ops = {
     .read = input_file_read,
     .close = input_file_close,
     .ioctl = input_file_ioctl,
+    .poll = input_file_poll,
 };
 
 struct file *input_open(void)

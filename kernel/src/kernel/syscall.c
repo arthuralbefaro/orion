@@ -15,6 +15,8 @@
 #include <fs/vfs.h>
 #include <fs/devfs.h>
 #include <drivers/pty.h>
+#include <kernel/wait.h>
+#include <mm/heap.h>
 
 extern void syscall_entry(void);
 
@@ -133,6 +135,80 @@ static long sys_openpty(int *fds)
     fds[0] = mfd;
     fds[1] = sfd;
     return 0;
+}
+
+static long sys_poll(struct user_pollfd *fds, uint64_t nfds, int timeout)
+{
+    if (nfds > POLL_TABLE_MAX)
+        return -EINVAL;
+    if (nfds && !user_range_ok((uint64_t)fds, nfds * sizeof(*fds)))
+        return -EFAULT;
+
+    struct process *p = process_current();
+    struct poll_table *pt = kzalloc(sizeof(*pt));
+    if (!pt)
+        return -ENOMEM;
+
+    uint64_t deadline = timeout > 0 ? time_uptime_ms() + (uint64_t)timeout : 0;
+    long ret = 0;
+    for (;;) {
+        poll_table_init(pt);
+        int ready = 0;
+        for (uint64_t i = 0; i < nfds; i++) {
+            fds[i].revents = 0;
+            if (fds[i].fd < 0)
+                continue;
+            struct file *f = process_fd_get(p, fds[i].fd);
+            if (!f) {
+                fds[i].revents = POLLNVAL;
+                ready++;
+                continue;
+            }
+            short mask = (short)(fds[i].events | POLLERR | POLLHUP | POLLNVAL);
+            short got = (short)(file_poll(f, pt) & mask);
+            if (got) {
+                fds[i].revents = got;
+                ready++;
+            }
+        }
+        if (ready) {
+            poll_table_clear(pt);
+            ret = ready;
+            break;
+        }
+        if (timeout == 0) {
+            poll_table_clear(pt);
+            break;
+        }
+        uint64_t wait_ms = 0;
+        if (timeout > 0) {
+            uint64_t now = time_uptime_ms();
+            if (now >= deadline) {
+                poll_table_clear(pt);
+                break;
+            }
+            wait_ms = deadline - now;
+        }
+        poll_table_sleep(pt, wait_ms);
+    }
+    kfree(pt);
+    return ret;
+}
+
+static long sys_fcntl(int fd, int cmd, uint64_t arg)
+{
+    struct file *f = process_fd_get(process_current(), fd);
+    if (!f)
+        return -EBADF;
+    switch (cmd) {
+    case F_GETFL:
+        return (long)f->flags;
+    case F_SETFL:
+        f->flags = (uint32_t)arg & O_NONBLOCK;
+        return 0;
+    default:
+        return -EINVAL;
+    }
 }
 
 static void fill_stat(const struct vfs_node *n, uint32_t mode, struct user_stat *st)
@@ -465,6 +541,8 @@ void syscall_dispatch(struct interrupt_frame *f)
     case SYS_WAIT4:       ret = sys_wait4((int)f->rdi, (int *)f->rsi, (int)f->rdx); break;
     case SYS_READDIR:     ret = sys_readdir((int)f->rdi, (struct user_dirent *)f->rsi, f->rdx); break;
     case SYS_OPENPTY:     ret = sys_openpty((int *)f->rdi); break;
+    case SYS_POLL:        ret = sys_poll((struct user_pollfd *)f->rdi, f->rsi, (int)f->rdx); break;
+    case SYS_FCNTL:       ret = sys_fcntl((int)f->rdi, (int)f->rsi, f->rdx); break;
     default:
         log_warn("syscall", "pid %u: syscall %lu desconhecida", process_current()->pid, f->rax);
         ret = -ENOSYS;

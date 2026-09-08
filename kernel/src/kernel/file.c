@@ -1,5 +1,6 @@
 #include <kernel/file.h>
 #include <kernel/sched.h>
+#include <kernel/wait.h>
 #include <kernel/spinlock.h>
 #include <kernel/syscall.h>
 #include <fs/devfs.h>
@@ -61,6 +62,13 @@ int64_t file_mmap(struct file *f, uint64_t len, int prot, uint64_t offset)
     return f->ops->mmap ? f->ops->mmap(f, len, prot, offset) : -ENODEV;
 }
 
+short file_poll(struct file *f, struct poll_table *pt)
+{
+    if (f->ops->poll)
+        return f->ops->poll(f, pt);
+    return POLLIN | POLLOUT;
+}
+
 static int64_t tty_file_read(struct file *f, void *buf, uint64_t len)
 {
     (void)f;
@@ -74,9 +82,16 @@ static int64_t tty_file_write(struct file *f, const void *buf, uint64_t len)
     return (int64_t)len;
 }
 
+static short tty_file_poll(struct file *f, struct poll_table *pt)
+{
+    (void)f;
+    return tty_poll(pt) | POLLOUT;
+}
+
 static const struct file_ops tty_ops = {
     .read = tty_file_read,
     .write = tty_file_write,
+    .poll = tty_file_poll,
 };
 
 struct file *file_open_tty(void)
@@ -156,6 +171,8 @@ struct pipe {
     uint64_t head, tail;
     int32_t readers, writers;
     spinlock_t lock;
+    struct waitqueue rq;
+    struct waitqueue wq;
 };
 
 static int64_t pipe_read(struct file *f, void *buf, uint64_t len)
@@ -163,19 +180,26 @@ static int64_t pipe_read(struct file *f, void *buf, uint64_t len)
     struct pipe *p = f->priv;
     uint8_t *out = buf;
     uint64_t n = 0;
+    uint64_t flags = spin_lock_irqsave(&p->lock);
     for (;;) {
-        uint64_t flags = spin_lock_irqsave(&p->lock);
         while (n < len && p->tail != p->head) {
             out[n++] = p->buf[p->tail % PIPE_SIZE];
             p->tail++;
         }
-        bool empty = p->tail == p->head;
-        int32_t writers = p->writers;
-        spin_unlock_irqrestore(&p->lock, flags);
-        if (n > 0 || (empty && writers == 0))
-            return (int64_t)n;
-        thread_sleep_ms(2);
+        if (n) {
+            wake_up_all(&p->wq);
+            break;
+        }
+        if (p->writers == 0)
+            break;
+        if (f->flags & O_NONBLOCK) {
+            n = (uint64_t)-EAGAIN;
+            break;
+        }
+        wait_sleep(&p->rq, &p->lock);
     }
+    spin_unlock_irqrestore(&p->lock, flags);
+    return (int64_t)n;
 }
 
 static int64_t pipe_write(struct file *f, const void *buf, uint64_t len)
@@ -183,21 +207,60 @@ static int64_t pipe_write(struct file *f, const void *buf, uint64_t len)
     struct pipe *p = f->priv;
     const uint8_t *in = buf;
     uint64_t n = 0;
-    while (n < len) {
-        uint64_t flags = spin_lock_irqsave(&p->lock);
+    int64_t ret;
+    uint64_t flags = spin_lock_irqsave(&p->lock);
+    for (;;) {
         if (p->readers == 0) {
-            spin_unlock_irqrestore(&p->lock, flags);
-            return n ? (int64_t)n : -EPIPE;
+            ret = n ? (int64_t)n : -EPIPE;
+            break;
         }
+        uint64_t before = n;
         while (n < len && p->head - p->tail < PIPE_SIZE) {
             p->buf[p->head % PIPE_SIZE] = in[n++];
             p->head++;
         }
-        spin_unlock_irqrestore(&p->lock, flags);
-        if (n < len)
-            thread_sleep_ms(2);
+        if (n > before)
+            wake_up_all(&p->rq);
+        if (n >= len) {
+            ret = (int64_t)n;
+            break;
+        }
+        if (f->flags & O_NONBLOCK) {
+            ret = n ? (int64_t)n : -EAGAIN;
+            break;
+        }
+        wait_sleep(&p->wq, &p->lock);
     }
-    return (int64_t)n;
+    spin_unlock_irqrestore(&p->lock, flags);
+    return ret;
+}
+
+static short pipe_read_poll(struct file *f, struct poll_table *pt)
+{
+    struct pipe *p = f->priv;
+    poll_wait(pt, &p->rq);
+    uint64_t flags = spin_lock_irqsave(&p->lock);
+    short revents = 0;
+    if (p->tail != p->head)
+        revents |= POLLIN;
+    if (p->writers == 0)
+        revents |= POLLIN | POLLHUP;
+    spin_unlock_irqrestore(&p->lock, flags);
+    return revents;
+}
+
+static short pipe_write_poll(struct file *f, struct poll_table *pt)
+{
+    struct pipe *p = f->priv;
+    poll_wait(pt, &p->wq);
+    uint64_t flags = spin_lock_irqsave(&p->lock);
+    short revents = 0;
+    if (p->head - p->tail < PIPE_SIZE)
+        revents |= POLLOUT;
+    if (p->readers == 0)
+        revents |= POLLERR;
+    spin_unlock_irqrestore(&p->lock, flags);
+    return revents;
 }
 
 static void pipe_close_read(struct file *f)
@@ -207,8 +270,11 @@ static void pipe_close_read(struct file *f)
     p->readers--;
     bool dead = p->readers == 0 && p->writers == 0;
     spin_unlock_irqrestore(&p->lock, flags);
-    if (dead)
+    if (dead) {
         kfree(p);
+        return;
+    }
+    wake_up_all(&p->wq);
 }
 
 static void pipe_close_write(struct file *f)
@@ -218,12 +284,19 @@ static void pipe_close_write(struct file *f)
     p->writers--;
     bool dead = p->readers == 0 && p->writers == 0;
     spin_unlock_irqrestore(&p->lock, flags);
-    if (dead)
+    if (dead) {
         kfree(p);
+        return;
+    }
+    wake_up_all(&p->rq);
 }
 
-static const struct file_ops pipe_read_ops = { .read = pipe_read, .close = pipe_close_read };
-static const struct file_ops pipe_write_ops = { .write = pipe_write, .close = pipe_close_write };
+static const struct file_ops pipe_read_ops = {
+    .read = pipe_read, .close = pipe_close_read, .poll = pipe_read_poll
+};
+static const struct file_ops pipe_write_ops = {
+    .write = pipe_write, .close = pipe_close_write, .poll = pipe_write_poll
+};
 
 bool file_make_pipe(struct file **reader, struct file **writer)
 {
@@ -231,6 +304,8 @@ bool file_make_pipe(struct file **reader, struct file **writer)
     if (!p)
         return false;
     spinlock_init(&p->lock);
+    waitqueue_init(&p->rq);
+    waitqueue_init(&p->wq);
     p->readers = 1;
     p->writers = 1;
     *reader = file_alloc(&pipe_read_ops, p);

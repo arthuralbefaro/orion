@@ -7,6 +7,8 @@
 #include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <pty.h>
+#include <poll.h>
+#include <stdarg.h>
 #include <string.h>
 #include "syscall.h"
 
@@ -38,6 +40,16 @@ int     fstat(int fd, struct stat *st)             { return (int)__syscall_ret(s
 int     munmap(void *addr, size_t len)             { return (int)__syscall_ret(syscall2(SYS_MUNMAP, (long)addr, (long)len)); }
 int     clock_gettime(int clk, struct timespec *ts){ return (int)__syscall_ret(syscall2(SYS_CLOCK_GETTIME, clk, (long)ts)); }
 int     ioctl(int fd, unsigned long req, void *arg) { return (int)__syscall_ret(syscall3(SYS_IOCTL, fd, (long)req, (long)arg)); }
+int     poll(struct pollfd *fds, nfds_t n, int timeout) { return (int)__syscall_ret(syscall3(SYS_POLL, (long)fds, (long)n, timeout)); }
+
+int fcntl(int fd, int cmd, ...)
+{
+    va_list ap;
+    va_start(ap, cmd);
+    long arg = va_arg(ap, long);
+    va_end(ap);
+    return (int)__syscall_ret(syscall3(SYS_FCNTL, fd, cmd, arg));
+}
 
 int execve(const char *path, char *const argv[], char *const envp[])
 {

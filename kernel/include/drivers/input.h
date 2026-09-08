@@ -1,6 +1,7 @@
 #pragma once
 
 #include <kernel/compiler.h>
+#include <kernel/wait.h>
 
 #define INPUT_EV_KEY_DOWN     1
 #define INPUT_EV_KEY_UP       2
@@ -36,6 +37,7 @@ void input_grab(void);
 void input_release(void);
 
 int64_t input_read(void *buf, uint64_t len);
+short input_poll(struct poll_table *pt);
 void input_set_timeout(uint32_t ms);
 uint32_t input_timeout(void);
 void input_flush(void);

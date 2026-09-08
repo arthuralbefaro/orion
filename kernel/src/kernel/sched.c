@@ -3,6 +3,7 @@
 #include <kernel/time.h>
 #include <kernel/log.h>
 #include <kernel/process.h>
+#include <kernel/wait.h>
 #include <mm/heap.h>
 #include <mm/vmm.h>
 #include <lib/string.h>
@@ -13,7 +14,7 @@
 extern void context_switch(uint64_t *old_rsp, uint64_t new_rsp);
 extern void thread_trampoline(void);
 
-static spinlock_t sched_lock = SPINLOCK_INIT;
+static spinlock_t runq_lock = SPINLOCK_INIT;
 static struct thread *all_threads;
 static struct thread *ready_head, *ready_tail;
 static struct thread *sleeping;
@@ -38,6 +39,19 @@ static void ready_enqueue(struct thread *t)
     ready_tail = t;
 }
 
+static void sleeping_remove(struct thread *t)
+{
+    if (!t->on_sleep_list)
+        return;
+    struct thread **pp = &sleeping;
+    while (*pp && *pp != t)
+        pp = &(*pp)->next;
+    if (*pp)
+        *pp = t->next;
+    t->on_sleep_list = false;
+    t->next = NULL;
+}
+
 static struct thread *ready_dequeue(void)
 {
     struct thread *t = ready_head;
@@ -50,11 +64,11 @@ static struct thread *ready_dequeue(void)
     return t;
 }
 
-static void reap_zombie(struct percpu *cpu)
+static struct thread *detach_zombie(struct percpu *cpu)
 {
     struct thread *z = cpu->zombie;
     if (!z)
-        return;
+        return NULL;
     cpu->zombie = NULL;
 
     struct thread **pp = &all_threads;
@@ -62,7 +76,13 @@ static void reap_zombie(struct percpu *cpu)
         pp = &(*pp)->all_next;
     if (*pp)
         *pp = z->all_next;
+    return z;
+}
 
+static void free_thread(struct thread *z)
+{
+    if (!z)
+        return;
     if (z->process)
         process_thread_reaped(z->process);
     kfree(z->stack);
@@ -78,10 +98,10 @@ static struct thread *thread_alloc(const char *name)
     strlcpy(t->name, name, sizeof(t->name));
     t->slice_left = SCHED_TIME_SLICE;
 
-    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    uint64_t flags = spin_lock_irqsave(&runq_lock);
     t->all_next = all_threads;
     all_threads = t;
-    spin_unlock_irqrestore(&sched_lock, flags);
+    spin_unlock_irqrestore(&runq_lock, flags);
     return t;
 }
 
@@ -112,10 +132,10 @@ struct thread *thread_create_for_process(const char *name, thread_entry_t entry,
     t->kernel_stack_top = (uint64_t)t->stack + t->stack_size;
     t->process = process;
 
-    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    uint64_t flags = spin_lock_irqsave(&runq_lock);
     t->state = THREAD_READY;
     ready_enqueue(t);
-    spin_unlock_irqrestore(&sched_lock, flags);
+    spin_unlock_irqrestore(&runq_lock, flags);
     return t;
 }
 
@@ -143,12 +163,12 @@ void sched_init(void)
     cpu->current = main_thread;
 
     struct thread *idle = thread_create("idle0", idle_loop, NULL);
-    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    uint64_t flags = spin_lock_irqsave(&runq_lock);
     ready_dequeue();
     idle->state = THREAD_READY;
     idle->is_idle = true;
     cpu->idle = idle;
-    spin_unlock_irqrestore(&sched_lock, flags);
+    spin_unlock_irqrestore(&runq_lock, flags);
 
     enabled = true;
     log_info("sched", "escalonador ativo: fatia de %u ms, main tid=%u, idle tid=%u",
@@ -201,21 +221,20 @@ static void switch_to(struct percpu *cpu, struct thread *prev, struct thread *ne
 
 void sched_post_switch(void)
 {
-    reap_zombie(percpu_get());
-    spin_unlock(&sched_lock);
+    struct thread *z = detach_zombie(percpu_get());
+    spin_unlock(&runq_lock);
+    free_thread(z);
 }
 
 static void schedule_locked(void)
 {
     struct percpu *cpu = percpu_get();
-    reap_zombie(cpu);
-
     struct thread *prev = cpu->current;
     struct thread *next = ready_dequeue();
 
     if (!next) {
         if (prev->state == THREAD_RUNNING) {
-            spin_unlock(&sched_lock);
+            spin_unlock(&runq_lock);
             return;
         }
         next = cpu->idle;
@@ -232,7 +251,7 @@ static void schedule_locked(void)
 
     if (next == prev) {
         prev->state = THREAD_RUNNING;
-        spin_unlock(&sched_lock);
+        spin_unlock(&runq_lock);
         return;
     }
 
@@ -243,8 +262,49 @@ static void schedule_locked(void)
 void schedule(void)
 {
     ASSERT(!interrupts_enabled());
-    spin_lock(&sched_lock);
+    spin_lock(&runq_lock);
     schedule_locked();
+}
+
+void sched_runq_lock(void)
+{
+    spin_lock(&runq_lock);
+}
+
+void sched_runq_unlock(void)
+{
+    spin_unlock(&runq_lock);
+}
+
+uint64_t sched_deadline(uint64_t ms)
+{
+    return time_ticks() + DIV_ROUND_UP(ms * TIME_TICK_HZ, 1000);
+}
+
+void sched_block_switch(uint64_t wake_at)
+{
+    struct thread *t = percpu_get()->current;
+    if (wake_at) {
+        t->wake_at = wake_at;
+        t->state = THREAD_SLEEPING;
+        t->next = sleeping;
+        sleeping = t;
+        t->on_sleep_list = true;
+    } else {
+        t->state = THREAD_BLOCKED;
+    }
+    schedule_locked();
+}
+
+bool sched_make_ready(struct thread *t)
+{
+    if (t->state != THREAD_BLOCKED && t->state != THREAD_SLEEPING)
+        return false;
+    sleeping_remove(t);
+    t->state = THREAD_READY;
+    ready_enqueue(t);
+    percpu_get()->need_resched = true;
+    return true;
 }
 
 void thread_yield(void)
@@ -257,20 +317,15 @@ void thread_yield(void)
 void thread_sleep_ms(uint64_t ms)
 {
     uint64_t flags = irq_save();
-    spin_lock(&sched_lock);
-    struct thread *t = percpu_get()->current;
-    t->wake_at = time_ticks() + DIV_ROUND_UP(ms * TIME_TICK_HZ, 1000);
-    t->state = THREAD_SLEEPING;
-    t->next = sleeping;
-    sleeping = t;
-    schedule_locked();
+    spin_lock(&runq_lock);
+    sched_block_switch(sched_deadline(ms));
     irq_restore(flags);
 }
 
 void thread_block(void)
 {
     uint64_t flags = irq_save();
-    spin_lock(&sched_lock);
+    spin_lock(&runq_lock);
     percpu_get()->current->state = THREAD_BLOCKED;
     schedule_locked();
     irq_restore(flags);
@@ -278,13 +333,13 @@ void thread_block(void)
 
 void thread_unblock(struct thread *t)
 {
-    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    uint64_t flags = spin_lock_irqsave(&runq_lock);
     if (t->state == THREAD_BLOCKED) {
         t->state = THREAD_READY;
         ready_enqueue(t);
         percpu_get()->need_resched = true;
     }
-    spin_unlock_irqrestore(&sched_lock, flags);
+    spin_unlock_irqrestore(&runq_lock, flags);
 }
 
 NORETURN void thread_exit(void)
@@ -293,7 +348,7 @@ NORETURN void thread_exit(void)
     struct thread *t = thread_current();
     if (t->is_idle || !t->stack)
         panic("thread_exit chamado pela thread %s", t->name);
-    spin_lock(&sched_lock);
+    spin_lock(&runq_lock);
     t->state = THREAD_ZOMBIE;
     schedule_locked();
     panic("thread zombie voltou a executar");
@@ -304,7 +359,7 @@ void sched_tick(uint64_t now)
     if (!enabled)
         return;
 
-    spin_lock(&sched_lock);
+    spin_lock(&runq_lock);
     struct percpu *cpu = percpu_get();
     struct thread *cur = cpu->current;
     cpu->ticks++;
@@ -316,6 +371,9 @@ void sched_tick(uint64_t now)
             struct thread *t = *pp;
             if (t->wake_at <= now) {
                 *pp = t->next;
+                t->on_sleep_list = false;
+                t->next = NULL;
+                wait_unlink(t);
                 t->state = THREAD_READY;
                 ready_enqueue(t);
             } else {
@@ -338,7 +396,7 @@ void sched_tick(uint64_t now)
             }
         }
     }
-    spin_unlock(&sched_lock);
+    spin_unlock(&runq_lock);
 }
 
 void sched_check_preempt(void)
@@ -349,10 +407,10 @@ void sched_check_preempt(void)
 
 void sched_dump(void)
 {
-    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    uint64_t flags = spin_lock_irqsave(&runq_lock);
     kprintf("  tid  estado    cpu  ticks     nome\n");
     for (struct thread *t = all_threads; t; t = t->all_next)
         kprintf("  %3u  %-8s  %3u  %8lu  %s%s\n", t->tid, state_name[t->state], t->cpu,
                 t->total_ticks, t->name, t->process ? " [user]" : "");
-    spin_unlock_irqrestore(&sched_lock, flags);
+    spin_unlock_irqrestore(&runq_lock, flags);
 }

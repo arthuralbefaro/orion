@@ -1,6 +1,7 @@
 #pragma once
 
 #include <kernel/compiler.h>
+#include <kernel/wait.h>
 
 #define PROCESS_NAME_MAX 32
 #define PROCESS_MAX_FDS  32

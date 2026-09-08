@@ -15,6 +15,7 @@ enum thread_state {
 };
 
 struct process;
+struct wait_entry;
 
 typedef void (*thread_entry_t)(void *arg);
 
@@ -35,6 +36,8 @@ struct thread {
     uint32_t cpu;
     bool     is_idle;
     uint64_t fs_base;
+    bool     on_sleep_list;
+    struct wait_entry *waits;
 
     struct thread *next;
     struct thread *all_next;
@@ -57,6 +60,12 @@ NORETURN void thread_exit(void);
 
 void schedule(void);
 void sched_post_switch(void);
+
+void sched_runq_lock(void);
+void sched_runq_unlock(void);
+void sched_block_switch(uint64_t wake_at);
+bool sched_make_ready(struct thread *t);
+uint64_t sched_deadline(uint64_t ms);
 void sched_tick(uint64_t now_ticks);
 void sched_check_preempt(void);
 

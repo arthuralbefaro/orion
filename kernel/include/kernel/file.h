@@ -2,6 +2,7 @@
 
 #include <kernel/compiler.h>
 #include <fs/vfs.h>
+#include <kernel/wait.h>
 
 struct file;
 
@@ -12,6 +13,7 @@ struct file_ops {
     int     (*readdir)(struct file *f, uint64_t index, struct vfs_node *out);
     long    (*ioctl)(struct file *f, uint64_t request, uint64_t arg);
     int64_t (*mmap)(struct file *f, uint64_t len, int prot, uint64_t offset);
+    short   (*poll)(struct file *f, struct poll_table *pt);
 };
 
 struct file {
@@ -20,6 +22,7 @@ struct file {
     uint64_t offset;
     int32_t refcount;
     uint32_t mode;
+    uint32_t flags;
     struct vfs_node node;
     bool has_node;
 };
@@ -38,3 +41,4 @@ int64_t file_write(struct file *f, const void *buf, uint64_t len);
 int     file_readdir(struct file *f, uint64_t index, struct vfs_node *out);
 long    file_ioctl(struct file *f, uint64_t request, uint64_t arg);
 int64_t file_mmap(struct file *f, uint64_t len, int prot, uint64_t offset);
+short   file_poll(struct file *f, struct poll_table *pt);

@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <pty.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,7 +17,7 @@
 
 #define TERM_COLS      60
 #define TERM_ROWS      20
-#define POLL_TIMEOUT   20
+#define POLL_TIMEOUT   250
 #define KEY_CTRL_T     0x14
 #define KEY_CTRL_Q     0x11
 #define KEY_CTRL_X     0x18
@@ -80,6 +81,7 @@ static bool spawn_shell(struct window *w)
         _exit(127);
     }
     close(slave);
+    fcntl(master, F_SETFL, O_NONBLOCK);
     w->master = master;
     w->pid = pid;
     fprintf(stderr, "wm: terminal %d -> sh pid %d (master fd %d)\n", w->id, pid, master);
@@ -323,9 +325,6 @@ int main(int argc, char **argv)
         fprintf(stderr, "wm: /dev/input: %s\n", strerror(errno));
         return 1;
     }
-    unsigned long timeout = POLL_TIMEOUT;
-    ioctl(input_fd, INPUTIOC_SETTIMEOUT, (void *)timeout);
-
     if (!gfx_open(&gfx, fb_fd))
         return 1;
     fprintf(stderr, "wm: %dx%d, celula %dx%d\n", gfx.width, gfx.height, GFX_CELL_W, GFX_CELL_H);
@@ -340,9 +339,26 @@ int main(int argc, char **argv)
 
     struct input_event events[32];
     while (running) {
-        long n = read(input_fd, events, sizeof(events));
-        for (long i = 0; i < n / (long)sizeof(events[0]); i++)
-            handle_event(&events[i]);
+        struct pollfd fds[WIN_MAX + 1];
+        int n = 0;
+        fds[n].fd = input_fd;
+        fds[n].events = POLLIN;
+        n++;
+        for (int i = 0; i < desk.count && n < WIN_MAX + 1; i++) {
+            struct window *w = &desk.windows[desk.order[i]];
+            if (w->kind == WIN_TERM && w->master >= 0) {
+                fds[n].fd = w->master;
+                fds[n].events = POLLIN;
+                n++;
+            }
+        }
+        poll(fds, (nfds_t)n, POLL_TIMEOUT);
+
+        if (fds[0].revents & POLLIN) {
+            long got = read(input_fd, events, sizeof(events));
+            for (long i = 0; i < got / (long)sizeof(events[0]); i++)
+                handle_event(&events[i]);
+        }
         pump_terminals();
         update_clock();
         reap_children();

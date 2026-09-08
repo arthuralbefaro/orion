@@ -65,3 +65,27 @@ Uma linha por decisao, na ordem em que foram tomadas.
 - Sem sinais no kernel: fechar uma janela de terminal fecha o master do PTY, o
   `sh` recebe fim de arquivo na leitura e sai sozinho. Por isso o `/bin/sh` agora
   encerra em EOF em vez de continuar o laco.
+
+## v1.1 (filas de espera e poll)
+
+- `wait_event(wq, lock, cond)` recebe a trava explicitamente (tres argumentos em
+  vez de dois): a condicao so pode ser testada sob a mesma trava que o acordador
+  segura, e passar essa trava e a forma mais simples de garantir isso.
+- `struct wait_entry` fica na pilha de quem espera e a thread guarda a lista das
+  suas entradas (`t->waits`), o que permite esperar em varias filas ao mesmo
+  tempo - e a base do `poll`.
+- Ordem de travas do sistema: trava de dados -> `runq_lock`. Quem acorda alguem
+  segura a trava de dados e chama `wake_up`, que pega a `runq_lock`; quem dorme
+  faz o mesmo caminho.
+- A colheita de threads mortas saiu de dentro da `runq_lock`: `sched_post_switch`
+  destaca a zumbi com a trava e so depois libera o espaco de enderecos e avisa o
+  pai. Sem isso, `process_thread_reaped` (que pega `proc_lock`) inverteria a
+  ordem contra o `waitpid` (que pega `proc_lock` e depois `runq_lock`).
+- `waitpid` espera numa unica fila global de saidas (`child_exit_wq`) em vez de
+  uma fila por processo: evita ter que garantir a vida do `struct process` do pai
+  no momento em que o filho e colhido, e saidas de processo sao raras.
+- O master do PTY passou a bloquear por padrao; quem quer o comportamento antigo
+  usa `fcntl(fd, F_SETFL, O_NONBLOCK)`. O `wm` e o `ptytest` fazem isso.
+- `SYS_POLL` refaz a varredura a cada volta em vez de manter estado entre elas:
+  registra nas filas, avalia, e so dorme se nada estiver pronto. Custa uma
+  varredura extra por acordada e dispensa qualquer estrutura persistente.

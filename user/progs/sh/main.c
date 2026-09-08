@@ -63,7 +63,7 @@ static int builtin(int argc, char **argv)
     if (strcmp(argv[0], "help") == 0) {
         puts("builtins: cd, pwd, exit, help");
         puts("programas em /bin: echo cat ls hello date wc memtest crash");
-        puts("graficos: wm (compositor), fbtest, evtest, ptytest");
+        puts("graficos: wm (compositor), fbtest, evtest, ptytest, polltest");
         puts("pipe simples: ls | wc");
         return 1;
     }
