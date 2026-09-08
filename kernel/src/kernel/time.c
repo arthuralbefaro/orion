@@ -22,7 +22,7 @@ static void tick_handler(struct interrupt_frame *frame, void *ctx)
     (void)ctx;
     if (percpu_cpu_id() == 0)
         ticks++;
-    sched_tick(ticks);
+    sched_tick(time_ticks());
 }
 
 /* Mede quantos ciclos de TSC cabem em 10 ms (usando o canal 2 do PIT em
@@ -62,12 +62,19 @@ void time_init_ap(void)
 
 uint64_t time_ticks(void)
 {
+    if (!tsc_hz)
+        return ticks;
+    return (rdtsc() - tsc_boot) / (tsc_hz / TIME_TICK_HZ);
+}
+
+uint64_t time_irq_count(void)
+{
     return ticks;
 }
 
 uint64_t time_uptime_ms(void)
 {
-    return ticks * 1000 / TIME_TICK_HZ;
+    return time_ticks() * 1000 / TIME_TICK_HZ;
 }
 
 uint64_t time_now_us(void)
@@ -80,8 +87,8 @@ uint64_t time_now_us(void)
 void time_sleep_ms(uint64_t ms)
 {
     ASSERT(interrupts_enabled());
-    uint64_t target = ticks + DIV_ROUND_UP(ms * TIME_TICK_HZ, 1000);
-    while (ticks < target)
+    uint64_t target = time_ticks() + DIV_ROUND_UP(ms * TIME_TICK_HZ, 1000);
+    while (time_ticks() < target)
         hlt();
 }
 

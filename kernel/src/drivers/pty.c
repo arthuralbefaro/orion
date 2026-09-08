@@ -5,6 +5,7 @@
 #include <kernel/spinlock.h>
 #include <kernel/syscall.h>
 #include <kernel/wait.h>
+#include <kernel/signal.h>
 #include <lib/printf.h>
 #include <mm/heap.h>
 
@@ -83,6 +84,10 @@ static int64_t master_read(struct file *f, void *buf, uint64_t len)
             return -EAGAIN;
         }
         wait_sleep(&p->readers, &p->lock);
+        if (signal_pending_current()) {
+            spin_unlock_irqrestore(&p->lock, flags);
+            return -EINTR;
+        }
     }
 }
 
@@ -108,9 +113,23 @@ static short master_poll(struct file *f, struct poll_table *pt)
     return revents;
 }
 
+static long pty_pgrp_ioctl(struct pty *p, uint64_t request, uint64_t arg)
+{
+    if (arg >= USER_ADDR_MAX)
+        return -EFAULT;
+    if (request == TIOCGPGRP) {
+        *(int32_t *)arg = ldisc_get_pgrp(&p->ld);
+        return 0;
+    }
+    ldisc_set_pgrp(&p->ld, *(int32_t *)arg);
+    return 0;
+}
+
 static long master_ioctl(struct file *f, uint64_t request, uint64_t arg)
 {
     struct pty *p = f->priv;
+    if (request == TIOCGPGRP || request == TIOCSPGRP)
+        return pty_pgrp_ioctl(p, request, arg);
     if (request == TIOCINQ) {
         if (arg >= USER_ADDR_MAX)
             return -EFAULT;
@@ -178,6 +197,8 @@ static short slave_poll(struct file *f, struct poll_table *pt)
 static long slave_ioctl(struct file *f, uint64_t request, uint64_t arg)
 {
     struct pty *p = f->priv;
+    if (request == TIOCGPGRP || request == TIOCSPGRP)
+        return pty_pgrp_ioctl(p, request, arg);
     if (request != TIOCINQ)
         return 0;
     if (arg >= USER_ADDR_MAX)

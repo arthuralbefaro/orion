@@ -19,6 +19,7 @@ struct line_discipline {
     uint32_t tail;
     bool eof;
     bool hangup;
+    int32_t fg_pgid;
     ldisc_echo_fn echo;
     void *ctx;
 };
@@ -30,3 +31,5 @@ int64_t ldisc_read(struct line_discipline *l, void *buf, uint64_t len);
 uint32_t ldisc_available(struct line_discipline *l);
 short ldisc_poll(struct line_discipline *l, struct poll_table *pt);
 void ldisc_hangup(struct line_discipline *l);
+void ldisc_set_pgrp(struct line_discipline *l, int32_t pgid);
+int32_t ldisc_get_pgrp(struct line_discipline *l);

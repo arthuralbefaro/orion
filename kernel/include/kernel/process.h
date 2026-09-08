@@ -2,6 +2,7 @@
 
 #include <kernel/compiler.h>
 #include <kernel/wait.h>
+#include <kernel/signal.h>
 
 #define PROCESS_NAME_MAX 32
 #define PROCESS_MAX_FDS  32
@@ -29,6 +30,11 @@ struct process {
     uint64_t mmap_next;
     char cwd[PROCESS_CWD_MAX];
     int exit_code;
+    uint32_t pgid;
+    uint64_t sig_pending;
+    uint64_t sig_blocked;
+    uint64_t alarm_at;
+    struct user_sigaction sig_handlers[NSIG];
     bool autofree;
     struct thread *thread;
     struct process *parent;
@@ -45,6 +51,12 @@ int  process_fork(struct interrupt_frame *frame);
 int  process_execve(const char *path, char *const *argv, char *const *envp, struct interrupt_frame *frame);
 int  process_waitpid(int pid, int *status, int options);
 NORETURN void process_exit(int code);
+NORETURN void process_exit_signal(int sig);
+int  process_kill(int pid, int sig);
+int  process_setpgid(int pid, int pgid);
+int  process_getpgid(int pid);
+long process_alarm(uint64_t seconds);
+void process_alarm_init(void);
 void process_thread_reaped(struct process *p);
 
 int  process_fd_install(struct process *p, struct file *f);

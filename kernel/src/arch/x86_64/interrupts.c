@@ -12,6 +12,7 @@
 #include <kernel/log.h>
 #include <kernel/sched.h>
 #include <kernel/process.h>
+#include <kernel/signal.h>
 #include <kernel/smp.h>
 #include <arch/x86_64/percpu.h>
 
@@ -179,10 +180,15 @@ static void handle_exception(struct interrupt_frame *f)
 
     if ((f->cs & 3) == 3) {
         struct process *p = process_current();
-        log_error("proc", "pid %u '%s' morto: %s em RIP=%016lx (err=%lx, CR2=%016lx)",
+        int sig = f->int_no == EXC_DIVIDE_ERROR ? SIGFPE
+                : f->int_no == EXC_INVALID_OPCODE ? SIGILL : SIGSEGV;
+        log_error("proc", "pid %u '%s': %s em RIP=%016lx (err=%lx, CR2=%016lx) -> %s",
                   p->pid, p->name, exception_name((uint8_t)f->int_no), f->rip, f->err_code,
-                  read_cr2());
-        process_exit(-1);
+                  read_cr2(), signal_name(sig));
+        if (p->sig_handlers[sig].sa_handler == SIG_DFL)
+            process_exit_signal(sig);
+        signal_send(p, sig);
+        return;
     }
 
     cli();
@@ -215,6 +221,7 @@ void isr_dispatch(struct interrupt_frame *frame)
 
     if (vec < VECTOR_EXCEPTIONS_END) {
         handle_exception(frame);
+        signal_check(frame);
         return;
     }
 
@@ -236,6 +243,7 @@ void isr_dispatch(struct interrupt_frame *frame)
         else
             pic_send_eoi(irq);
         sched_check_preempt();  /* pode trocar de thread aqui (volta depois) */
+        signal_check(frame);
         return;
     }
 
@@ -250,6 +258,7 @@ void isr_dispatch(struct interrupt_frame *frame)
     /* Vetores acima das IRQs ISA vêm do LAPIC (timer, IPIs...): EOI nele. */
     lapic_eoi();
     sched_check_preempt();
+    signal_check(frame);
 }
 
 /* ---------- Init ---------- */

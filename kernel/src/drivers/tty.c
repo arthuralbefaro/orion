@@ -1,6 +1,7 @@
 #include <drivers/tty.h>
 #include <drivers/ldisc.h>
 #include <lib/printf.h>
+#include <kernel/log.h>
 
 static struct line_discipline ldisc;
 
@@ -42,4 +43,14 @@ int64_t tty_read(void *buf, uint64_t len)
 short tty_poll(struct poll_table *pt)
 {
     return ldisc_poll(&ldisc, pt);
+}
+
+void tty_set_pgrp(int32_t pgid)
+{
+    ldisc_set_pgrp(&ldisc, pgid);
+}
+
+int32_t tty_get_pgrp(void)
+{
+    return ldisc_get_pgrp(&ldisc);
 }

@@ -124,8 +124,8 @@ static void cmd_uptime(const char *args)
     (void)args;
     uint64_t ms = time_uptime_ms();
     uint64_t us = time_now_us();
-    kprintf("Uptime: %lu.%03lu s (%lu ticks a %u Hz via %s)\n",
-            ms / 1000, ms % 1000, time_ticks(), TIME_TICK_HZ, time_source_name());
+    kprintf("Uptime: %lu.%03lu s (%lu interrupcoes do %s, %u Hz nominais)\n",
+            ms / 1000, ms % 1000, time_irq_count(), time_source_name(), TIME_TICK_HZ);
     kprintf("TSC: %lu.%06lu s (%lu MHz)\n", us / 1000000, us % 1000000, time_tsc_hz() / 1000000);
 }
 

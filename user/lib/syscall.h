@@ -6,6 +6,13 @@
 #define SYS_READ          0
 #define SYS_POLL          7
 #define SYS_FCNTL         72
+#define SYS_RT_SIGACTION  13
+#define SYS_RT_SIGPROCMASK 14
+#define SYS_RT_SIGRETURN  15
+#define SYS_ALARM         37
+#define SYS_KILL          62
+#define SYS_SETPGID       109
+#define SYS_GETPGID       121
 #define SYS_WRITE         1
 #define SYS_OPEN          2
 #define SYS_CLOSE         3

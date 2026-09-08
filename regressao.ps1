@@ -44,8 +44,8 @@ function Expect-MemDelta([string]$log, [string]$what, [int]$max) {
     }
 }
 
-$buildFlag = @()
-if ($NoBuild) { $buildFlag = @("-NoBuild") }
+$buildFlag = @{}
+if ($NoBuild) { $buildFlag = @{ NoBuild = $true } }
 
 # ---------------- Sequencia A: texto ----------------
 if (-not $OnlyB) {
@@ -55,6 +55,8 @@ if (-not $OnlyB) {
         "cmd:ls /bin | wc", "wait:1",
         "cmd:memtest", "wait:2",
         "cmd:crash", "wait:2",
+        "cmd:sigtest", "wait:10",
+        "cmd:sleep 100", "wait:2", "key:03", "wait:2",
         "cmd:hello um dois", "wait:1",
         "cmd:date", "wait:1",
         "cmd:ls /dev", "wait:1",
@@ -73,7 +75,10 @@ if (-not $OnlyB) {
     Expect $a "Orion sh \(pid \d+\)" "shell de usuario subiu"
     Expect $a "ls /bin \| wc[\s\S]{0,80}?\d+\s+\d+\s+\d+" "ls /bin | wc produziu contagem"
     Expect $a "resultado: TUDO OK" "memtest TUDO OK"
-    Expect $a "morto: #PF" "crash morto por page fault"
+    Expect $a "#PF Page Fault" "crash levou page fault"
+    Expect $a "morto por sinal 11" "crash morto com SIGSEGV"
+    Expect $a "sigtest: TUDO OK" "sigtest TUDO OK"
+    Expect $a "morto por sinal 2" "Ctrl\+C matou o sleep com SIGINT"
     Expect $a "hello from ring 3" "hello rodou"
     Expect $a "argv\[2\] = dois" "argumentos chegaram ao hello"
     Expect $a "UTC 2026|UTC 20\d\d" "date imprimiu a data"
@@ -102,6 +107,9 @@ if (-not $OnlyA) {
         "mon:mouse_move -140 -332", "wait:0.4", "mon:mouse_button 1", "wait:0.3",
         "mon:mouse_move 90 130", "mon:mouse_move 90 130", "wait:0.4", "mon:mouse_button 0", "wait:1",
         "shot:out\shots\reg-wm-3-arrastada.ppm",
+        "mon:sendkey s", "mon:sendkey l", "mon:sendkey e", "mon:sendkey e", "mon:sendkey p",
+        "mon:sendkey spc", "mon:sendkey 1", "mon:sendkey 0", "mon:sendkey 0", "mon:sendkey ret",
+        "wait:2", "mon:sendkey ctrl-c", "wait:2", "shot:out\shots\reg-wm-3b-ctrlc.ppm",
         "mon:sendkey ctrl-t", "wait:2", "shot:out\shots\reg-wm-4-ctrl-t.ppm",
         "mon:sendkey ctrl-q", "wait:1.5", "shot:out\shots\reg-wm-5-ctrl-q.ppm",
         "mon:sendkey ctrl-alt-x", "wait:5",
@@ -116,6 +124,7 @@ if (-not $OnlyA) {
     Expect $b "wm: \d+x\d+, celula" "wm abriu o framebuffer"
     Expect $b "wm: terminal 0 -> sh pid \d+" "wm abriu o primeiro terminal"
     Expect $b "wm: terminal 3 -> sh pid \d+" "Ctrl\+T abriu um segundo terminal"
+    Expect $b "morto por sinal 2" "Ctrl\+C no terminal grafico matou o sleep"
     Expect $b "wm: encerrando" "Ctrl\+Alt\+X encerrou o wm"
     Expect $b "TTY-DE-VOLTA\r?\nTTY-DE-VOLTA|echo TTY-DE-VOLTA[\s\S]{0,40}TTY-DE-VOLTA" "TTY respondeu depois do wm"
     Expect $b "0 pty\(s\) viva\(s\)" "nenhuma pty vazada"

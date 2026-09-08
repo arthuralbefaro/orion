@@ -89,3 +89,32 @@ Uma linha por decisao, na ordem em que foram tomadas.
 - `SYS_POLL` refaz a varredura a cada volta em vez de manter estado entre elas:
   registra nas filas, avalia, e so dorme se nada estiver pronto. Custa uma
   varredura extra por acordada e dispensa qualquer estrutura persistente.
+
+## v1.2 (sinais)
+
+- O trampolim de `sigreturn` vem da libc: `sigaction()` preenche `sa_restorer`
+  com o endereco de uma funcao `naked` que so faz `mov $15,%rax; syscall`, e o
+  kernel empilha esse endereco como retorno do handler. E o mesmo arranjo do
+  Linux/glibc e evita colocar codigo do kernel no espaco do usuario.
+- O quadro de sinal vai na pilha do proprio processo, 128 bytes abaixo do `rsp`
+  (a red zone; os programas sao compilados com ela ativa), alinhado para o
+  handler ver `rsp % 16 == 8` como depois de um `call`.
+- `SA_RESTART` e aceito mas ignorado: chamadas bloqueantes interrompidas por
+  sinal devolvem `EINTR` e quem chama decide. O `sh` refaz o `waitpid` nesse caso.
+- Status de saida no formato do Linux: `(codigo << 8)` para saida normal e o
+  numero do sinal nos 7 bits baixos para morte por sinal. `WIFSIGNALED`/`WTERMSIG`
+  passam a funcionar e o `sh` imprime `[morto por sinal N]`.
+- O grupo de primeiro plano mora na disciplina de linha (`fg_pgid`), nao no
+  processo: e o terminal que sabe para quem mandar `SIGINT`. `TIOCSPGRP` funciona
+  igual no TTY fisico e no slave de PTY.
+- `alarm()` e conferido por uma thread de kernel (`alarmd`, 100 ms) em vez do
+  `sched_tick`: varrer a lista de processos exigiria `proc_lock` dentro da
+  `runq_lock`, invertendo a ordem de travas do sistema.
+- Correcao: `time_ticks()` passou a ser derivado do TSC. O contador de
+  interrupcoes de timer anda ~10x mais devagar que o tempo real neste QEMU
+  quando as CPUs ficam ociosas, o que esticava todo `sleep`, `alarm` e timeout
+  do sistema na mesma proporcao.
+- Correcao: `process_thread_reaped` zerava `pml4_phys` fora do `proc_lock`,
+  entao um `waitpid` concorrente podia colher e liberar o mesmo `struct process`
+  - dava `kfree` duplo. Agora a limpeza e a decisao de quem libera acontecem
+  dentro da trava.

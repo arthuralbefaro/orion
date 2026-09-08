@@ -3,9 +3,37 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <signal.h>
 #include <sys/wait.h>
+#include <sys/ioctl.h>
+#include <pty.h>
 
 #define MAX_ARGS 16
+
+static volatile int interrupted;
+static pid_t shell_pgid;
+
+static void on_sigint(int sig)
+{
+    (void)sig;
+    interrupted = 1;
+}
+
+static void set_foreground(pid_t pgid)
+{
+    int32_t g = (int32_t)pgid;
+    ioctl(STDIN_FILENO, TIOCSPGRP, &g);
+}
+
+static void report(pid_t pid, int status)
+{
+    (void)pid;
+    if (WIFSIGNALED(status))
+        fprintf(stderr, "[morto por sinal %d: %s]\n", WTERMSIG(status),
+                strsignal(WTERMSIG(status)));
+    else if (WEXITSTATUS(status) != 0)
+        fprintf(stderr, "[saiu com %d]\n", WEXITSTATUS(status));
+}
 
 static int split(char *line, char **argv)
 {
@@ -33,6 +61,8 @@ static pid_t spawn(char **argv, int in_fd, int out_fd, int extra_close)
     if (pid < 0)
         return -1;
     if (pid == 0) {
+        setpgid(0, 0);
+        signal(SIGINT, SIG_DFL);
         if (in_fd != STDIN_FILENO) { dup2(in_fd, STDIN_FILENO); close(in_fd); }
         if (out_fd != STDOUT_FILENO) { dup2(out_fd, STDOUT_FILENO); close(out_fd); }
         if (extra_close >= 0)
@@ -90,9 +120,13 @@ static void run_line(char *line)
         pid_t p2 = spawn(argv2, fds[0], STDOUT_FILENO, fds[1]);
         close(fds[0]);
         close(fds[1]);
-        int st;
-        if (p1 > 0) waitpid(p1, &st, 0);
-        if (p2 > 0) waitpid(p2, &st, 0);
+        if (p1 > 0) setpgid(p1, p1);
+        if (p2 > 0) setpgid(p2, p1 > 0 ? p1 : p2);
+        if (p1 > 0) set_foreground(p1);
+        int st = 0;
+        if (p1 > 0) while (waitpid(p1, &st, 0) < 0 && errno == EINTR) ;
+        if (p2 > 0) while (waitpid(p2, &st, 0) < 0 && errno == EINTR) ;
+        set_foreground(shell_pgid);
         return;
     }
 
@@ -105,10 +139,13 @@ static void run_line(char *line)
         perror("sh: fork");
         return;
     }
+    setpgid(pid, pid);
+    set_foreground(pid);
     int status = 0;
-    waitpid(pid, &status, 0);
-    if (status != 0)
-        fprintf(stderr, "[saiu com %d]\n", status);
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+        ;
+    set_foreground(shell_pgid);
+    report(pid, status);
 }
 
 int main(int argc, char **argv)
@@ -116,15 +153,27 @@ int main(int argc, char **argv)
     (void)argc;
     (void)argv;
     char line[256], cwd[256];
+    setpgid(0, 0);
+    shell_pgid = getpgrp();
+    set_foreground(shell_pgid);
+    signal(SIGINT, on_sigint);
     printf("Orion sh (pid %d). Digite 'help'.\n", getpid());
     for (;;) {
         if (!getcwd(cwd, sizeof(cwd)))
             strcpy(cwd, "?");
         printf("%s $ ", cwd);
         if (!fgets(line, sizeof(line), stdin)) {
+            if (interrupted) {
+                interrupted = 0;
+                stdin->err = 0;
+                stdin->eof = 0;
+                putchar('\n');
+                continue;
+            }
             putchar('\n');
             return 0;
         }
+        interrupted = 0;
         char *nl = strchr(line, '\n');
         if (nl)
             *nl = '\0';

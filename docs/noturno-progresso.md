@@ -7,8 +7,8 @@ Base do turno: commit `fe29851` (v1.0), `.\check.ps1` limpo, regressao verde.
 
 | # | Etapa | Estado | Inicio | Fim | Commit |
 | --- | --- | --- | --- | --- | --- |
-| 4.1 | Filas de espera e poll (v1.1) | [ ] | 22:52 | - | - |
-| 4.2 | Sinais (v1.2) | [ ] | - | - | - |
+| 4.1 | Filas de espera e poll (v1.1) | [x] | 22:52 | 02:35 | `5601c92` |
+| 4.2 | Sinais (v1.2) | [ ] | 02:35 | - | - |
 | 4.3 | Escrita no FAT e redirecionamentos (v1.3) | [ ] | - | - | - |
 | 4.4 | Teclas estendidas e edicao de linha (v1.4) | [ ] | - | - | - |
 | 4.5 | Fork copy-on-write (v1.5) | [ ] | - | - | - |
@@ -27,6 +27,21 @@ A proxima etapa e a primeira linha com `[ ]` na tabela acima.
 
 ## Diario
 
-### 4.1 Filas de espera e poll - inicio 22:52
-Objetivo: trocar toda espera ocupada (`thread_sleep_ms(2..5)`) por filas de
-espera de verdade, e expor `SYS_POLL`.
+### 4.1 Filas de espera e poll - 22:52 as 02:35 - commit 5601c92 - FEITO
+`kernel/wait.{h,c}`: waitqueue com `struct wait_entry` na pilha do dormidor e
+lista por thread (`t->waits`), o que permite dormir em varias filas (base do
+poll). Ordem de travas do sistema: trava de dados -> `runq_lock`.
+Migrados: disciplina de linha, PTY (master e slave), pipes, `waitpid` e
+`/dev/input`. Nao sobrou nenhum `thread_sleep_ms(2..5)` de espera ocupada.
+`SYS_POLL` (7) sobre `file_ops.poll`; `SYS_FCNTL` (72) com `O_NONBLOCK`; o `wm`
+usa `poll` e nao usa mais o timeout via ioctl.
+Dois problemas achados: (1) colher threads mortas dentro da `runq_lock` invertia
+a ordem contra `proc_lock` do `waitpid` - a colheita foi movida para depois do
+unlock em `sched_post_switch`; (2) uma fila de espera por processo exigiria
+garantir a vida do `struct process` do pai na hora de colher o filho, entao
+`waitpid` usa uma fila global unica de saidas.
+Medido com o `wm` aberto e parado, 4 CPUs: 31 trocas de contexto em 3,2 s
+(~10/s no total). Antes, cada leitor bloqueado acordava a cada 2 ms e o `wm` a
+cada 20 ms.
+
+### 4.2 Sinais - inicio 02:35

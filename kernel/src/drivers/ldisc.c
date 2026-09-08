@@ -2,6 +2,9 @@
 #include <kernel/sched.h>
 #include <kernel/wait.h>
 #include <kernel/syscall.h>
+#include <kernel/signal.h>
+#include <kernel/process.h>
+#include <kernel/log.h>
 #include <lib/string.h>
 
 static void ready_push(struct line_discipline *l, const char *src, uint32_t len)
@@ -28,6 +31,7 @@ void ldisc_input(struct line_discipline *l, char c)
 {
     char out[4];
     uint32_t out_len = 0;
+    int32_t interrupt_pgid = 0;
 
     if (c == '\r')
         c = '\n';
@@ -46,6 +50,7 @@ void ldisc_input(struct line_discipline *l, char c)
         l->line_len = 0;
         memcpy(out, "^C\n", 3);
         out_len = 3;
+        interrupt_pgid = l->fg_pgid;
         break;
     case 0x04:
         if (l->line_len > 0) {
@@ -77,6 +82,8 @@ void ldisc_input(struct line_discipline *l, char c)
         wake_up_all(&l->readers);
     if (out_len && l->echo)
         l->echo(l->ctx, out, out_len);
+    if (interrupt_pgid > 0)
+        process_kill(-interrupt_pgid, SIGINT);
 }
 
 void ldisc_write(struct line_discipline *l, const void *buf, uint64_t len)
@@ -92,6 +99,16 @@ uint32_t ldisc_available(struct line_discipline *l)
     uint32_t n = (l->head - l->tail + LDISC_READY_MAX) % LDISC_READY_MAX;
     spin_unlock_irqrestore(&l->lock, flags);
     return n;
+}
+
+void ldisc_set_pgrp(struct line_discipline *l, int32_t pgid)
+{
+    l->fg_pgid = pgid;
+}
+
+int32_t ldisc_get_pgrp(struct line_discipline *l)
+{
+    return l->fg_pgid;
 }
 
 void ldisc_hangup(struct line_discipline *l)
@@ -126,6 +143,10 @@ int64_t ldisc_read(struct line_discipline *l, void *buf, uint64_t len)
             return 0;
         }
         wait_sleep(&l->readers, &l->lock);
+        if (signal_pending_current()) {
+            spin_unlock_irqrestore(&l->lock, flags);
+            return -EINTR;
+        }
     }
 }
 

@@ -3,6 +3,7 @@
 #include <kernel/spinlock.h>
 #include <kernel/sched.h>
 #include <kernel/wait.h>
+#include <kernel/signal.h>
 #include <kernel/time.h>
 #include <kernel/syscall.h>
 
@@ -128,6 +129,8 @@ int64_t input_read(void *buf, uint64_t len)
         }
         wait_sleep_timeout(&readers, &lock, wait_ms);
         spin_unlock_irqrestore(&lock, flags);
+        if (signal_pending_current())
+            return -EINTR;
     }
 }
 

@@ -136,6 +136,7 @@ void kmain(void)
     }
 
     tty_init();
+    process_alarm_init();
     bool kernel_shell = true;
     if (vfs_mounted() && process_spawn_path("/bin/init", NULL)) {
         kernel_shell = false;

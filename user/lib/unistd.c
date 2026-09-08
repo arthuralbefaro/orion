@@ -33,6 +33,9 @@ int     dup2(int oldfd, int newfd)                 { return (int)__syscall_ret(s
 pid_t   fork(void)                                 { return (pid_t)__syscall_ret(syscall0(SYS_FORK)); }
 pid_t   getpid(void)                               { return (pid_t)syscall0(SYS_GETPID); }
 pid_t   getppid(void)                              { return (pid_t)syscall0(SYS_GETPPID); }
+int     setpgid(pid_t pid, pid_t pgid)             { return (int)__syscall_ret(syscall2(SYS_SETPGID, pid, pgid)); }
+pid_t   getpgid(pid_t pid)                         { return (pid_t)__syscall_ret(syscall1(SYS_GETPGID, pid)); }
+pid_t   getpgrp(void)                              { return getpgid(0); }
 int     chdir(const char *path)                    { return (int)__syscall_ret(syscall1(SYS_CHDIR, (long)path)); }
 void    sched_yield(void)                          { syscall0(SYS_SCHED_YIELD); }
 int     stat(const char *path, struct stat *st)    { return (int)__syscall_ret(syscall2(SYS_STAT, (long)path, (long)st)); }

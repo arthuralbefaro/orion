@@ -2,7 +2,9 @@
 
 #include <kernel/compiler.h>
 
-#define TIOCINQ 0x541B
+#define TIOCINQ  0x541B
+#define TIOCGPGRP 0x540F
+#define TIOCSPGRP 0x5410
 
 struct file;
 

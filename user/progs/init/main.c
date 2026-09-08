@@ -23,7 +23,10 @@ int main(int argc, char **argv)
         }
         int status = 0;
         waitpid(pid, &status, 0);
-        printf("init: sh terminou (codigo %d), reiniciando\n", status);
+        if (WIFSIGNALED(status))
+            printf("init: sh morto por sinal %d, reiniciando\n", WTERMSIG(status));
+        else
+            printf("init: sh terminou (codigo %d), reiniciando\n", WEXITSTATUS(status));
         usleep(500000);
     }
 }

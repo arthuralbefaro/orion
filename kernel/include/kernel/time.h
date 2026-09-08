@@ -12,7 +12,8 @@
 
 void     time_init(void);
 void     time_init_ap(void);
-uint64_t time_ticks(void);           /* ticks desde o boot */
+uint64_t time_ticks(void);           /* milissegundos desde o boot, medidos pelo TSC */
+uint64_t time_irq_count(void);       /* interrupcoes de timer recebidas na CPU 0 */
 uint64_t time_uptime_ms(void);
 uint64_t time_now_us(void);          /* microssegundos desde o boot (TSC) */
 void     time_sleep_ms(uint64_t ms); /* bloqueante, requer interrupções */

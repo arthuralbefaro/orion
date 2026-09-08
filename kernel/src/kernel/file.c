@@ -1,10 +1,13 @@
 #include <kernel/file.h>
 #include <kernel/sched.h>
 #include <kernel/wait.h>
+#include <kernel/signal.h>
+#include <kernel/process.h>
 #include <kernel/spinlock.h>
 #include <kernel/syscall.h>
 #include <fs/devfs.h>
 #include <drivers/tty.h>
+#include <drivers/pty.h>
 #include <mm/heap.h>
 #include <lib/string.h>
 
@@ -82,6 +85,20 @@ static int64_t tty_file_write(struct file *f, const void *buf, uint64_t len)
     return (int64_t)len;
 }
 
+static long tty_file_ioctl(struct file *f, uint64_t request, uint64_t arg)
+{
+    (void)f;
+    if (request == TIOCGPGRP || request == TIOCSPGRP) {
+        if (arg >= USER_ADDR_MAX)
+            return -EFAULT;
+        if (request == TIOCGPGRP)
+            *(int32_t *)arg = tty_get_pgrp();
+        else
+            tty_set_pgrp(*(int32_t *)arg);
+    }
+    return 0;
+}
+
 static short tty_file_poll(struct file *f, struct poll_table *pt)
 {
     (void)f;
@@ -91,6 +108,7 @@ static short tty_file_poll(struct file *f, struct poll_table *pt)
 static const struct file_ops tty_ops = {
     .read = tty_file_read,
     .write = tty_file_write,
+    .ioctl = tty_file_ioctl,
     .poll = tty_file_poll,
 };
 
@@ -197,6 +215,10 @@ static int64_t pipe_read(struct file *f, void *buf, uint64_t len)
             break;
         }
         wait_sleep(&p->rq, &p->lock);
+        if (signal_pending_current() && !n) {
+            n = (uint64_t)-EINTR;
+            break;
+        }
     }
     spin_unlock_irqrestore(&p->lock, flags);
     return (int64_t)n;
@@ -212,6 +234,8 @@ static int64_t pipe_write(struct file *f, const void *buf, uint64_t len)
     for (;;) {
         if (p->readers == 0) {
             ret = n ? (int64_t)n : -EPIPE;
+            if (!n)
+                signal_send(process_current(), SIGPIPE);
             break;
         }
         uint64_t before = n;
@@ -230,6 +254,10 @@ static int64_t pipe_write(struct file *f, const void *buf, uint64_t len)
             break;
         }
         wait_sleep(&p->wq, &p->lock);
+        if (signal_pending_current()) {
+            ret = n ? (int64_t)n : -EINTR;
+            break;
+        }
     }
     spin_unlock_irqrestore(&p->lock, flags);
     return ret;

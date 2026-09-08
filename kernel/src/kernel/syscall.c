@@ -16,6 +16,7 @@
 #include <fs/devfs.h>
 #include <drivers/pty.h>
 #include <kernel/wait.h>
+#include <kernel/signal.h>
 #include <mm/heap.h>
 
 extern void syscall_entry(void);
@@ -209,6 +210,31 @@ static long sys_fcntl(int fd, int cmd, uint64_t arg)
     default:
         return -EINVAL;
     }
+}
+
+static long sys_kill(int pid, int sig)
+{
+    if (sig < 0 || sig >= NSIG)
+        return -EINVAL;
+    return process_kill(pid, sig);
+}
+
+static long sys_rt_sigaction(int sig, const struct user_sigaction *act, struct user_sigaction *old)
+{
+    if (act && !user_range_ok((uint64_t)act, sizeof(*act)))
+        return -EFAULT;
+    if (old && !user_range_ok((uint64_t)old, sizeof(*old)))
+        return -EFAULT;
+    return signal_sigaction(sig, act, old);
+}
+
+static long sys_rt_sigprocmask(int how, const uint64_t *set, uint64_t *old)
+{
+    if (set && !user_range_ok((uint64_t)set, sizeof(*set)))
+        return -EFAULT;
+    if (old && !user_range_ok((uint64_t)old, sizeof(*old)))
+        return -EFAULT;
+    return signal_procmask(how, set, old);
 }
 
 static void fill_stat(const struct vfs_node *n, uint32_t mode, struct user_stat *st)
@@ -543,12 +569,20 @@ void syscall_dispatch(struct interrupt_frame *f)
     case SYS_OPENPTY:     ret = sys_openpty((int *)f->rdi); break;
     case SYS_POLL:        ret = sys_poll((struct user_pollfd *)f->rdi, f->rsi, (int)f->rdx); break;
     case SYS_FCNTL:       ret = sys_fcntl((int)f->rdi, (int)f->rsi, f->rdx); break;
+    case SYS_KILL:        ret = sys_kill((int)f->rdi, (int)f->rsi); break;
+    case SYS_RT_SIGACTION: ret = sys_rt_sigaction((int)f->rdi, (const struct user_sigaction *)f->rsi, (struct user_sigaction *)f->rdx); break;
+    case SYS_RT_SIGPROCMASK: ret = sys_rt_sigprocmask((int)f->rdi, (const uint64_t *)f->rsi, (uint64_t *)f->rdx); break;
+    case SYS_RT_SIGRETURN: ret = signal_sigreturn(f); break;
+    case SYS_ALARM:       ret = process_alarm(f->rdi); break;
+    case SYS_SETPGID:     ret = process_setpgid((int)f->rdi, (int)f->rsi); break;
+    case SYS_GETPGID:     ret = process_getpgid((int)f->rdi); break;
     default:
         log_warn("syscall", "pid %u: syscall %lu desconhecida", process_current()->pid, f->rax);
         ret = -ENOSYS;
         break;
     }
     f->rax = (uint64_t)ret;
+    signal_check(f);
 }
 
 void syscall_init_cpu(void)

@@ -6,6 +6,8 @@
 #include <kernel/syscall.h>
 #include <kernel/spinlock.h>
 #include <kernel/wait.h>
+#include <kernel/signal.h>
+#include <kernel/time.h>
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/gdt.h>
 #include <arch/x86_64/interrupts.h>
@@ -181,6 +183,7 @@ static struct process *process_alloc(const char *name)
         return NULL;
     }
     p->state = PROC_RUNNING;
+    signal_init_process(p);
     p->mmap_next = USER_MMAP_BASE;
     strlcpy(p->cwd, "/", sizeof(p->cwd));
     return p;
@@ -233,6 +236,8 @@ static void process_register(struct process *p)
 {
     uint64_t flags = spin_lock_irqsave(&proc_lock);
     p->pid = next_pid++;
+    if (!p->pgid)
+        p->pgid = p->pid;
     p->next = processes;
     processes = p;
     spin_unlock_irqrestore(&proc_lock, flags);
@@ -423,6 +428,9 @@ int process_fork(struct interrupt_frame *frame)
     child->brk_start = parent->brk_start;
     child->brk = parent->brk;
     child->mmap_next = parent->mmap_next;
+    child->pgid = parent->pgid;
+    child->sig_blocked = parent->sig_blocked;
+    memcpy(child->sig_handlers, parent->sig_handlers, sizeof(child->sig_handlers));
     strlcpy(child->cwd, parent->cwd, sizeof(child->cwd));
     child->parent = parent;
     child->thread = NULL;
@@ -495,6 +503,7 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
                 name = c + 1;
         strlcpy(p->name, name, sizeof(p->name));
         strlcpy(thread_current()->name, name, THREAD_NAME_MAX);
+        signal_reset_on_exec(p);
         thread_current()->fs_base = 0;
         wrmsr(MSR_IA32_FS_BASE, 0);
         cli();
@@ -556,14 +565,19 @@ int process_waitpid(int pid, int *status, int options)
             return 0;
         }
         wait_sleep(&child_exit_wq, &proc_lock);
+        if (signal_pending_current()) {
+            spin_unlock_irqrestore(&proc_lock, flags);
+            return -EINTR;
+        }
     }
 }
 
-NORETURN void process_exit(int code)
+static NORETURN void process_terminate(int status)
 {
     struct process *p = process_current();
     ASSERT(p);
-    p->exit_code = code;
+    p->exit_code = status;
+    p->alarm_at = 0;
     for (int i = 0; i < PROCESS_MAX_FDS; i++)
         if (p->fds[i]) {
             file_unref(p->fds[i]);
@@ -571,22 +585,127 @@ NORETURN void process_exit(int code)
         }
     uint64_t flags = spin_lock_irqsave(&proc_lock);
     p->state = PROC_ZOMBIE;
-    if (!p->parent)
+    if (p->parent)
+        signal_send(p->parent, SIGCHLD);
+    else
         p->autofree = true;
     spin_unlock_irqrestore(&proc_lock, flags);
     thread_exit();
 }
 
+NORETURN void process_exit(int code)
+{
+    process_terminate((code & 0xFF) << 8);
+}
+
+NORETURN void process_exit_signal(int sig)
+{
+    process_terminate(sig & 0x7F);
+}
+
+int process_kill(int pid, int sig)
+{
+    struct process *me = process_current();
+    int found = 0;
+    int err = 0;
+    uint64_t flags = spin_lock_irqsave(&proc_lock);
+    uint32_t group = pid == 0 ? me->pgid : (uint32_t)(-pid);
+    for (struct process *c = processes; c; c = c->next) {
+        bool match = pid > 0 ? (int)c->pid == pid : c->pgid == group;
+        if (!match || c->state == PROC_ZOMBIE)
+            continue;
+        found++;
+        int r = sig ? signal_send(c, sig) : 0;
+        if (r < 0)
+            err = r;
+    }
+    spin_unlock_irqrestore(&proc_lock, flags);
+    if (err)
+        return err;
+    return found ? 0 : -ESRCH;
+}
+
+int process_setpgid(int pid, int pgid)
+{
+    struct process *me = process_current();
+    uint64_t flags = spin_lock_irqsave(&proc_lock);
+    struct process *target = me;
+    if (pid > 0) {
+        target = NULL;
+        for (struct process *c = processes; c; c = c->next)
+            if ((int)c->pid == pid)
+                target = c;
+    }
+    int ret = 0;
+    if (!target)
+        ret = -ESRCH;
+    else
+        target->pgid = pgid > 0 ? (uint32_t)pgid : target->pid;
+    spin_unlock_irqrestore(&proc_lock, flags);
+    return ret;
+}
+
+int process_getpgid(int pid)
+{
+    struct process *me = process_current();
+    if (pid <= 0)
+        return (int)me->pgid;
+    uint64_t flags = spin_lock_irqsave(&proc_lock);
+    int ret = -ESRCH;
+    for (struct process *c = processes; c; c = c->next)
+        if ((int)c->pid == pid)
+            ret = (int)c->pgid;
+    spin_unlock_irqrestore(&proc_lock, flags);
+    return ret;
+}
+
+long process_alarm(uint64_t seconds)
+{
+    struct process *p = process_current();
+    uint64_t now = time_ticks();
+    uint64_t left = 0;
+    if (p->alarm_at > now)
+        left = (p->alarm_at - now) / TIME_TICK_HZ;
+    p->alarm_at = seconds ? now + seconds * TIME_TICK_HZ : 0;
+    return (long)left;
+}
+
+static void alarm_thread(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        thread_sleep_ms(100);
+        uint64_t now = time_ticks();
+        uint64_t flags = spin_lock_irqsave(&proc_lock);
+        for (struct process *c = processes; c; c = c->next) {
+            if (c->alarm_at && c->alarm_at <= now && c->state != PROC_ZOMBIE) {
+                c->alarm_at = 0;
+                signal_send(c, SIGALRM);
+            }
+        }
+        spin_unlock_irqrestore(&proc_lock, flags);
+    }
+}
+
+void process_alarm_init(void)
+{
+    thread_create("alarmd", alarm_thread, NULL);
+}
+
 void process_thread_reaped(struct process *p)
 {
-    if (p->pml4_phys) {
-        vmm_destroy_address_space(p->pml4_phys);
-        p->pml4_phys = 0;
-    }
-    if (p->autofree) {
-        process_unregister(p);
+    uint64_t flags = spin_lock_irqsave(&proc_lock);
+    uint64_t pml4 = p->pml4_phys;
+    p->pml4_phys = 0;
+    bool autofree = p->autofree;
+    if (autofree)
+        unregister_locked(p);
+    spin_unlock_irqrestore(&proc_lock, flags);
+
+    if (pml4)
+        vmm_destroy_address_space(pml4);
+    if (autofree)
         kfree(p);
-    }
     wake_up_all(&child_exit_wq);
 }
 
