@@ -9,8 +9,8 @@ Base do turno: commit `fe29851` (v1.0), `.\check.ps1` limpo, regressao verde.
 | --- | --- | --- | --- | --- | --- |
 | 4.1 | Filas de espera e poll (v1.1) | [x] | 22:52 | 02:35 | `5601c92` |
 | 4.2 | Sinais (v1.2) | [x] | 02:35 | 14:55 | `80361d7` |
-| 4.3 | Escrita no FAT e redirecionamentos (v1.3) | [ ] | 14:55 | - | - |
-| 4.4 | Teclas estendidas e edicao de linha (v1.4) | [ ] | - | - | - |
+| 4.3 | Escrita no FAT e redirecionamentos (v1.3) | [x] | 14:55 | 20:10 | `a0da561` |
+| 4.4 | Teclas estendidas e edicao de linha (v1.4) | [ ] | 20:10 | - | - |
 | 4.5 | Fork copy-on-write (v1.5) | [ ] | - | - | - |
 | 4.6 | Rede (v1.6) | [ ] | - | - | - |
 | 4.7 | GUI: boot direto e apps (v1.7) | [ ] | - | - | - |
@@ -68,4 +68,30 @@ isso o primeiro Ctrl+C nao matava nada.
 Fora do escopo: zumbi orfao cujo pai morreu antes de colher fica registrado ate
 o boot seguinte (aparece em `procs`); nao vaza paginas, so o `struct process`.
 
-### 4.3 Escrita no FAT e redirecionamentos - inicio 14:55
+### 4.3 Escrita no FAT e redirecionamentos - 14:55 as 20:10 - commit a0da561 - FEITO
+FAT com escrita completa: alocacao/liberacao de clusters (12/16/32), entradas de
+diretorio com LFN, `write` com extensao, `truncate`, `unlink`, `mkdir` (com `.` e
+`..`), `rename`, datas do RTC. Camada de blocos ganhou escrita (AHCI
+`WRITE DMA EXT`) e um cache de 256 setores write-back; `bdflush` (no VFS)
+descarrega FAT e cache a cada 2 s.
+VFS: create/write/unlink/mkdir/rename/truncate/sync. `open` com O_CREAT/O_TRUNC/
+O_APPEND. Syscalls mkdir(83)/rmdir(84)/unlink(87)/rename(82)/fsync(74)/
+ftruncate(77)/sync(162). `fopen` com w/a/r+.
+`sh` reescrito: redirecionamentos `>`, `>>`, `<`, `2>` e pipelines de N estagios.
+Programas novos: mkdir, rm -r, cp, mv, touch, head, tail, grep, sort, uniq, tee,
+mkfs, fstest.
+**Limitacao do ambiente**: o `vvfat` do QEMU (`fat:rw:out/esp`) nao aguenta
+escrita de verdade - aborta o proprio QEMU com
+`check_directory_consistency: assertion failed` ao criar muitos arquivos, ou
+falha com `Error handling renames (-2)`. Por isso entrou a opcao `-Disk`:
+`out\disk.img` de 64 MiB cru, formatado pelo `mkfs /dev/sdb` dentro do Orion
+(precisou de dispositivos de bloco em `/dev`) e montado em `/mnt` pelo comando
+`mount` do shell do kernel. Nesse disco o teste pesado passa inteiro: 300
+arquivos com nome longo, readdir de todos, e um arquivo de 3 MiB.
+Dois problemas alem do vvfat: (1) gerar nome curto tentando `NOME~1`, `NOME~2`...
+varre o diretorio por candidato e fazia criar 300 arquivos virar O(n^3) - trocado
+por duas letras + hash do nome longo, como o Windows faz; (2) a opcao `-Disk`
+inseria argumentos vazios na linha de comando do QEMU quando desligada, e o QEMU
+saia sem mensagem - a regressao inteira caiu ate eu achar isso.
+
+### 4.4 Teclas estendidas e edicao de linha - inicio 20:10
