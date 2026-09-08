@@ -76,6 +76,10 @@ A (texto), B (grafica, com screenshots) e C (disco cru, escrita e shell).
     cp mv rm mkdir touch head tail          arquivos
     grep sort uniq tee                      texto
     edit     editor de tela cheia (Ctrl+S salva, Ctrl+X sai)
+    ifconfig mostra ou configura a rede (ifconfig dhcp pede endereco)
+    ping     manda ICMP echo (ping 10.0.2.2 4)
+    nslookup consulta um registro A no DNS
+    dhcp     pede endereco, mascara, gateway e DNS
     mkfs     formata um disco em FAT16 (ex.: mkfs /dev/sdb ORION)
     memtest  auto-teste de mmap, malloc, stat, snprintf
     fstest   auto-teste do sistema de arquivos (-a inclui 300 arquivos e 3 MiB)
@@ -88,6 +92,22 @@ A (texto), B (grafica, com screenshots) e C (disco cru, escrita e shell).
     evtest   imprime eventos de /dev/input por alguns segundos
     wm       compositor de janelas
 
+### Rede
+O QEMU sobe uma e1000 com a rede de usuario (SLIRP): 10.0.2.15 para o Orion,
+10.0.2.2 de gateway e 10.0.2.3 de DNS.
+
+    dhcp                      pega endereco, mascara, gateway e DNS
+    ifconfig                  mostra a interface e os contadores da placa
+    ifconfig 10.0.2.15 255.255.255.0 10.0.2.2 10.0.2.3     configura a mao
+    ping 10.0.2.2 4           ICMP echo
+    nslookup example.com      consulta A no DNS
+    Ctrl+K -> net, arp        estado da pilha e cache ARP
+
+A pilha faz ARP, IPv4, ICMP e UDP; sockets sao `SOCK_DGRAM` e `SOCK_RAW`
+(socket, bind, connect, sendto, recvfrom). Nao tem TCP. O `test.ps1` grava todo
+o trafego em `out
+et.pcap`.
+
 ## Dispositivos em /dev
     /dev/fb0        framebuffer: ioctl FBIOGET_INFO / FBIOREDRAW, mmap
     /dev/input      eventos de teclado e mouse (captura exclusiva enquanto aberto)
@@ -99,7 +119,8 @@ Numeros do Linux onde existe equivalente: read, write, open, close, stat, fstat,
 poll, lseek, mmap, munmap, brk, ioctl, pipe, dup, dup2, nanosleep, getpid, fork,
 execve, exit, wait4, getcwd, chdir, getppid, arch_prctl, clock_gettime, fcntl,
 kill, rt_sigaction, rt_sigprocmask, rt_sigreturn, alarm, setpgid, getpgid,
-rename, mkdir, rmdir, unlink, fsync, ftruncate, sync; e dois proprios:
+rename, mkdir, rmdir, unlink, fsync, ftruncate, sync, socket, bind, connect,
+sendto, recvfrom; e dois proprios:
 readdir (1000) e openpty (1001).
 
 ## Layout

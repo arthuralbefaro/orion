@@ -11,6 +11,11 @@
 #define SYS_ALARM         37
 #define SYS_KILL          62
 #define SYS_SETPGID       109
+#define SYS_SOCKET        41
+#define SYS_CONNECT       42
+#define SYS_SENDTO        44
+#define SYS_RECVFROM      45
+#define SYS_BIND          49
 #define SYS_GETPGID       121
 #define SYS_RENAME        82
 #define SYS_MKDIR         83
@@ -75,6 +80,16 @@
 #define ENOTEMPTY 39
 #define EROFS   30
 #define ENOSPC  28
+#define EMSGSIZE 90
+#define EAFNOSUPPORT 97
+#define EADDRINUSE 98
+#define ENETUNREACH 101
+#define ECONNREFUSED 111
+#define EHOSTUNREACH 113
+#define ETIMEDOUT 110
+#define EPROTONOSUPPORT 93
+#define ENOTSOCK 88
+#define EDESTADDRREQ 89
 
 #define USER_ADDR_MAX 0x0000800000000000ull
 #define USER_MMAP_BASE 0x0000100000000000ull

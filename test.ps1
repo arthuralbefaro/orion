@@ -83,6 +83,8 @@ $qemuArgs = @(
     "-no-reboot", "-no-shutdown"
 )
 
+$qemuArgs += @("-netdev", "user,id=n0", "-device", "e1000,netdev=n0",
+               "-object", "filter-dump,id=d0,netdev=n0,file=out/net.pcap")
 if ($Disk) { $qemuArgs += @("-drive", "format=raw,file=out/disk.img") }
 
 $qemuErr = Join-Path $OutDir "test-qemu.log"

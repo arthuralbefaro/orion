@@ -13,6 +13,11 @@
 #define SYS_KILL          62
 #define SYS_SETPGID       109
 #define SYS_GETPGID       121
+#define SYS_SOCKET        41
+#define SYS_CONNECT       42
+#define SYS_SENDTO        44
+#define SYS_RECVFROM      45
+#define SYS_BIND          49
 #define SYS_RENAME        82
 #define SYS_MKDIR         83
 #define SYS_RMDIR         84

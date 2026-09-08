@@ -50,6 +50,7 @@ void wait_unlink(struct thread *t)
 bool wait_sleep_timeout(struct waitqueue *wq, spinlock_t *lock, uint64_t ms)
 {
     struct wait_entry e;
+    uint64_t flags = irq_save();
 
     sched_runq_lock();
     entry_attach(&e, wq, thread_current());
@@ -64,6 +65,7 @@ bool wait_sleep_timeout(struct waitqueue *wq, spinlock_t *lock, uint64_t ms)
 
     if (lock)
         spin_lock(lock);
+    irq_restore(flags);
     return woken;
 }
 

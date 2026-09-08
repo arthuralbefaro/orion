@@ -30,6 +30,7 @@
 #define PX_CI   0x38
 
 #define GHC_AE      (1u << 31)
+#define GHC_IE      (1u << 1)
 #define CMD_ST      (1u << 0)
 #define CMD_FRE     (1u << 4)
 #define CMD_FR      (1u << 14)
@@ -120,6 +121,8 @@ static void port_stop(struct ahci_port *p)
 static void port_start(struct ahci_port *p)
 {
     wait_clear(p->regs, PX_CMD, CMD_CR, 500000);
+    wr(p->regs, PX_IE, 0);
+    wr(p->regs, PX_IS, 0xFFFFFFFF);
     wr(p->regs, PX_CMD, rd(p->regs, PX_CMD) | CMD_FRE);
     wr(p->regs, PX_CMD, rd(p->regs, PX_CMD) | CMD_ST);
 }
@@ -167,7 +170,10 @@ static bool port_command(struct ahci_port *p, uint8_t ata_cmd, uint64_t lba, uin
             return false;
         pause();
     }
-    return !(rd(p->regs, PX_TFD) & TFD_ERR);
+    bool ok = !(rd(p->regs, PX_TFD) & TFD_ERR);
+    wr(p->regs, PX_IS, 0xFFFFFFFF);
+    wr(abar, HBA_IS, 0xFFFFFFFF);
+    return ok;
 }
 
 static bool ahci_read(struct blockdev *dev, uint64_t lba, uint32_t count, void *buf)
@@ -293,7 +299,7 @@ void ahci_init(void)
     uint64_t abar_phys = dev->bar[5] & ~0xFull;
     abar = vmm_map_mmio(abar_phys, 0x1100);
 
-    wr(abar, HBA_GHC, rd(abar, HBA_GHC) | GHC_AE);
+    wr(abar, HBA_GHC, (rd(abar, HBA_GHC) | GHC_AE) & ~GHC_IE);
     uint32_t cap = rd(abar, HBA_CAP);
     uint32_t pi = rd(abar, HBA_PI);
     log_info("ahci", "controlador %04x:%04x em %02x:%02x.%u, ABAR %08lx, %u porta(s), %s",

@@ -215,3 +215,44 @@ Uma linha por decisao, na ordem em que foram tomadas.
 - O `mem` do shell do kernel mostra paginas compartilhadas, faltas de COW e
   copias feitas. Sem isso nao da para distinguir "o fork ficou barato" de
   "o fork parou de funcionar".
+
+## v1.6 (rede)
+
+- Placa escolhida: Intel e1000 (82540EM), que e o padrao do QEMU e tem uma
+  interface simples de aneis de descritores. O driver procura por classe PCI
+  (02.00) e nao por um par vendor/device fixo.
+- O MAC sai de `RAL`/`RAH` depois do reset, nao da EEPROM: o proprio hardware
+  recarrega esses registradores da EEPROM, entao ler o resultado e mais simples
+  e vale para qualquer variante.
+- O driver usa interrupcao **e** um laco de recepcao com espera de 20 ms. A
+  interrupcao e o caminho normal; o tempo limite e uma rede de seguranca para o
+  caso de a IRQ do PCI nao chegar, e nao custa nada quando ela chega.
+- A pilha e uma interface so (`eth0`), sem tabela de rotas: destino fora da
+  mascara vai para o gateway. Uma tabela de rotas de verdade nao acrescentaria
+  nada num sistema com uma placa.
+- O cache ARP tem 16 entradas com validade de 2 minutos. `net_resolve` **dorme**
+  esperando a resposta em vez de devolver "tente de novo": quem envia esta sempre
+  em contexto de processo (uma syscall ou o cliente DHCP), entao dormir e
+  legitimo e evita ter que enfileirar pacotes pendentes.
+- O ICMP echo request e respondido dentro do kernel; os outros tipos de ICMP vao
+  para os sockets raw. Assim o Orion responde a ping mesmo sem nenhum programa
+  aberto.
+- Socket raw entrega so o corpo do ICMP, sem o cabecalho IP. E diferente do
+  Linux, mas o `ping` fica mais simples e nada mais usa raw hoje.
+- O cliente DHCP mora no kernel, nao num programa. Ele precisa mandar de
+  0.0.0.0 para 255.255.255.255 antes de a interface ter endereco, um caso
+  especial que teria que vazar para a API de sockets; e a configuracao da
+  interface e do kernel de qualquer jeito. O `dhcp` e o `ifconfig dhcp` so pedem
+  ao kernel que rode o cliente.
+- A configuracao da interface e lida e escrita por ioctl **no proprio socket**
+  (`SIOCGIFCONF_ORION` e amigos), como no Unix, em vez de um `/dev/net` novo.
+- Sem TCP nesta etapa (e sem `wget`): o passo pedia TCP como opcional e a
+  maquina de estados com retransmissao e janela nao cabia no tempo da etapa.
+  UDP, ICMP e DNS cobrem o que os programas pedidos precisam.
+- O `test.ps1` grava todo o trafego em `out\net.pcap` (`filter-dump` do QEMU),
+  que e o que permite conferir um pacote byte a byte quando algo nao responde.
+- O console do kernel ganhou o mesmo parser CSI do terminal grafico (cursor,
+  apagamento, 16 cores, video reverso). Sem ele o `edit` e o historico do `sh`
+  despejavam as sequencias como texto na tela fisica, o que alem de feio fazia o
+  framebuffer rolar varias vezes por tecla - e rolar 1280x800 e um memmove de
+  4 MiB, o que deixava o editor segundos atras do teclado.

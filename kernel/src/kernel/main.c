@@ -6,6 +6,8 @@
 #include <kernel/syscall.h>
 #include <kernel/smp.h>
 #include <drivers/pci.h>
+#include <drivers/e1000.h>
+#include <net/net.h>
 #include <drivers/ahci.h>
 #include <fs/vfs.h>
 #include <fs/block.h>
@@ -117,6 +119,8 @@ void kmain(void)
     smp_init();
     pci_init();
     ahci_init();
+    e1000_init();
+    net_init();
     blockdev_cache_init();
     vfs_init();
     vfs_flush_init();

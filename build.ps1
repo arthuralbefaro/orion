@@ -162,6 +162,7 @@ if ($Disk) {
             "-serial", "stdio",
         "-no-reboot", "-no-shutdown"
     )
+    $qemuArgs += @("-netdev", "user,id=n0", "-device", "e1000,netdev=n0")
     if ($Disk) { $qemuArgs += @("-drive", "format=raw,file=out/disk.img") }
     if ($Accel) { $qemuArgs += @("-accel", $Accel) }
     if ($Gdb)   { $qemuArgs += @("-s", "-S"); Write-Host "QEMU parado; conecte o debugger em localhost:1234" -ForegroundColor Yellow }

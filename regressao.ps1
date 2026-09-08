@@ -78,7 +78,12 @@ if ($runAll -or $OnlyA) {
         "cmd:history", "wait:1",
         "cmd:forktest", "wait:30",
         "cmd:forktest -s 6", "wait:3", "key:0B", "cmd:mem", "key:0B", "wait:12",
+        "cmd:dhcp", "wait:8",
+        "cmd:ifconfig", "wait:2",
+        "cmd:ping 10.0.2.2 3", "wait:10",
+        "cmd:nslookup example.com", "wait:8",
         "key:0B", "cmd:heaptest", "wait:1", "cmd:preempt", "wait:2",
+        "cmd:arp", "cmd:net",
         "cmd:dev", "cmd:pty", "cmd:mem"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp @buildFlag -LogPath "out\reg-a.log" `
@@ -116,6 +121,13 @@ if ($runAll -or $OnlyA) {
     Expect $a "COW: \d{2,} pagina\(s\) compartilhada\(s\)" "paginas compartilhadas enquanto os filhos vivem"
     Expect $a "filhos so de leitura terminaram ok" "filho so de leitura nao copiou nada"
     Expect $a "COW: 0 pagina\(s\) compartilhada\(s\), \d{3,} falta" "compartilhamento volta a zero no fim"
+    Expect $a "e1000\s+8086:100e.*link up" "placa de rede detectada com link up"
+    Expect $a "ip 10\.0\.2\.15  mascara 255\.255\.255\.0" "dhcp pegou endereco, mascara e rotas"
+    Expect $a "eth0  52:54:00:12:34:56  link up" "ifconfig mostrou a interface"
+    Expect $a "3 enviado\(s\), 3 recebido\(s\), 0% de perda" "ping ao gateway sem perda"
+    Expect $a "example\.com tem endereco \d+\.\d+\.\d+\.\d+" "nslookup resolveu um nome"
+    Expect $a "10\.0\.2\.2\s+52:55:0a:00:02:02" "cache ARP tem o gateway"
+    Expect $a "pilha: \d+ quadro\(s\), \d+ arp, \d+ ip, [1-9]\d* icmp" "pilha contabilizou icmp"
     Expect $a ": OK" "heaptest OK"
     Expect $a "OK \(as duas rodaram\)" "preempt OK"
     Expect $a "0 pty\(s\) viva\(s\)" "nenhuma pty vazada"

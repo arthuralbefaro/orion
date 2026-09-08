@@ -24,6 +24,7 @@
 #include <drivers/pic.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
+#include <net/net.h>
 #include <mm/heap.h>
 #include <mm/memory.h>
 #include <lib/string.h>
@@ -488,6 +489,67 @@ static void cmd_halt(const char *args)
     halt_forever();
 }
 
+static void cmd_net(const char *args)
+{
+    (void)args;
+    net_dump();
+}
+
+static void cmd_arp(const char *args)
+{
+    (void)args;
+    net_arp_dump();
+}
+
+static void cmd_dhcp(const char *args)
+{
+    (void)args;
+    kprintf("Pedindo endereco por DHCP...\n");
+    int r = net_dhcp(5000);
+    if (r < 0) {
+        kprintf("dhcp falhou: %d\n", r);
+        return;
+    }
+    net_dump();
+}
+
+static int split_words(const char *s, char out[4][24])
+{
+    int n = 0;
+    while (*s && n < 4) {
+        while (*s == ' ')
+            s++;
+        if (!*s)
+            break;
+        int k = 0;
+        while (*s && *s != ' ' && k < 23)
+            out[n][k++] = *s++;
+        out[n][k] = '\0';
+        while (*s && *s != ' ')
+            s++;
+        n++;
+    }
+    return n;
+}
+
+static void cmd_ifconfig(const char *args)
+{
+    uint32_t ip, mask, gw, dns;
+    char w[4][24];
+    if (split_words(args, w) != 4) {
+        kprintf("uso: ifconfig <ip> <mascara> <gateway> <dns>\n");
+        net_dump();
+        return;
+    }
+    if (!net_parse_ip(w[0], &ip) || !net_parse_ip(w[1], &mask) || !net_parse_ip(w[2], &gw) ||
+        !net_parse_ip(w[3], &dns)) {
+        kprintf("endereco invalido\n");
+        return;
+    }
+    net_set_config(ip, mask, gw, dns);
+    net_dump();
+}
+
 static const struct command commands[] = {
     { "help",   "lista os comandos",                    cmd_help },
     { "clear",  "limpa a tela",                         cmd_clear },
@@ -516,6 +578,10 @@ static const struct command commands[] = {
     { "run",    "executa um modulo ELF em ring 3",      cmd_run },
     { "procs",  "lista os processos",                   cmd_procs },
     { "pci",    "dispositivos PCI",                     cmd_pci },
+    { "net",    "estado da rede",                       cmd_net },
+    { "arp",    "cache ARP",                            cmd_arp },
+    { "dhcp",   "pede um endereco por DHCP",            cmd_dhcp },
+    { "ifconfig", "configura a rede a mao",             cmd_ifconfig },
     { "lsblk",  "discos e particoes",                   cmd_lsblk },
     { "mount",  "monta o primeiro FS extra em /mnt",     cmd_mount },
     { "sync",   "descarrega o cache de disco",           cmd_sync },
