@@ -10,6 +10,8 @@ struct file_ops {
     int64_t (*write)(struct file *f, const void *buf, uint64_t len);
     void    (*close)(struct file *f);
     int     (*readdir)(struct file *f, uint64_t index, struct vfs_node *out);
+    long    (*ioctl)(struct file *f, uint64_t request, uint64_t arg);
+    int64_t (*mmap)(struct file *f, uint64_t len, int prot, uint64_t offset);
 };
 
 struct file {
@@ -17,6 +19,7 @@ struct file {
     void *priv;
     uint64_t offset;
     int32_t refcount;
+    uint32_t mode;
     struct vfs_node node;
     bool has_node;
 };
@@ -33,3 +36,5 @@ bool file_make_pipe(struct file **reader, struct file **writer);
 int64_t file_read(struct file *f, void *buf, uint64_t len);
 int64_t file_write(struct file *f, const void *buf, uint64_t len);
 int     file_readdir(struct file *f, uint64_t index, struct vfs_node *out);
+long    file_ioctl(struct file *f, uint64_t request, uint64_t arg);
+int64_t file_mmap(struct file *f, uint64_t len, int prot, uint64_t offset);

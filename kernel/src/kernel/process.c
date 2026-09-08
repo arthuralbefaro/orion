@@ -373,6 +373,11 @@ static bool copy_user_pages(struct process *child, uint64_t parent_pml4)
                     uint64_t e = pt[i1];
                     if (!(e & PTE_PRESENT)) continue;
                     uint64_t virt = (i4 << 39) | (i3 << 30) | (i2 << 21) | (i1 << 12);
+                    if (e & PTE_NOFREE) {
+                        vmm_map_page_in(child->pml4_phys, virt, e & PTE_ADDR_MASK,
+                                        e & ~PTE_ADDR_MASK);
+                        continue;
+                    }
                     uint64_t phys = pmm_alloc_page();
                     if (!phys)
                         return false;

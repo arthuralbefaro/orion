@@ -5,6 +5,7 @@
  * do teclado numérico) mapeados. Um layout ABNT2 completo entra depois.
  */
 #include <drivers/keyboard.h>
+#include <drivers/input.h>
 #include <drivers/pic.h>
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/interrupts.h>
@@ -115,13 +116,8 @@ static void keyboard_irq(struct interrupt_frame *frame, void *ctx)
         break;
     }
 
-    if (released)
-        return;
-
     bool shift = modifiers & KBD_MOD_SHIFT;
     char c = shift ? keymap_shift[code] : keymap[code];
-    if (!c)
-        return;
 
     /* Caps Lock só inverte letras. */
     if ((modifiers & KBD_MOD_CAPS) && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')))
@@ -130,6 +126,12 @@ static void keyboard_irq(struct interrupt_frame *frame, void *ctx)
     /* Ctrl+letra -> código de controle (Ctrl+C = 0x03 etc.). */
     if ((modifiers & KBD_MOD_CTRL) && c >= 'a' && c <= 'z')
         c = c - 'a' + 1;
+
+    if (input_post_key(code, c, modifiers, !released))
+        return;
+
+    if (released || !c)
+        return;
 
     push_char(c);
 }

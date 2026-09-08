@@ -13,6 +13,7 @@
 #include <kernel/time.h>
 #include <drivers/rtc.h>
 #include <fs/vfs.h>
+#include <fs/devfs.h>
 
 extern void syscall_entry(void);
 
@@ -112,11 +113,13 @@ static long sys_pipe(int *fds)
     return 0;
 }
 
-static void fill_stat(const struct vfs_node *n, bool is_tty, struct user_stat *st)
+static void fill_stat(const struct vfs_node *n, uint32_t mode, struct user_stat *st)
 {
     memset(st, 0, sizeof(*st));
     st->st_size = n ? n->size : 0;
-    st->st_mode = is_tty ? (S_IFCHR | 0620) : n && n->is_dir ? (S_IFDIR | 0755) : (S_IFREG | 0644);
+    if (!mode)
+        mode = (n && n->is_dir) ? (S_IFDIR | 0755) : (S_IFREG | 0644);
+    st->st_mode = mode;
     st->st_nlink = 1;
     st->st_ino = n ? n->ino : 0;
     st->st_blksize = 4096;
@@ -132,7 +135,7 @@ static long sys_stat(const char *path, struct user_stat *st)
     struct vfs_node n;
     if (!vfs_lookup(full, &n))
         return -ENOENT;
-    fill_stat(&n, false, st);
+    fill_stat(&n, devfs_mode(full), st);
     return 0;
 }
 
@@ -143,8 +146,8 @@ static long sys_fstat(int fd, struct user_stat *st)
         return -EBADF;
     if (!user_range_ok((uint64_t)st, sizeof(*st)))
         return -EFAULT;
-    fill_stat(f->has_node ? &f->node : NULL, file_is_tty(f), st);
-    if (!f->has_node && !file_is_tty(f))
+    fill_stat(f->has_node ? &f->node : NULL, f->mode, st);
+    if (!f->has_node && !f->mode)
         st->st_mode = S_IFIFO | 0600;
     return 0;
 }
@@ -172,9 +175,16 @@ static long sys_lseek(int fd, int64_t off, int whence)
 static long sys_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t off)
 {
     (void)addr;
-    (void)off;
     struct process *p = process_current();
-    if (len == 0 || fd != -1 || !(flags & MAP_ANONYMOUS))
+    if (len == 0)
+        return -EINVAL;
+    if (fd >= 0) {
+        struct file *f = process_fd_get(p, fd);
+        if (!f)
+            return -EBADF;
+        return (long)file_mmap(f, len, prot, off);
+    }
+    if (fd != -1 || !(flags & MAP_ANONYMOUS))
         return -EINVAL;
     uint64_t pages = PAGE_ALIGN_UP(len) / PAGE_SIZE;
     uint64_t base = p->mmap_next;
@@ -205,23 +215,24 @@ static long sys_munmap(uint64_t addr, uint64_t len)
     uint64_t pages = PAGE_ALIGN_UP(len) / PAGE_SIZE;
     for (uint64_t i = 0; i < pages; i++) {
         uint64_t v = addr + i * PAGE_SIZE;
-        uint64_t phys = vmm_virt_to_phys_in(p->pml4_phys, v);
-        if (phys) {
-            vmm_unmap_page_in(p->pml4_phys, v);
-            pmm_free_page(PAGE_ALIGN_DOWN(phys));
+        uint64_t pte = vmm_get_pte_in(p->pml4_phys, v);
+        if (!(pte & PTE_PRESENT))
+            continue;
+        vmm_unmap_page_in(p->pml4_phys, v);
+        if (!(pte & PTE_NOFREE)) {
+            pmm_free_page(pte & PTE_ADDR_MASK);
             p->pages--;
         }
     }
     return 0;
 }
 
-static long sys_ioctl(int fd, uint64_t req)
+static long sys_ioctl(int fd, uint64_t request, uint64_t arg)
 {
-    (void)req;
     struct file *f = process_fd_get(process_current(), fd);
     if (!f)
         return -EBADF;
-    return file_is_tty(f) ? 0 : -ENOTTY;
+    return file_ioctl(f, request, arg);
 }
 
 static long sys_dup(int oldfd)
@@ -413,7 +424,7 @@ void syscall_dispatch(struct interrupt_frame *f)
     case SYS_LSEEK:       ret = sys_lseek((int)f->rdi, (int64_t)f->rsi, (int)f->rdx); break;
     case SYS_MMAP:        ret = sys_mmap(f->rdi, f->rsi, (int)f->rdx, (int)f->r10, (int)f->r8, f->r9); break;
     case SYS_MUNMAP:      ret = sys_munmap(f->rdi, f->rsi); break;
-    case SYS_IOCTL:       ret = sys_ioctl((int)f->rdi, f->rsi); break;
+    case SYS_IOCTL:       ret = sys_ioctl((int)f->rdi, f->rsi, f->rdx); break;
     case SYS_DUP:         ret = sys_dup((int)f->rdi); break;
     case SYS_GETCWD:      ret = sys_getcwd((char *)f->rdi, (size_t)f->rsi); break;
     case SYS_CHDIR:       ret = sys_chdir((const char *)f->rdi); break;

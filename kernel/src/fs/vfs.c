@@ -1,5 +1,6 @@
 #include <fs/vfs.h>
 #include <fs/fat.h>
+#include <fs/devfs.h>
 #include <fs/block.h>
 #include <kernel/log.h>
 #include <mm/heap.h>
@@ -35,6 +36,8 @@ const char *vfs_root_type(void)
 
 bool vfs_lookup(const char *path, struct vfs_node *out)
 {
+    if (devfs_owns(path))
+        return devfs_lookup(path, out);
     if (!root_fs)
         return false;
     struct vfs_node cur;
@@ -75,6 +78,10 @@ int64_t vfs_read(const struct vfs_node *node, uint64_t offset, void *buf, uint64
 
 bool vfs_readdir(const char *path, vfs_dir_cb cb, void *ctx)
 {
+    if (devfs_is_root(path))
+        return devfs_readdir(cb, ctx);
+    if (devfs_owns(path))
+        return false;
     struct vfs_node dir;
     if (!vfs_lookup(path, &dir) || !dir.is_dir)
         return false;

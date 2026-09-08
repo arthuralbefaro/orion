@@ -161,6 +161,25 @@ uint64_t vmm_virt_to_phys(uint64_t virt)
     return vmm_virt_to_phys_in(kernel_pml4_phys, virt);
 }
 
+uint64_t vmm_get_pte_in(uint64_t pml4_phys, uint64_t virt)
+{
+    uint64_t *pml4 = phys_to_virt(pml4_phys);
+
+    uint64_t e = pml4[pml4_index(virt)];
+    if (!(e & PTE_PRESENT)) return 0;
+    uint64_t *pdpt = phys_to_virt(e & PTE_ADDR_MASK);
+
+    e = pdpt[pdpt_index(virt)];
+    if (!(e & PTE_PRESENT) || (e & PTE_HUGE)) return 0;
+    uint64_t *pd = phys_to_virt(e & PTE_ADDR_MASK);
+
+    e = pd[pd_index(virt)];
+    if (!(e & PTE_PRESENT) || (e & PTE_HUGE)) return 0;
+    uint64_t *pt = phys_to_virt(e & PTE_ADDR_MASK);
+
+    return pt[pt_index(virt)];
+}
+
 uint64_t vmm_create_address_space(void)
 {
     uint64_t phys = pmm_alloc_page();
@@ -178,6 +197,8 @@ static void free_table_level(uint64_t *table, int level)
     for (size_t i = 0; i < ENTRIES; i++) {
         uint64_t e = table[i];
         if (!(e & PTE_PRESENT))
+            continue;
+        if (level == 1 && (e & PTE_NOFREE))
             continue;
         uint64_t phys = e & PTE_ADDR_MASK;
         if (level > 1 && !(e & PTE_HUGE))

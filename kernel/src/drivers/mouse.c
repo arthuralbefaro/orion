@@ -1,4 +1,5 @@
 #include <drivers/mouse.h>
+#include <drivers/input.h>
 #include <drivers/pic.h>
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/interrupts.h>
@@ -36,6 +37,7 @@ static uint32_t queue_head, queue_tail;
 
 static uint8_t packet[4];
 static uint8_t packet_index;
+static uint8_t last_buttons;
 static uint8_t packet_size = 3;
 static bool wheel;
 static bool available;
@@ -118,6 +120,13 @@ static void decode_packet(void)
     spin_lock(&lock);
     queue_push(&p);
     spin_unlock(&lock);
+
+    if (p.dx || p.dy || p.dz)
+        input_post_mouse_move(p.dx, p.dy, p.dz);
+    if (p.buttons != last_buttons) {
+        last_buttons = p.buttons;
+        input_post_mouse_button(p.buttons);
+    }
 }
 
 static void mouse_irq(struct interrupt_frame *frame, void *ctx)

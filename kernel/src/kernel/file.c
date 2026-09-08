@@ -2,6 +2,7 @@
 #include <kernel/sched.h>
 #include <kernel/spinlock.h>
 #include <kernel/syscall.h>
+#include <fs/devfs.h>
 #include <drivers/tty.h>
 #include <mm/heap.h>
 #include <lib/string.h>
@@ -48,6 +49,18 @@ int file_readdir(struct file *f, uint64_t index, struct vfs_node *out)
     return f->ops->readdir ? f->ops->readdir(f, index, out) : -ENOTDIR;
 }
 
+long file_ioctl(struct file *f, uint64_t request, uint64_t arg)
+{
+    if (f->ops->ioctl)
+        return f->ops->ioctl(f, request, arg);
+    return file_is_tty(f) ? 0 : -ENOTTY;
+}
+
+int64_t file_mmap(struct file *f, uint64_t len, int prot, uint64_t offset)
+{
+    return f->ops->mmap ? f->ops->mmap(f, len, prot, offset) : -ENODEV;
+}
+
 static int64_t tty_file_read(struct file *f, void *buf, uint64_t len)
 {
     (void)f;
@@ -68,7 +81,10 @@ static const struct file_ops tty_ops = {
 
 struct file *file_open_tty(void)
 {
-    return file_alloc(&tty_ops, NULL);
+    struct file *f = file_alloc(&tty_ops, NULL);
+    if (f)
+        f->mode = S_IFCHR | 0620;
+    return f;
 }
 
 bool file_is_tty(const struct file *f)
@@ -120,6 +136,8 @@ static const struct file_ops vfs_ops = {
 
 struct file *file_open_path(const char *path)
 {
+    if (devfs_owns(path))
+        return devfs_open(path);
     struct vfs_node node;
     if (!vfs_lookup(path, &node))
         return NULL;

@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
+#include <sys/ioctl.h>
 #include <string.h>
 #include "syscall.h"
 
@@ -35,6 +36,7 @@ int     stat(const char *path, struct stat *st)    { return (int)__syscall_ret(s
 int     fstat(int fd, struct stat *st)             { return (int)__syscall_ret(syscall2(SYS_FSTAT, fd, (long)st)); }
 int     munmap(void *addr, size_t len)             { return (int)__syscall_ret(syscall2(SYS_MUNMAP, (long)addr, (long)len)); }
 int     clock_gettime(int clk, struct timespec *ts){ return (int)__syscall_ret(syscall2(SYS_CLOCK_GETTIME, clk, (long)ts)); }
+int     ioctl(int fd, unsigned long req, void *arg) { return (int)__syscall_ret(syscall3(SYS_IOCTL, fd, (long)req, (long)arg)); }
 
 int execve(const char *path, char *const argv[], char *const envp[])
 {

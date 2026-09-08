@@ -49,6 +49,7 @@
 #define ERANGE  34
 #define ENOSYS  38
 #define ENOEXEC 8
+#define ENODEV  19
 
 #define USER_ADDR_MAX 0x0000800000000000ull
 #define USER_MMAP_BASE 0x0000100000000000ull
@@ -60,6 +61,7 @@
 #define PROT_READ  1
 #define PROT_WRITE 2
 #define PROT_EXEC  4
+#define MAP_SHARED    0x01
 #define MAP_PRIVATE   0x02
 #define MAP_ANONYMOUS 0x20
 

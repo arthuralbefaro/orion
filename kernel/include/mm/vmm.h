@@ -18,6 +18,7 @@
 #define PTE_DIRTY     (1ull << 6)
 #define PTE_HUGE      (1ull << 7)   /* PS: página de 2 MiB (PD) ou 1 GiB (PDPT) */
 #define PTE_GLOBAL    (1ull << 8)
+#define PTE_NOFREE    (1ull << 9)   /* bit livre para o SO: pagina nao pertence ao PMM */
 #define PTE_NX        (1ull << 63)
 #define PTE_ADDR_MASK 0x000FFFFFFFFFF000ull
 
@@ -46,6 +47,7 @@ void     vmm_destroy_address_space(uint64_t pml4_phys);
 void     vmm_map_page_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags);
 void     vmm_unmap_page_in(uint64_t pml4_phys, uint64_t virt);
 uint64_t vmm_virt_to_phys_in(uint64_t pml4_phys, uint64_t virt);
+uint64_t vmm_get_pte_in(uint64_t pml4_phys, uint64_t virt);
 
 /* Mapeia uma página de 4 KiB. Aloca tabelas intermediárias se preciso. */
 void vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags);

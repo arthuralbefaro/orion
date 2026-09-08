@@ -9,6 +9,8 @@
 #include <drivers/acpi.h>
 #include <drivers/ioapic.h>
 #include <drivers/mouse.h>
+#include <drivers/input.h>
+#include <fs/devfs.h>
 #include <kernel/time.h>
 #include <kernel/sched.h>
 #include <kernel/process.h>
@@ -258,6 +260,38 @@ static void cmd_mouse(const char *args)
             seen, mouse_packet_count(), mouse_resync_count());
 }
 
+static void cmd_dev(const char *args)
+{
+    (void)args;
+    devfs_dump();
+    kprintf("  /dev/input: %s, fila com %u evento(s), timeout %u ms\n",
+            input_grabbed() ? "capturado por um processo" : "livre",
+            input_queued(), input_timeout());
+    kprintf("  %lu evento(s) enfileirado(s) e %lu descartado(s) desde o boot\n",
+            input_event_count(), input_dropped_count());
+}
+
+static void cmd_input(const char *args)
+{
+    (void)args;
+    kprintf("Capturando /dev/input por 3 segundos (o TTY nao recebe teclas)...\n");
+    input_grab();
+    input_flush();
+    uint64_t end = time_uptime_ms() + 3000;
+    uint32_t seen = 0;
+    while (time_uptime_ms() < end) {
+        struct input_event ev[8];
+        input_set_timeout(200);
+        int64_t n = input_read(ev, sizeof(ev));
+        for (int64_t i = 0; i < n / (int64_t)sizeof(ev[0]); i++) {
+            seen++;
+            kprintf("  tipo=%u a=%d b=%d c=%d\n", ev[i].type, ev[i].a, ev[i].b, ev[i].c);
+        }
+    }
+    input_release();
+    kprintf("  %u evento(s)\n", seen);
+}
+
 static void cmd_mods(const char *args)
 {
     (void)args;
@@ -444,6 +478,8 @@ static const struct command commands[] = {
     { "ps",     "lista as threads",                     cmd_ps },
     { "smp",    "estado de cada CPU",                   cmd_smp },
     { "mouse",  "eventos do mouse PS/2 por 3 s",        cmd_mouse },
+    { "dev",    "dispositivos de /dev",                 cmd_dev },
+    { "input",  "le /dev/input por 3 s",                cmd_input },
     { "threads", "demo: 3 threads dormindo",            cmd_threads },
     { "preempt", "demo: preempcao de loops ocupados",   cmd_preempt },
     { "mods",   "modulos carregados pelo bootloader",   cmd_mods },
