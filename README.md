@@ -13,6 +13,7 @@ e baixa o Limine 12.8.0 para `third_party\limine`.
     .\build.ps1                    # compila (incremental)
     .\build.ps1 -Run -Smp 4        # compila e roda no QEMU (UEFI, 4 CPUs)
     .\build.ps1 -Run -Smp 4 -Disk  # idem, com um segundo disco cru de 64 MiB
+    .\build.ps1 -Run -Smp 4 -Gui   # boota direto na interface grafica
     .\build.ps1 -Clean             # limpa
     .\check.ps1                    # so analise sintatica (erros e warnings)
     .\regressao.ps1                # bateria de testes automatica (exit 0 = verde)
@@ -39,9 +40,21 @@ No `/bin/sh`, o comando `wm` inicia o compositor: uma janela de terminal com o
     Ctrl+Q       fecha a janela focada
     Ctrl+Alt+X   encerra o wm e devolve o teclado ao TTY
 
+    Ctrl+P       janela de processos
+    Ctrl+F       navegador de arquivos
+
+Clicar em "Orion 1.0" na barra de topo abre o menu (terminal, processos,
+arquivos, sobre, encerrar). A barra mostra o IP, a memoria usada e o relogio.
+
 Arraste pela barra de titulo para mover; clique para focar; o `x` fecha.
 O terminal grafico entende as sequencias ANSI de cursor, apagamento e cores
 (16 cores), o que faz o `edit` e o historico do `sh` funcionarem igual ao TTY.
+
+### Boot direto na interface grafica
+O `init` le `/etc/autostart` no boot: uma linha por comando, `#` e comentario, e
+`shell <caminho>` troca o programa que ele mantem vivo no terminal. O padrao e
+`shell /bin/sh`; `.\build.ps1 -Gui` grava um autostart que roda `/bin/dhcp` e
+sobe direto no `wm`.
 
 ### Disco de escrita
 O `out\esp` que o QEMU expoe com `fat:rw:` **nao** aguenta escrita de verdade
@@ -66,8 +79,9 @@ Passos aceitos em `-Script`: `cmd:<linha>` (envia ao shell), `raw:<texto>`,
 `key:<hex>` (um byte cru; `key:0B` e o Ctrl+K), `mon:<comando do monitor>`,
 `wait:<segundos>`, `shot:<arquivo.ppm>`.
 
-`regressao.ps1` roda tres sequencias e falha se algum marcador esperado sumir:
-A (texto), B (grafica, com screenshots) e C (disco cru, escrita e shell).
+`regressao.ps1` roda quatro sequencias e falha se algum marcador esperado sumir:
+A (texto e rede), B (grafica, com screenshots), C (disco cru, escrita e shell) e
+D (boot direto na interface grafica).
 
 ## Programas em /bin
     sh       shell com pipelines, redirecionamentos, historico e edicao de linha

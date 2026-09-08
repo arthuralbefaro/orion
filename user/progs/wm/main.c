@@ -2,6 +2,11 @@
 #include "term.h"
 #include "win.h"
 
+#include <dirent.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/sysinfo.h>
+
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -21,6 +26,9 @@
 #define POLL_TIMEOUT   250
 #define KEY_CTRL_T     0x14
 #define KEY_CTRL_Q     0x11
+#define KEY_CTRL_P     0x10
+#define KEY_CTRL_F     0x06
+#define KEY_CTRL_M     0x0D
 #define KEY_CTRL_X     0x18
 
 static struct gfx gfx;
@@ -133,6 +141,71 @@ static void reap_children(void)
         ;
 }
 
+static void refresh_procs(struct window *w)
+{
+    struct procinfo_orion list[PROCLIST_MAX];
+    int n = proclist_orion(list, PROCLIST_MAX);
+    if (n < 0)
+        n = 0;
+
+    struct sysinfo_orion si;
+    char head[PANEL_COLS];
+    if (sysinfo_orion(&si) == 0)
+        snprintf(head, sizeof(head), "%4s %5s %8s  %s   (%u CPUs)", "pid", "ppid", "paginas",
+                 "nome", si.cpus);
+    else
+        snprintf(head, sizeof(head), "%4s %5s %8s  %s", "pid", "ppid", "paginas", "nome");
+    panel_set(w, 0, head);
+
+    int row = 1;
+    for (int i = 0; i < n && row < PANEL_ROWS; i++) {
+        char line[PANEL_COLS];
+        snprintf(line, sizeof(line), "%4u %5u %8lu  %s", list[i].pid, list[i].ppid,
+                 list[i].pages, list[i].name);
+        panel_set(w, row++, line);
+    }
+    w->nrows = row;
+    desk_damage_window(&desk, w);
+}
+
+static void refresh_files(struct window *w)
+{
+    char head[PANEL_COLS];
+    snprintf(head, sizeof(head), "%s", w->path);
+    panel_set(w, 0, head);
+
+    int row = 1;
+    DIR *d = opendir(w->path);
+    if (!d) {
+        panel_set(w, row++, "(nao consegui abrir)");
+        w->nrows = row;
+        desk_damage_window(&desk, w);
+        return;
+    }
+    if (strcmp(w->path, "/") != 0)
+        panel_set(w, row++, "..");
+    struct dirent *e;
+    while ((e = readdir(d)) && row < PANEL_ROWS) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
+            continue;
+        char full[256];
+        snprintf(full, sizeof(full), "%s%s%s", w->path,
+                 strcmp(w->path, "/") == 0 ? "" : "/", e->d_name);
+        struct stat st;
+        char line[PANEL_COLS];
+        if (stat(full, &st) == 0 && S_ISDIR(st.st_mode))
+            snprintf(line, sizeof(line), "%-32s <dir>", e->d_name);
+        else if (stat(full, &st) == 0)
+            snprintf(line, sizeof(line), "%-32s %8lu", e->d_name, (unsigned long)st.st_size);
+        else
+            snprintf(line, sizeof(line), "%s", e->d_name);
+        panel_set(w, row++, line);
+    }
+    closedir(d);
+    w->nrows = row;
+    desk_damage_window(&desk, w);
+}
+
 static void update_clock(void)
 {
     time_t now = time(NULL);
@@ -146,11 +219,29 @@ static void update_clock(void)
     snprintf(desk.date, sizeof(desk.date), "%02d/%02d/%04d", tm.tm_mday, tm.tm_mon + 1,
              tm.tm_year + 1900);
 
+    struct sysinfo_orion si;
+    if (sysinfo_orion(&si) == 0)
+        snprintf(desk.mem, sizeof(desk.mem), "%lu/%lu MiB", si.used_pages * 4096 / (1024 * 1024),
+                 si.total_pages * 4096 / (1024 * 1024));
+
+    int sfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sfd >= 0) {
+        struct ifreq_orion r;
+        memset(&r, 0, sizeof(r));
+        if (ioctl(sfd, SIOCGIFCONF_ORION, &r) == 0 && r.ip)
+            inet_ntoa(r.ip, desk.ip, sizeof(desk.ip));
+        else
+            snprintf(desk.ip, sizeof(desk.ip), "sem rede");
+        close(sfd);
+    }
+
     desk_damage_topbar(&desk);
     for (int i = 0; i < desk.count; i++) {
         struct window *w = &desk.windows[desk.order[i]];
         if (w->kind == WIN_CLOCK)
             desk_damage_window(&desk, w);
+        else if (w->kind == WIN_PROCS)
+            refresh_procs(w);
     }
 }
 
@@ -178,6 +269,86 @@ static void pump_terminals(void)
     }
 }
 
+static void open_procs(void)
+{
+    struct rect f = rect_make(120, 120, 58 * GFX_CELL_W + 8 + WIN_CHROME_X,
+                              PANEL_ROWS * GFX_CELL_H + 8 + WIN_CHROME_Y);
+    struct window *w = desk_new(&desk, WIN_PROCS, "Processos", f);
+    if (!w)
+        return;
+    w->selected = -1;
+    refresh_procs(w);
+    desk_raise(&desk, w);
+    printf("wm: janela de processos aberta\n");
+}
+
+static void open_files(const char *path)
+{
+    struct rect f = rect_make(200, 160, 46 * GFX_CELL_W + 8 + WIN_CHROME_X,
+                              PANEL_ROWS * GFX_CELL_H + 8 + WIN_CHROME_Y);
+    struct window *w = desk_new(&desk, WIN_FILES, "Arquivos", f);
+    if (!w)
+        return;
+    snprintf(w->path, sizeof(w->path), "%s", path);
+    w->selected = -1;
+    refresh_files(w);
+    desk_raise(&desk, w);
+    printf("wm: janela de arquivos em %s\n", w->path);
+}
+
+static void menu_activate(int item)
+{
+    switch (item) {
+    case 0: new_terminal(); break;
+    case 1: open_procs(); break;
+    case 2: open_files("/"); break;
+    case 3: {
+        struct rect f = rect_make(360, 300, 50 * GFX_CELL_W + 8 + WIN_CHROME_X,
+                                  8 * GFX_CELL_H + 8 + WIN_CHROME_Y);
+        struct window *w = desk_new(&desk, WIN_ABOUT, "Sobre", f);
+        if (w)
+            desk_raise(&desk, w);
+        break;
+    }
+    case 4: running = false; break;
+    default: break;
+    }
+}
+
+static void files_click(struct window *w, int row)
+{
+    if (row < 1 || row >= w->nrows)
+        return;
+    w->selected = row;
+    const char *name = w->rows_text[row];
+    char item[128];
+    int k = 0;
+    while (name[k] && name[k] != ' ' && k < (int)sizeof(item) - 1) {
+        item[k] = name[k];
+        k++;
+    }
+    item[k] = '\0';
+
+    char next[128];
+    if (strcmp(item, "..") == 0) {
+        snprintf(next, sizeof(next), "%s", w->path);
+        char *slash = strrchr(next, '/');
+        if (slash && slash != next)
+            *slash = '\0';
+        else
+            snprintf(next, sizeof(next), "/");
+    } else {
+        snprintf(next, sizeof(next), "%s%s%s", w->path,
+                 strcmp(w->path, "/") == 0 ? "" : "/", item);
+    }
+    struct stat st;
+    if (stat(next, &st) == 0 && S_ISDIR(st.st_mode)) {
+        snprintf(w->path, sizeof(w->path), "%s", next);
+        w->selected = -1;
+    }
+    refresh_files(w);
+}
+
 static void handle_button(int32_t mask)
 {
     bool was_down = (buttons & INPUT_BUTTON_LEFT) != 0;
@@ -189,6 +360,26 @@ static void handle_button(int32_t mask)
         return;
     }
     if (!is_down || was_down)
+        return;
+
+    if (desk.menu_open) {
+        int item = desk_menu_item_at(&desk, mouse_x, mouse_y);
+        desk.menu_open = false;
+        desk_damage_menu(&desk);
+        desk_damage_topbar(&desk);
+        if (item >= 0) {
+            menu_activate(item);
+            return;
+        }
+    }
+    if (rect_contains(desk_menu_button(&desk), mouse_x, mouse_y)) {
+        desk.menu_open = true;
+        desk.menu_hover = -1;
+        desk_damage_menu(&desk);
+        desk_damage_topbar(&desk);
+        return;
+    }
+    if (mouse_y < TOPBAR_H)
         return;
 
     struct window *w = desk_at(&desk, mouse_x, mouse_y);
@@ -204,6 +395,17 @@ static void handle_button(int32_t mask)
         drag_win = w;
         drag_dx = mouse_x - w->frame.x;
         drag_dy = mouse_y - w->frame.y;
+        return;
+    }
+    if (w->kind == WIN_FILES || w->kind == WIN_PROCS) {
+        struct rect c = win_content(w);
+        int row = (mouse_y - c.y) / GFX_CELL_H;
+        if (w->kind == WIN_FILES)
+            files_click(w, row);
+        else if (row >= 1 && row < w->nrows) {
+            w->selected = row;
+            desk_damage_window(&desk, w);
+        }
     }
 }
 
@@ -217,6 +419,14 @@ static void handle_motion(int32_t dx, int32_t dy)
     if (mouse_x >= gfx.width) mouse_x = gfx.width - 1;
     if (mouse_y >= gfx.height) mouse_y = gfx.height - 1;
     gfx_cursor_move(&gfx, mouse_x, mouse_y);
+
+    if (desk.menu_open) {
+        int hover = desk_menu_item_at(&desk, mouse_x, mouse_y);
+        if (hover != desk.menu_hover) {
+            desk.menu_hover = hover;
+            desk_damage_menu(&desk);
+        }
+    }
     gfx_damage(&gfx, gfx_cursor_rect(&gfx));
 
     if (!drag_win)
@@ -268,6 +478,14 @@ static void handle_key(int32_t scancode, int32_t ascii, int32_t mods)
             struct window *w = desk_focused(&desk);
             if (w)
                 close_window(w);
+            return;
+        }
+        if (ascii == KEY_CTRL_P) {
+            open_procs();
+            return;
+        }
+        if (ascii == KEY_CTRL_F) {
+            open_files("/");
             return;
         }
     }

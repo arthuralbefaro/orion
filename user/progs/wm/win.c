@@ -17,12 +17,61 @@
 #define COL_TERM_FG    0xC8D4E0
 #define COL_PANEL_BG   0x141A28
 #define COL_ACCENT     0x63B3ED
+#define COL_MENU_BG    0x1B2333
+#define COL_MENU_HOVER 0x2C5E9E
+#define COL_SELECT     0x24446E
+
+static const char *const menu_labels[MENU_ITEMS] = {
+    "Novo terminal",
+    "Processos",
+    "Arquivos",
+    "Sobre",
+    "Encerrar o wm",
+};
+
+const char *desk_menu_label(int i)
+{
+    return i >= 0 && i < MENU_ITEMS ? menu_labels[i] : "";
+}
+
+struct rect desk_menu_button(const struct desktop *d)
+{
+    (void)d;
+    return rect_make(6, 2, 10 * GFX_CELL_W + 12, TOPBAR_H - 4);
+}
+
+struct rect desk_menu_rect(const struct desktop *d)
+{
+    (void)d;
+    return rect_make(6, TOPBAR_H, MENU_W, MENU_ITEMS * GFX_CELL_H + 8);
+}
+
+int desk_menu_item_at(const struct desktop *d, int x, int y)
+{
+    struct rect m = desk_menu_rect(d);
+    if (!rect_contains(m, x, y))
+        return -1;
+    int i = (y - m.y - 4) / GFX_CELL_H;
+    return i >= 0 && i < MENU_ITEMS ? i : -1;
+}
+
+void desk_damage_menu(struct desktop *d)
+{
+    gfx_damage(d->gfx, desk_menu_rect(d));
+}
+
+void panel_set(struct window *w, int row, const char *text)
+{
+    if (row < 0 || row >= PANEL_ROWS)
+        return;
+    snprintf(w->rows_text[row], PANEL_COLS, "%s", text);
+}
 
 static const char *const about_lines[] = {
     "Orion 1.0 - compositor em espaco de usuario",
     "",
-    "Ctrl+T       novo terminal",
-    "Ctrl+Q       fecha a janela focada",
+    "Ctrl+T       novo terminal      Ctrl+P   processos",
+    "Ctrl+F       arquivos           Ctrl+Q   fecha a janela",
     "Ctrl+Alt+X   encerra o wm",
     "",
     "Arraste pela barra de titulo para mover.",
@@ -33,9 +82,11 @@ void desk_init(struct desktop *d, struct gfx *g)
 {
     memset(d, 0, sizeof(*d));
     d->gfx = g;
-    d->hint = "Ctrl+T terminal  Ctrl+Q fecha  Ctrl+Alt+X sai";
+    d->hint = "Ctrl+T terminal  Ctrl+P processos  Ctrl+F arquivos  Ctrl+Q fecha";
     strcpy(d->clock, "--:--:--");
     strcpy(d->date, "--/--/----");
+    strcpy(d->ip, "sem rede");
+    strcpy(d->mem, "");
 }
 
 struct rect win_titlebar(const struct window *w)
@@ -188,15 +239,58 @@ static void draw_topbar(struct desktop *d)
     struct gfx *g = d->gfx;
     gfx_fill(g, rect_make(0, 0, g->width, TOPBAR_H), gfx_rgb(g, COL_TOPBAR));
     gfx_fill(g, rect_make(0, TOPBAR_H - 1, g->width, 1), gfx_rgb(g, COL_TOPBAR_ED));
-    gfx_text(g, 12, 6, "Orion 1.0", gfx_rgb(g, COL_ACCENT), GFX_ZOOM);
+    struct rect b = desk_menu_button(d);
+    if (d->menu_open)
+        gfx_fill(g, b, gfx_rgb(g, COL_MENU_HOVER));
+    gfx_text(g, 12, 6, "Orion 1.0", gfx_rgb(g, d->menu_open ? COL_TITLE_TXT : COL_ACCENT),
+             GFX_ZOOM);
 
-    int hint_x = 12 + 10 * GFX_CELL_W;
-    gfx_text(g, hint_x, 6, d->hint, gfx_rgb(g, 0x7C8AA5), GFX_ZOOM);
-
-    char stamp[48];
-    snprintf(stamp, sizeof(stamp), "%s %s", d->date, d->clock);
+    char stamp[80];
+    snprintf(stamp, sizeof(stamp), "%s  %s  %s %s", d->ip, d->mem, d->date, d->clock);
     int len = (int)strlen(stamp);
-    gfx_text(g, g->width - 12 - len * GFX_CELL_W, 6, stamp, gfx_rgb(g, COL_TITLE_TXT), GFX_ZOOM);
+    int stamp_x = g->width - 12 - len * GFX_CELL_W;
+    gfx_text(g, stamp_x, 6, stamp, gfx_rgb(g, COL_TITLE_TXT), GFX_ZOOM);
+
+    int hint_x = 12 + 12 * GFX_CELL_W;
+    int room = (stamp_x - 16 - hint_x) / GFX_CELL_W;
+    if (room > 0) {
+        char hint[96];
+        if (room > (int)sizeof(hint) - 1)
+            room = (int)sizeof(hint) - 1;
+        snprintf(hint, sizeof(hint), "%.*s", room, d->hint);
+        gfx_text(g, hint_x, 6, hint, gfx_rgb(g, 0x7C8AA5), GFX_ZOOM);
+    }
+}
+
+static void draw_menu(struct desktop *d)
+{
+    struct gfx *g = d->gfx;
+    struct rect m = desk_menu_rect(d);
+    gfx_fill(g, m, gfx_rgb(g, COL_BORDER));
+    gfx_fill(g, rect_make(m.x + 1, m.y + 1, m.w - 2, m.h - 2), gfx_rgb(g, COL_MENU_BG));
+    for (int i = 0; i < MENU_ITEMS; i++) {
+        int y = m.y + 4 + i * GFX_CELL_H;
+        if (i == d->menu_hover)
+            gfx_fill(g, rect_make(m.x + 2, y, m.w - 4, GFX_CELL_H), gfx_rgb(g, COL_MENU_HOVER));
+        gfx_text(g, m.x + 10, y + 1, desk_menu_label(i), gfx_rgb(g, COL_TITLE_TXT), GFX_ZOOM);
+    }
+}
+
+static void draw_panel(struct desktop *d, struct window *w)
+{
+    struct gfx *g = d->gfx;
+    struct rect c = win_content(w);
+    gfx_fill(g, rect_make(c.x - WIN_PAD, c.y - WIN_PAD, c.w + 2 * WIN_PAD, c.h + 2 * WIN_PAD),
+             gfx_rgb(g, COL_PANEL_BG));
+    for (int i = 0; i < w->nrows && i < PANEL_ROWS; i++) {
+        int y = c.y + i * GFX_CELL_H;
+        uint32_t fg = COL_TERM_FG;
+        if (i == 0)
+            fg = COL_ACCENT;
+        else if (i == w->selected)
+            gfx_fill(g, rect_make(c.x - 2, y, c.w + 4, GFX_CELL_H), gfx_rgb(g, COL_SELECT));
+        gfx_text(g, c.x, y, w->rows_text[i], gfx_rgb(g, fg), GFX_ZOOM);
+    }
 }
 
 static void draw_terminal(struct desktop *d, struct window *w, bool focused)
@@ -269,6 +363,8 @@ static void draw_window(struct desktop *d, struct window *w, bool focused)
     case WIN_TERM:  draw_terminal(d, w, focused); break;
     case WIN_CLOCK: draw_clock_window(d, w); break;
     case WIN_ABOUT: draw_about_window(d, w); break;
+    case WIN_PROCS:
+    case WIN_FILES: draw_panel(d, w); break;
     }
 }
 
@@ -282,4 +378,6 @@ void desk_compose(struct desktop *d, struct rect area)
         if (rect_intersects(area, w->frame))
             draw_window(d, w, i == d->count - 1);
     }
+    if (d->menu_open && rect_intersects(area, desk_menu_rect(d)))
+        draw_menu(d);
 }

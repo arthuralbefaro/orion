@@ -14,7 +14,8 @@ param(
     [switch]$NoBuild,
     [switch]$NoPrint,
     [switch]$KernelShell,
-    [switch]$Disk
+    [switch]$Disk,
+    [switch]$Gui
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,7 +30,8 @@ function Find-Tool([string]$Name, [string[]]$Fallbacks) {
 }
 
 if (-not $NoBuild) {
-    & (Join-Path $Root "build.ps1") | Out-Null
+    if ($Gui) { & (Join-Path $Root "build.ps1") -Gui | Out-Null }
+    else      { & (Join-Path $Root "build.ps1") | Out-Null }
     if ($LASTEXITCODE -ne 0) { throw "build.ps1 falhou" }
 }
 

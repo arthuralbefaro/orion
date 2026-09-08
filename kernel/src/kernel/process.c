@@ -712,6 +712,23 @@ void process_thread_reaped(struct process *p)
     wake_up_all(&child_exit_wq);
 }
 
+int process_list(struct user_procinfo *out, int max)
+{
+    uint64_t flags = spin_lock_irqsave(&proc_lock);
+    int n = 0;
+    for (struct process *p = processes; p && n < max; p = p->next) {
+        out[n].pid = p->pid;
+        out[n].ppid = p->parent ? p->parent->pid : 0;
+        out[n].pgid = p->pgid;
+        out[n].state = (uint32_t)p->state;
+        out[n].pages = p->pages;
+        strlcpy(out[n].name, p->name, PROCLIST_NAME);
+        n++;
+    }
+    spin_unlock_irqrestore(&proc_lock, flags);
+    return n;
+}
+
 void process_dump(void)
 {
     uint64_t flags = spin_lock_irqsave(&proc_lock);

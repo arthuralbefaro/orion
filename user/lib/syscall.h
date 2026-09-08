@@ -18,6 +18,8 @@
 #define SYS_SENDTO        44
 #define SYS_RECVFROM      45
 #define SYS_BIND          49
+#define SYS_SYSINFO       1002
+#define SYS_PROCLIST      1003
 #define SYS_RENAME        82
 #define SYS_MKDIR         83
 #define SYS_RMDIR         84

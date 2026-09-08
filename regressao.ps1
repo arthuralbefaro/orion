@@ -4,6 +4,7 @@ param(
     [switch]$OnlyA,
     [switch]$OnlyB,
     [switch]$OnlyC,
+    [switch]$OnlyD,
     [switch]$Verbose
 )
 
@@ -11,7 +12,7 @@ $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 $failures = @()
 $checks = 0
-$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC)
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -211,6 +212,35 @@ if ($runAll -or $OnlyC) {
     Expect $c "edit: pronto" "edit saiu com Ctrl\+X"
     Expect $c "(?s)cat /mnt/nota\.txt.{0,40}?linha um\s+linha dois" "cat mostra o que o edit gravou"
     Test-MemDelta $c "memoria estavel na sequencia C" 24
+}
+
+# ---------------- Sequencia D: boot direto na interface grafica ----------------
+if ($runAll -or $OnlyD) {
+    Write-Host "== Sequencia D (boot direto na GUI) ==" -ForegroundColor Cyan
+    $stepsD = @(
+        "wait:16", "shot:out\shots\reg-gui-1-boot.ppm",
+        "mon:sendkey ctrl-p", "wait:2", "shot:out\shots\reg-gui-2-processos.ppm",
+        "mon:sendkey ctrl-f", "wait:2", "shot:out\shots\reg-gui-3-arquivos.ppm",
+        "mon:mouse_move -640 -400", "wait:0.5", "mon:mouse_move 40 12", "wait:0.5",
+        "mon:mouse_button 1", "wait:0.4", "mon:mouse_button 0", "wait:1",
+        "shot:out\shots\reg-gui-4-menu.ppm",
+        "mon:sendkey ctrl-alt-x", "wait:6"
+    )
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Gui -LogPath "out\reg-d.log" `
+        -Script $stepsD -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
+    $d = Get-Log "out\reg-d.log"
+    if ($Verbose) { Write-Output $d }
+    & (Join-Path $Root "build.ps1") | Out-Null
+
+    Expect $d "init: autostart: /bin/dhcp" "init executou o autostart"
+    Expect $d "ip 10\.0\.2\.15" "dhcp do autostart configurou a rede"
+    Expect $d "init: iniciando /bin/wm" "init subiu direto na interface grafica"
+    Expect $d "wm: \d+x\d+, celula" "wm abriu o framebuffer sem passar pelo sh"
+    Expect $d "wm: terminal 0 -> sh pid \d+" "wm abriu um terminal com o sh dentro"
+    Expect $d "wm: janela de processos aberta" "Ctrl\+P abriu a janela de processos"
+    Expect $d "wm: janela de arquivos em /" "Ctrl\+F abriu a janela de arquivos"
+    Expect $d "wm: encerrando" "Ctrl\+Alt\+X encerrou o wm"
+    Expect $d "init: /bin/wm terminou" "init percebeu a saida do wm"
 }
 
 Write-Host ""

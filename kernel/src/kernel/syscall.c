@@ -19,6 +19,9 @@
 #include <kernel/signal.h>
 #include <mm/heap.h>
 #include <net/socket.h>
+#include <mm/pmm.h>
+#include <mm/vmm.h>
+#include <kernel/smp.h>
 
 extern void syscall_entry(void);
 
@@ -55,6 +58,37 @@ static bool user_ptrs_ok(char *const *v)
             return false;
     }
     return false;
+}
+
+static long sys_sysinfo(struct user_sysinfo *out)
+{
+    if (!user_range_ok((uint64_t)out, sizeof(*out)))
+        return -EFAULT;
+    struct pmm_stats st;
+    pmm_get_stats(&st);
+    uint64_t faults, copies;
+    vmm_cow_stats(&faults, &copies);
+    out->total_pages = st.total_pages;
+    out->used_pages = st.used_pages;
+    out->free_pages = st.free_pages;
+    out->shared_pages = pmm_shared_pages();
+    out->cow_faults = faults;
+    out->uptime_ms = time_uptime_ms();
+    struct heap_stats hs;
+    heap_get_stats(&hs);
+    out->heap_used = hs.slab_bytes_used + hs.large_bytes_used;
+    out->cpus = smp_cpu_count();
+    out->procs = 0;
+    return 0;
+}
+
+static long sys_proclist(struct user_procinfo *out, int max)
+{
+    if (max <= 0 || max > 64)
+        return -EINVAL;
+    if (!user_range_ok((uint64_t)out, sizeof(*out) * (uint64_t)max))
+        return -EFAULT;
+    return process_list(out, max);
 }
 
 static long sys_read(int fd, void *buf, size_t len)
@@ -647,6 +681,8 @@ void syscall_dispatch(struct interrupt_frame *f)
     case SYS_FSYNC:
     case SYS_SYNC:        ret = vfs_sync() ? 0 : -EIO; break;
     case SYS_GETPGID:     ret = process_getpgid((int)f->rdi); break;
+    case SYS_SYSINFO:     ret = sys_sysinfo((struct user_sysinfo *)f->rdi); break;
+    case SYS_PROCLIST:    ret = sys_proclist((struct user_procinfo *)f->rdi, (int)f->rsi); break;
     case SYS_SOCKET:      ret = sys_socket((int)f->rdi, (int)f->rsi, (int)f->rdx); break;
     case SYS_BIND:        ret = sys_bind((int)f->rdi, (const struct sockaddr_in *)f->rsi, (uint32_t)f->rdx); break;
     case SYS_CONNECT:     ret = sys_connect((int)f->rdi, (const struct sockaddr_in *)f->rsi, (uint32_t)f->rdx); break;

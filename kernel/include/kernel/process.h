@@ -3,6 +3,7 @@
 #include <kernel/compiler.h>
 #include <kernel/wait.h>
 #include <kernel/signal.h>
+#include <kernel/syscall.h>
 
 #define PROCESS_NAME_MAX 32
 #define PROCESS_MAX_FDS  32
@@ -66,3 +67,4 @@ int  process_fd_close(struct process *p, int fd);
 bool process_resolve_path(struct process *p, const char *path, char *out, size_t out_size);
 
 void process_dump(void);
+int  process_list(struct user_procinfo *out, int max);

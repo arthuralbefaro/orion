@@ -6,7 +6,8 @@ param(
     [int]$Smp = 1,
     [string]$Cpu = "qemu64",
     [string]$Accel = "",
-    [switch]$Disk
+    [switch]$Disk,
+    [switch]$Gui
 )
 
 $ErrorActionPreference = "Stop"
@@ -103,12 +104,18 @@ foreach ($prog in Get-ChildItem (Join-Path $UserDir "progs") -Directory) {
     $uobjDir = Join-Path $BuildDir "user\$($prog.Name)"
     New-Item -ItemType Directory -Path $uobjDir -Force | Out-Null
     $uobjs = @()
+    $progHeaders = @(Get-ChildItem $prog.FullName -Filter *.h -ErrorAction SilentlyContinue)
+    $newestProgHeader = $newestUlibHeader
+    if ($progHeaders.Count -gt 0) {
+        $h = ($progHeaders | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+        if ($h -gt $newestProgHeader) { $newestProgHeader = $h }
+    }
     foreach ($usrc in ($ulibSrcs + @(Get-ChildItem $prog.FullName -Filter *.c))) {
         $uobj = Join-Path $uobjDir ($usrc.Name + ".o")
         $ustale = -not (Test-Path $uobj)
         if (-not $ustale) {
             $uobjTime = (Get-Item $uobj).LastWriteTime
-            $ustale = ($uobjTime -lt $usrc.LastWriteTime) -or ($uobjTime -lt $newestUlibHeader)
+            $ustale = ($uobjTime -lt $usrc.LastWriteTime) -or ($uobjTime -lt $newestProgHeader)
         }
         if ($ustale) {
             Write-Host "  UCC  $($prog.Name)\$($usrc.Name)"
@@ -129,6 +136,10 @@ Copy-Item (Join-Path $LimineDir "BOOTX64.EFI") (Join-Path $EspDir "EFI\BOOT\BOOT
 Copy-Item $KernelElf (Join-Path $EspDir "boot\$Kernel.elf") -Force
 foreach ($name in $userBins.Keys) { Copy-Item $userBins[$name] (Join-Path $EspDir "bin\$name") -Force }
 Copy-Item (Join-Path $Root "limine.conf") (Join-Path $EspDir "boot\limine\limine.conf") -Force
+
+New-Item -ItemType Directory -Force -Path (Join-Path $EspDir "etc") | Out-Null
+$autostart = if ($Gui) { "/bin/dhcp`nshell /bin/wm" } else { (Get-Content (Join-Path $Root "etc\autostart") -Raw) }
+Set-Content -Path (Join-Path $EspDir "etc\autostart") -Value $autostart -Encoding ascii -NoNewline:$false
 Write-Host "OK: out\$Kernel.elf ($compiled arquivo(s) do kernel recompilado(s)), $($userBins.Count) programa(s) em esp\bin" -ForegroundColor Green
 
 if ($Run) {

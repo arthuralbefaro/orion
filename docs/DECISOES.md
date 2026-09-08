@@ -256,3 +256,29 @@ Uma linha por decisao, na ordem em que foram tomadas.
   despejavam as sequencias como texto na tela fisica, o que alem de feio fazia o
   framebuffer rolar varias vezes por tecla - e rolar 1280x800 e um memmove de
   4 MiB, o que deixava o editor segundos atras do teclado.
+
+## v1.7 (interface grafica: boot direto e aplicativos)
+
+- O `init` le `/etc/autostart`: uma linha por comando, `#` e comentario, e
+  `shell <caminho>` troca o programa que ele mantem vivo. Um arquivo de texto
+  resolve o caso de uso sem inventar um sistema de servicos.
+- O padrao do arquivo continua sendo `shell /bin/sh`. Bootar direto na GUI e
+  `.\build.ps1 -Gui` (que grava um autostart com `/bin/dhcp` e `shell /bin/wm`),
+  porque as sequencias de teste de texto e de disco falam com o `sh` pela serial
+  e ficariam impossiveis se o padrao fosse grafico.
+- Dois syscalls proprios em vez de um `/proc`: `sysinfo` (1002) e `proclist`
+  (1003). Um `/proc` de verdade exigiria um sistema de arquivos virtual novo so
+  para servir dois consumidores.
+- As janelas `Processos` e `Arquivos` sao "paineis": um vetor de linhas de texto
+  que o `wm` preenche e desenha. Cada tipo de janela nova custa uma funcao de
+  atualizacao e nada mais.
+- O `Arquivos` usa `readdir`/`stat`, os mesmos do `ls`; clicar num diretorio
+  entra nele e `..` sobe. Sem abrir arquivo: abrir exigiria decidir com que
+  programa, e nao ha associacao de tipos.
+- A barra de topo corta a dica da esquerda para nao colidir com o relogio, o IP
+  e a memoria da direita, em vez de deixar os dois se sobreporem.
+- O menu abre no botao "Orion 1.0" e fecha em qualquer clique; nao ha submenu.
+- `build.ps1` passou a considerar os cabecalhos de dentro de cada programa na
+  hora de decidir se recompila. Antes so olhava os de `user/lib`, entao mudar
+  `wm/win.h` nao recompilava `wm/win.c` - o binario saia com o valor antigo
+  compilado dentro.

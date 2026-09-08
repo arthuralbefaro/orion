@@ -15,7 +15,14 @@ enum win_kind {
     WIN_TERM,
     WIN_CLOCK,
     WIN_ABOUT,
+    WIN_PROCS,
+    WIN_FILES,
 };
+
+#define PANEL_ROWS 16
+#define PANEL_COLS 64
+#define MENU_ITEMS 5
+#define MENU_W     260
 
 struct window {
     bool used;
@@ -26,6 +33,10 @@ struct window {
     struct term term;
     int master;
     int pid;
+    char rows_text[PANEL_ROWS][PANEL_COLS];
+    int  nrows;
+    int  selected;
+    char path[128];
 };
 
 struct desktop {
@@ -35,7 +46,11 @@ struct desktop {
     int count;
     char clock[24];
     char date[24];
+    char ip[24];
+    char mem[32];
     const char *hint;
+    bool menu_open;
+    int  menu_hover;
 };
 
 void desk_init(struct desktop *d, struct gfx *g);
@@ -54,4 +69,10 @@ struct rect win_row_rect(const struct window *w, int row);
 void desk_damage_window(struct desktop *d, const struct window *w);
 void desk_damage_term_rows(struct desktop *d, struct window *w);
 void desk_damage_topbar(struct desktop *d);
+void desk_damage_menu(struct desktop *d);
+struct rect desk_menu_rect(const struct desktop *d);
+struct rect desk_menu_button(const struct desktop *d);
+int  desk_menu_item_at(const struct desktop *d, int x, int y);
+const char *desk_menu_label(int i);
+void panel_set(struct window *w, int row, const char *text);
 void desk_compose(struct desktop *d, struct rect area);

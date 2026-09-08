@@ -214,6 +214,17 @@ static void handle_exception(struct interrupt_frame *f)
                 (err & 16) ? ", busca de instrucao" : "");
     }
 
+    struct thread *t = thread_current();
+    if (t) {
+        uint64_t base = (uint64_t)t->stack;
+        uint64_t top = base + t->stack_size;
+        kprintf("  thread tid=%u '%s' cpu=%u, pilha %016lx-%016lx (%s)\n", t->tid, t->name,
+                t->cpu, base, top,
+                (f->rsp >= base && f->rsp < top) ? "rsp dentro" : "RSP FORA DA PILHA");
+        if (t->process)
+            kprintf("  processo pid=%u '%s'\n", t->process->pid, t->process->name);
+    }
+
     dump_frame(f);
     kprintf("Sistema travado.\n");
     halt_forever();
