@@ -11,8 +11,8 @@ Base do turno: commit `fe29851` (v1.0), `.\check.ps1` limpo, regressao verde.
 | 4.2 | Sinais (v1.2) | [x] | 02:35 | 14:55 | `80361d7` |
 | 4.3 | Escrita no FAT e redirecionamentos (v1.3) | [x] | 14:55 | 20:10 | `a0da561` |
 | 4.4 | Teclas estendidas e edicao de linha (v1.4) | [x] | 20:10 | 01:40 | `ff02fda` |
-| 4.5 | Fork copy-on-write (v1.5) | [ ] | 01:40 | - | - |
-| 4.6 | Rede (v1.6) | [ ] | - | - | - |
+| 4.5 | Fork copy-on-write (v1.5) | [x] | 01:40 | 06:20 | `8e8b469` |
+| 4.6 | Rede (v1.6) | [ ] | 06:20 | - | - |
 | 4.7 | GUI: boot direto e apps (v1.7) | [ ] | - | - | - |
 | 4.8 | Extras | [ ] | - | - | - |
 
@@ -128,4 +128,37 @@ redesenhar a tela toda so quando as linhas se deslocam; nas demais teclas
 reescreve so a linha do cursor e o status. Depois disso a sequencia C fecha com
 delta de 1 pagina.
 
-### 4.5 Fork copy-on-write - inicio 01:40
+### 4.5 Fork copy-on-write - 01:40 as 06:20 - commit 8e8b469 - FEITO
+Contagem de referencias por pagina fisica no PMM (vetor de `uint16_t`, ~230 KiB
+para 458 MiB de RAM; 0 = dono unico, entao quem nunca compartilhou nao paga
+nada). `pmm_free_page` decrementa em vez de liberar quando a pagina e
+compartilhada, o que fez destruir espaco de enderecos, `munmap` e `exec`
+funcionarem com COW sem mudar uma linha.
+`PTE_COW` no bit 10. A `fork` compartilha as paginas e tira o `PTE_WRITABLE` dos
+dois lados; pagina so de leitura e compartilhada sem marcar COW, para que uma
+escrita nela continue virando SIGSEGV. No fim recarrega o CR3 em vez de fazer
+`invlpg` centenas de vezes.
+A falta e resolvida em `handle_exception`, antes do caminho do SIGSEGV: uma
+referencia so devolve o `PTE_WRITABLE` sem copiar; mais de uma copia a pagina.
+O PMM ganhou spinlock: antes so desabilitava interrupcoes, o que nunca foi
+correto com 4 CPUs, e o COW multiplica as alocacoes concorrentes.
+Medido com 8 filhos vivos que so leem: 9 processos mapeando 87 paginas cada
+(783 mapeamentos) sobre 89 paginas fisicas, e a memoria usada subiu de 254 para
+469 paginas - quase tudo tabela de paginas e pilha de kernel dos filhos. Com a
+copia adiantada seriam ~900.
+Um problema achado, e serio: com `CR0.WP` ligado (esta), uma syscall que escreve
+no buffer do usuario (`read`, `getcwd`) tambem leva falta de escrita na pagina
+COW, so que em ring 0. A primeira versao do handler exigia `err & 7 == 7` (bit
+de usuario) e o kernel entrava em panico - reproduzido de proposito antes de
+corrigir: `*** EXCECAO NAO TRATADA: #PF Page Fault ... violacao de protecao,
+escrita, ring 0`. Passou a aceitar `err & 3 == 3`; o `PTE_COW` so existe em
+pagina de usuario, entao nao afrouxa nada do lado do kernel. O `forktest` tem
+uma verificacao dedicada a isso (o filho chama `getcwd` num buffer que ele nunca
+tocou em modo usuario).
+`forktest` com 16 verificacoes: isolamento de bss, pilha e heap, fork dentro de
+fork, fork+execv, 40 forks seguidos, 8 filhos so de leitura ao mesmo tempo. O
+`mem` do shell do kernel passou a mostrar paginas compartilhadas, faltas e
+copias, que e o que permite a regressao provar que o fork ficou barato e que o
+compartilhamento volta a zero no fim.
+
+### 4.6 Rede - inicio 06:20
