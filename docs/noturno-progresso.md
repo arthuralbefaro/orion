@@ -14,16 +14,35 @@ Base do turno: commit `fe29851` (v1.0), `.\check.ps1` limpo, regressao verde.
 | 4.5 | Fork copy-on-write (v1.5) | [x] | 01:40 | 06:20 | `8e8b469` |
 | 4.6 | Rede (v1.6) | [x] | 06:20 | 12:05 | `32b9937` |
 | 4.7 | GUI: boot direto e apps (v1.7) | [x] | 12:05 | 17:40 | `9fcd874` |
-| 4.8 | Extras | [ ] | 17:40 | - | - |
+| 4.8 | Extras (v1.8) | [x] | 17:40 | 21:15 | `7d333b3` |
+
+## Estado no fim do turno
+
+As oito etapas planejadas foram entregues. Ultimo commit de codigo: `7d333b3`
+(v1.8). Regressao verde com 81 verificacoes em quatro sequencias, `.\check.ps1`
+limpo.
 
 ## Como retomar
 
     cd c:\dev\orion
     .\check.ps1          # precisa terminar com "Nenhum erro ou warning."
-    .\regressao.ps1      # sequencias A (texto), B (grafica) e C (disco); exit 0 = verde
-    git log --oneline -5
+    .\regressao.ps1      # A (texto e rede), B (grafica), C (disco), D (GUI)
+    git log --oneline -10
 
-A proxima etapa e a primeira linha com `[ ]` na tabela acima.
+Rodar so uma sequencia: `.\regressao.ps1 -OnlyA` (ou `-OnlyB`, `-OnlyC`,
+`-OnlyD`). A sequencia D constroi com `-Gui` e restaura o autostart padrao no
+fim; se ela for interrompida no meio, rode `.\build.ps1` antes das outras, senao
+o sistema boota no `wm` e as sequencias de texto nao falam com o `sh`.
+
+**Por onde comecar:** o problema numero um em aberto sao duas travadas raras e
+nao reproduziveis com 4 CPUs, as duas em momentos de criacao ou saida de
+processo - ver os itens (3) e (4) da etapa 4.7 no diario abaixo, e a secao "O
+problema numero um em aberto" de `docs/noturno-relatorio.md`. O dump de excecao
+nao tratada ja imprime tid, nome, CPU e os limites da pilha da thread, entao a
+proxima ocorrencia deve dizer de imediato se e estouro de pilha de kernel.
+
+Depois disso, o que ficou de fora de proposito: TCP e `wget` (etapa 4.6) e a ISO
+para BIOS (etapa 4.8, falta `xorriso` na maquina).
 
 ## Diario
 
@@ -240,4 +259,27 @@ com (3), sao duas travadas raras e nao reproduziveis, as duas em momentos de
 criacao/saida de processo com 4 CPUs. **E o problema numero um em aberto no
 fim do turno.**
 
-### 4.8 Extras - inicio 17:40
+### 4.8 Extras - 17:40 as 21:15 - commit 7d333b3 - FEITO
+Variaveis de ambiente na libc: `setenv`, `unsetenv` e `putenv` sobre um vetor
+estatico de 64 entradas que o processo adota na primeira escrita (copia o
+`environ` original antes de mexer), sem `malloc` no caminho.
+`sh`: `NOME=valor` sozinho na linha define uma variavel, `$NOME` e `${NOME}`
+sao expandidos na linha inteira antes de separar os tokens, e `export`/`unset`
+sao builtins. `PATH` decide onde procurar o programa; sem `PATH` o padrao
+continua `/bin`. Se o `PATH` esta definido e o programa nao esta la, o shell
+deixa o `execv` falhar com a mensagem certa em vez de cair em `/bin` escondido.
+O `/etc/autostart` tambem aceita `NOME=valor`, e e de la que `PATH` e `HOME`
+vem para o sistema todo.
+Programas novos: `top` (processos, memoria, copy-on-write, atualiza a cada
+segundo; aceita um numero de rodadas), `env`, `printenv` e `clear`.
+README reescrito com tudo o que entrou no turno.
+Um problema achado: a verificacao do `nslookup` falhou uma vez com `SIGALRM` -
+o SLIRP do QEMU so encaminha para o resolvedor do hospedeiro, e ele nao
+respondeu em 5 s. A regressao ficou com duas verificacoes no lugar de uma: uma
+estritamente local (usou o servidor que veio do DHCP) e a resolucao de verdade,
+agora com duas tentativas.
+**Nao entregue: ISO para BIOS com xorriso.** Nem `xorriso` nem `mkisofs` existem
+nesta maquina, e o `winget` nao tem nenhum dos dois (`winget search xorriso` e
+`winget search cdrtools` nao acham nada). O Limine ja traz `limine-bios-cd.bin`
+e `limine-bios.sys`, entao falta so a ferramenta que monta o ISO9660 com El
+Torito; escrever uma do zero nao cabia no passo.
