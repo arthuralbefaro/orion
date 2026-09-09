@@ -66,6 +66,13 @@ static void read_autostart(void)
             p++;
         if (!*p || *p == '#')
             continue;
+        char *eq = strchr(p, '=');
+        char *space = strchr(p, ' ');
+        if (eq && eq != p && (!space || eq < space)) {
+            putenv(p);
+            printf("init: ambiente: %s\n", p);
+            continue;
+        }
         if (strncmp(p, "shell ", 6) == 0) {
             snprintf(shell_path, sizeof(shell_path), "%s", p + 6);
             continue;

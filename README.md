@@ -30,7 +30,10 @@ de diagnostico do kernel (`orion>`), que tem `help`.
     Ctrl+C                              interrompe o programa em primeiro plano
     Ctrl+L                              limpa a tela
     Ctrl+D                              sai
-    builtins: cd, pwd, sync, clear, history, exit, help
+    NOME=valor                          variavel de ambiente
+    echo $NOME  ou  echo ${NOME}        expansao
+    PATH=/bin                           onde procurar os programas
+    builtins: cd, pwd, sync, clear, history, export, unset, exit, help
 
 ### Interface grafica
 No `/bin/sh`, o comando `wm` inicia o compositor: uma janela de terminal com o
@@ -95,6 +98,10 @@ D (boot direto na interface grafica).
     nslookup consulta um registro A no DNS
     dhcp     pede endereco, mascara, gateway e DNS
     mkfs     formata um disco em FAT16 (ex.: mkfs /dev/sdb ORION)
+    top      processos, memoria e copy-on-write, atualizando a cada segundo
+    env      mostra o ambiente ou roda um comando com variaveis novas
+    printenv imprime uma ou todas as variaveis
+    clear    limpa a tela
     memtest  auto-teste de mmap, malloc, stat, snprintf
     fstest   auto-teste do sistema de arquivos (-a inclui 300 arquivos e 3 MiB)
     polltest auto-teste de poll, pipes e O_NONBLOCK
@@ -119,8 +126,7 @@ O QEMU sobe uma e1000 com a rede de usuario (SLIRP): 10.0.2.15 para o Orion,
 
 A pilha faz ARP, IPv4, ICMP e UDP; sockets sao `SOCK_DGRAM` e `SOCK_RAW`
 (socket, bind, connect, sendto, recvfrom). Nao tem TCP. O `test.ps1` grava todo
-o trafego em `out
-et.pcap`.
+o trafego em `out\net.pcap`.
 
 ## Dispositivos em /dev
     /dev/fb0        framebuffer: ioctl FBIOGET_INFO / FBIOREDRAW, mmap
@@ -134,8 +140,8 @@ poll, lseek, mmap, munmap, brk, ioctl, pipe, dup, dup2, nanosleep, getpid, fork,
 execve, exit, wait4, getcwd, chdir, getppid, arch_prctl, clock_gettime, fcntl,
 kill, rt_sigaction, rt_sigprocmask, rt_sigreturn, alarm, setpgid, getpgid,
 rename, mkdir, rmdir, unlink, fsync, ftruncate, sync, socket, bind, connect,
-sendto, recvfrom; e dois proprios:
-readdir (1000) e openpty (1001).
+sendto, recvfrom; e quatro proprios:
+readdir (1000), openpty (1001), sysinfo (1002) e proclist (1003).
 
 ## Layout
     kernel/include/   headers (kernel/, lib/, drivers/, arch/x86_64/, mm/, fs/, boot/)

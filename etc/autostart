@@ -1,10 +1,17 @@
 # Lido pelo init na hora do boot. Uma linha por comando.
 # Linhas que comecam com # sao ignoradas.
 #
-# "shell <caminho>" troca o programa que o init mantem vivo no terminal.
-# Descomente a linha abaixo (ou use .\build.ps1 -Gui) para bootar direto na
-# interface grafica em vez do shell de texto.
+# NOME=valor           define uma variavel de ambiente para todo o sistema
+# <caminho> <args>     roda um programa e espera ele terminar
+# shell <caminho>      troca o programa que o init mantem vivo no terminal
 #
+# Descomente a linha do wm (ou use .\build.ps1 -Gui) para bootar direto na
+# interface grafica em vez do shell de texto.
+
+PATH=/bin
+HOME=/
+
+# /bin/dhcp
 # shell /bin/wm
 
 shell /bin/sh

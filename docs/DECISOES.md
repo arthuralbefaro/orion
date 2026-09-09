@@ -282,3 +282,30 @@ Uma linha por decisao, na ordem em que foram tomadas.
   hora de decidir se recompila. Antes so olhava os de `user/lib`, entao mudar
   `wm/win.h` nao recompilava `wm/win.c` - o binario saia com o valor antigo
   compilado dentro.
+
+## v1.8 (extras)
+
+- As variaveis de ambiente moram na libc, num vetor estatico de 64 entradas de
+  256 bytes que o processo adota na primeira escrita (`setenv` copia o `environ`
+  original antes de mexer). Sem `malloc` no caminho, e o `environ` continua
+  valido depois de `fork`/`exec` porque o `execve` ja levava o ponteiro.
+- A expansao de `$NOME` e `${NOME}` acontece na linha inteira, antes de separar
+  os tokens. E o suficiente para o que o shell faz e evita ter que carregar o
+  estado de citacao pelo parser todo.
+- `NOME=valor` sozinho na linha vira uma variavel; com um comando na frente, o
+  shell nao herda nada (nao tem `VAR=x cmd`), porque isso exigiria um ambiente
+  por comando. Quem precisa usa o programa `env`.
+- Se o `PATH` esta definido e o programa nao esta em nenhum dos caminhos, o
+  shell tenta o primeiro caminho e deixa o `execv` falhar com a mensagem certa,
+  em vez de cair em `/bin` escondido. Sem `PATH` o padrao continua `/bin`.
+- O `/etc/autostart` tambem aceita `NOME=valor`, e o `init` passa essas
+  variaveis para o shell. E onde `PATH` e `HOME` sao definidos para o sistema.
+- **Nao entregue: ISO para BIOS com xorriso.** Nem `xorriso` nem `mkisofs`
+  existem nesta maquina, e o `winget` nao tem nenhum dos dois. O Limine ja traz
+  `limine-bios-cd.bin` e `limine-bios.sys`, entao falta so a ferramenta que
+  monta o ISO9660 com El Torito - escrever uma do zero nao cabia no passo.
+- A verificacao do `nslookup` na regressao depende de o hospedeiro ter DNS
+  funcionando: o SLIRP do QEMU so encaminha para o resolvedor da maquina. Uma
+  vez ela falhou com `SIGALRM` porque o resolvedor nao respondeu em 5 s. Ficaram
+  duas verificacoes: uma estritamente local (o `nslookup` usou o servidor que
+  veio do DHCP), e a resolucao de verdade, com duas tentativas.

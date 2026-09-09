@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -53,10 +54,89 @@ static void report(int status)
 
 static void resolve(const char *cmd, char *out, size_t size)
 {
-    if (strchr(cmd, '/'))
+    if (strchr(cmd, '/')) {
         snprintf(out, size, "%s", cmd);
-    else
+        return;
+    }
+    const char *path = getenv("PATH");
+    if (!path || !*path) {
         snprintf(out, size, "/bin/%s", cmd);
+        return;
+    }
+    while (*path) {
+        const char *sep = strchr(path, ':');
+        int len = sep ? (int)(sep - path) : (int)strlen(path);
+        if (len > 0)
+            snprintf(out, size, "%.*s/%s", len, path, cmd);
+        else
+            snprintf(out, size, "%s", cmd);
+        struct stat st;
+        if (stat(out, &st) == 0)
+            return;
+        if (!sep)
+            break;
+        path = sep + 1;
+    }
+    /* Nada no PATH: deixa o primeiro caminho para o erro sair com sentido. */
+    const char *first = getenv("PATH");
+    const char *sep = strchr(first, ':');
+    int len = sep ? (int)(sep - first) : (int)strlen(first);
+    snprintf(out, size, "%.*s/%s", len, first, cmd);
+}
+
+/* Troca $NOME e ${NOME} pelo valor da variavel. */
+static void expand_vars(const char *in, char *out, size_t size)
+{
+    size_t o = 0;
+    while (*in && o + 1 < size) {
+        if (*in != '$') {
+            out[o++] = *in++;
+            continue;
+        }
+        in++;
+        char name[64];
+        size_t n = 0;
+        int braced = *in == '{';
+        if (braced)
+            in++;
+        while (*in && n < sizeof(name) - 1 &&
+               ((*in >= 'A' && *in <= 'Z') || (*in >= 'a' && *in <= 'z') ||
+                (*in >= '0' && *in <= '9') || *in == '_'))
+            name[n++] = *in++;
+        name[n] = '\0';
+        if (braced && *in == '}')
+            in++;
+        if (!n) {
+            out[o++] = '$';
+            continue;
+        }
+        const char *val = getenv(name);
+        if (!val)
+            continue;
+        while (*val && o + 1 < size)
+            out[o++] = *val++;
+    }
+    out[o] = '\0';
+}
+
+/* "NOME=valor" no inicio da linha vira uma variavel de ambiente. */
+static int assignment(const char *word)
+{
+    const char *eq = strchr(word, '=');
+    if (!eq || eq == word)
+        return 0;
+    for (const char *p = word; p < eq; p++)
+        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+              (*p >= '0' && *p <= '9') || *p == '_'))
+            return 0;
+    char name[64];
+    size_t n = (size_t)(eq - word);
+    if (n >= sizeof(name))
+        return 0;
+    memcpy(name, word, n);
+    name[n] = '\0';
+    setenv(name, eq + 1, 1);
+    return 1;
 }
 
 /* Separa a linha em tokens e retira os redirecionamentos. */
@@ -163,14 +243,35 @@ static int builtin(struct cmd *c)
             printf("%4d  %s\n", i + 1, editor_history_at(i));
         return 1;
     }
+    if (strcmp(argv[0], "export") == 0) {
+        if (c->argc == 1) {
+            for (char **e = environ; e && *e; e++)
+                printf("export %s\n", *e);
+            return 1;
+        }
+        for (int i = 1; i < c->argc; i++)
+            if (!assignment(argv[i])) {
+                const char *v = getenv(argv[i]);
+                setenv(argv[i], v ? v : "", 1);
+            }
+        return 1;
+    }
+    if (strcmp(argv[0], "unset") == 0) {
+        for (int i = 1; i < c->argc; i++)
+            unsetenv(argv[i]);
+        return 1;
+    }
     if (strcmp(argv[0], "clear") == 0) {
         fputs("\x1b[2J\x1b[H", stdout);
         return 1;
     }
     if (strcmp(argv[0], "help") == 0) {
-        puts("builtins: cd, pwd, sync, clear, history, exit, help");
+        puts("builtins: cd, pwd, sync, clear, history, export, unset, exit, help");
+        puts("variaveis:   NOME=valor, $NOME, ${NOME}; PATH escolhe onde procurar");
         puts("arquivos: ls cat cp mv rm mkdir touch head tail grep sort uniq tee wc echo");
-        puts("sistema:  date sleep hello memtest crash fstest polltest sigtest ptytest");
+        puts("sistema:  date sleep top env printenv clear hello memtest crash");
+        puts("testes:   fstest polltest sigtest ptytest forktest");
+        puts("rede:     ifconfig ping nslookup dhcp");
         puts("graficos: wm (compositor), fbtest, evtest");
         puts("redireciona: cmd > arq, cmd >> arq, cmd < arq, cmd 2> arq");
         puts("pipeline:    ls /bin | grep test | wc");
@@ -245,8 +346,24 @@ static void run_pipeline(struct cmd *cmds, int n)
     report(status);
 }
 
-static void run_line(char *line)
+static void run_line(char *raw)
 {
+    char line[LINE_SIZE * 2];
+    expand_vars(raw, line, sizeof(line));
+
+    char first[128];
+    size_t k = 0;
+    const char *w = line;
+    while (*w == ' ' || *w == '\t')
+        w++;
+    while (w[k] && w[k] != ' ' && w[k] != '\t' && k < sizeof(first) - 1) {
+        first[k] = w[k];
+        k++;
+    }
+    first[k] = '\0';
+    if (k && !w[k] && assignment(first))
+        return;
+
     char *stages[MAX_STAGES];
     int n = 0;
     char *p = line;
@@ -285,6 +402,9 @@ int main(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
+    setenv("PATH", "/bin", 0);
+    setenv("HOME", "/", 0);
+    setenv("SHELL", "/bin/sh", 0);
     char line[LINE_SIZE], cwd[256], prompt[300];
 
     setpgid(0, 0);

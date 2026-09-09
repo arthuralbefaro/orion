@@ -154,3 +154,88 @@ void qsort(void *base, size_t n, size_t size, int (*cmp)(const void *, const voi
 static unsigned rand_state = 12345;
 int rand(void) { rand_state = rand_state * 1103515245 + 12345; return (int)((rand_state >> 16) & 0x7FFF); }
 void srand(unsigned seed) { rand_state = seed; }
+
+#define ENV_MAX   64
+#define ENV_ENTRY 256
+
+static char env_store[ENV_MAX][ENV_ENTRY];
+static char *env_slots[ENV_MAX + 1];
+static int env_owned;
+
+static void env_adopt(void)
+{
+    if (env_owned)
+        return;
+    int n = 0;
+    for (char **e = environ; e && *e && n < ENV_MAX; e++) {
+        size_t k = 0;
+        while ((*e)[k] && k < ENV_ENTRY - 1) {
+            env_store[n][k] = (*e)[k];
+            k++;
+        }
+        env_store[n][k] = '\0';
+        env_slots[n] = env_store[n];
+        n++;
+    }
+    env_slots[n] = NULL;
+    environ = env_slots;
+    env_owned = 1;
+}
+
+static int env_find(const char *name)
+{
+    size_t len = strlen(name);
+    for (int i = 0; env_slots[i]; i++)
+        if (strncmp(env_slots[i], name, len) == 0 && env_slots[i][len] == '=')
+            return i;
+    return -1;
+}
+
+int setenv(const char *name, const char *value, int overwrite)
+{
+    if (!name || !*name || strchr(name, '='))
+        return -1;
+    env_adopt();
+    int i = env_find(name);
+    if (i >= 0 && !overwrite)
+        return 0;
+    if (i < 0) {
+        for (i = 0; i < ENV_MAX && env_slots[i]; i++)
+            ;
+        if (i >= ENV_MAX)
+            return -1;
+        env_slots[i] = env_store[i];
+        env_slots[i + 1] = NULL;
+    }
+    snprintf(env_store[i], ENV_ENTRY, "%s=%s", name, value);
+    env_slots[i] = env_store[i];
+    return 0;
+}
+
+int unsetenv(const char *name)
+{
+    env_adopt();
+    int i = env_find(name);
+    if (i < 0)
+        return 0;
+    int last = i;
+    while (env_slots[last + 1])
+        last++;
+    env_slots[i] = env_slots[last];
+    env_slots[last] = NULL;
+    return 0;
+}
+
+int putenv(char *entry)
+{
+    char *eq = strchr(entry, '=');
+    if (!eq)
+        return unsetenv(entry);
+    char name[128];
+    size_t n = (size_t)(eq - entry);
+    if (n >= sizeof(name))
+        return -1;
+    memcpy(name, entry, n);
+    name[n] = '\0';
+    return setenv(name, eq + 1, 1);
+}
