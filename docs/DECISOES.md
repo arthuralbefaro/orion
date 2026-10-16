@@ -309,3 +309,35 @@ Uma linha por decisao, na ordem em que foram tomadas.
   vez ela falhou com `SIGALRM` porque o resolvedor nao respondeu em 5 s. Ficaram
   duas verificacoes: uma estritamente local (o `nslookup` usou o servidor que
   veio do DHCP), e a resolucao de verdade, com duas tentativas.
+
+## v1.9 (estabilidade SMP)
+
+- O heap do kernel ganhou uma trava propria (`heap_lock`). Antes ele dependia de
+  quem chamava estar com as interrupcoes desligadas, o que nunca foi correto com
+  4 CPUs alocando ao mesmo tempo.
+- Liberar uma alocacao grande nao desmapeia na hora: o bloco vai para uma lista
+  de liberacao adiada, e o `heap_reclaim` desmapeia tudo de uma vez e faz um
+  TLB shootdown **sincrono** (IPI `0xF2`, espera todas as CPUs confirmarem)
+  antes de devolver as paginas ao PMM. Sem a espera, outra CPU ainda podia ter
+  a traducao velha na TLB e escrever numa pagina ja reaproveitada.
+- Cada alocacao grande tem uma pagina de guarda nao mapeada logo abaixo. As
+  pilhas de kernel das threads sao alocacoes grandes, entao estourar a pilha
+  vira `#PF` na guarda, e o dump de excecao diz "ESTOURO DA PILHA DO KERNEL".
+- Double fault e NMI rodam em pilhas proprias (IST 1 e 2 do TSS), senao um
+  estouro de pilha viraria triple fault e reboot silencioso.
+- O spinlock guarda quem o pegou (CPU, thread e o endereco do codigo). Uma
+  espera de mais de 10 s (60 s quando a thread pode ceder a CPU) vira panico
+  com "deadlock provavel", dizendo a trava, quem segura e onde ela foi pega;
+  pegar de novo uma trava que a propria thread segura vira panico na hora.
+- Watchdog: a cada segundo cada CPU confere o contador de ticks da vizinha; se
+  ele parou por 5 s (interrupcoes desligadas), manda uma NMI para a CPU parada
+  imprimir o proprio estado e entra em panico.
+- `/dev/null`, `/dev/zero` e `/dev/random` (xorshift semeado pelo TSC) moram na
+  tabela fixa do `devfs`, como os outros dispositivos.
+- Correcao achada na validacao no Windows: `net_deliver_udp` e
+  `net_deliver_icmp` chamavam `wake_up_all_locked` segurando so a `sock_lock`,
+  sem a `runq_lock` que a fila de espera exige. O assert novo de `entry_detach`
+  pegou isso no segundo `ping` seguido. Passaram a chamar `wake_up_all`.
+- O `panic` passou a imprimir a pilha de chamadas da thread atual (a mesma
+  varredura do dump de excecao). Nesta maquina nao ha `llvm-addr2line`; o
+  `llvm-symbolizer --obj=out\orion.elf <endereco>` faz o mesmo.

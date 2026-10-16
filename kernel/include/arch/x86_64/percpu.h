@@ -20,6 +20,9 @@ struct percpu {
     bool online;
     uint64_t ticks;
     uint64_t context_switches;
+    volatile uint64_t heartbeat;
+    uint64_t wd_seen;
+    uint32_t wd_strikes;
 };
 
 void percpu_init_bsp(uint32_t lapic_id);

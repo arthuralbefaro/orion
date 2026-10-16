@@ -250,11 +250,21 @@ static void unregister_locked(struct process *p)
         pp = &(*pp)->next;
     if (*pp)
         *pp = p->next;
-    for (struct process *c = processes; c; c = c->next)
+
+    pp = &processes;
+    while (*pp) {
+        struct process *c = *pp;
         if (c->parent == p) {
             c->parent = NULL;
             c->autofree = c->state == PROC_ZOMBIE;
+            if (c->state == PROC_ZOMBIE && c->pml4_phys == 0) {
+                *pp = c->next;
+                kfree(c);
+                continue;
+            }
         }
+        pp = &c->next;
+    }
 }
 
 static void process_unregister(struct process *p)
@@ -710,6 +720,16 @@ void process_thread_reaped(struct process *p)
     if (autofree)
         kfree(p);
     wake_up_all(&child_exit_wq);
+}
+
+int process_count(void)
+{
+    uint64_t flags = spin_lock_irqsave(&proc_lock);
+    int n = 0;
+    for (struct process *p = processes; p; p = p->next)
+        n++;
+    spin_unlock_irqrestore(&proc_lock, flags);
+    return n;
 }
 
 int process_list(struct user_procinfo *out, int max)

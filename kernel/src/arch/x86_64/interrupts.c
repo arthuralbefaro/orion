@@ -1,6 +1,3 @@
-/*
- * interrupts.c - IDT + despacho de interrupções/exceções.
- */
 #include <arch/x86_64/interrupts.h>
 #include <arch/x86_64/gdt.h>
 #include <arch/x86_64/cpu.h>
@@ -14,16 +11,15 @@
 #include <kernel/process.h>
 #include <kernel/signal.h>
 #include <mm/vmm.h>
+#include <mm/heap.h>
 #include <kernel/smp.h>
 #include <arch/x86_64/percpu.h>
-
-/* ---------- IDT ---------- */
 
 struct idt_entry {
     uint16_t offset_low;
     uint16_t selector;
-    uint8_t  ist;        /* bits 0-2: índice na IST do TSS (0 = pilha normal) */
-    uint8_t  type_attr;  /* P | DPL | 0 | tipo (0xE = interrupt gate) */
+    uint8_t  ist;
+    uint8_t  type_attr;
     uint16_t offset_mid;
     uint32_t offset_high;
     uint32_t reserved;
@@ -35,30 +31,27 @@ struct idtr {
 } PACKED;
 
 #define GATE_INTERRUPT 0xE
-#define GATE_TRAP      0xF
 #define GATE_PRESENT   (1 << 7)
 #define GATE_DPL(n)    ((n) << 5)
 
 static struct idt_entry idt[256] ALIGNED(16);
 
-/* Definidos em isr_stubs.S: os 256 stubs ocupam ISR_STUB_SIZE bytes cada. */
 extern uint8_t isr_stubs_begin[];
+extern char __text_start[], __text_end[];
 #define ISR_STUB_SIZE 16
 #define ISR_STUB(vec) ((uint64_t)isr_stubs_begin + (uint64_t)(vec) * ISR_STUB_SIZE)
 
-static void idt_set_gate(uint8_t vector, uint64_t handler, uint8_t dpl)
+static void idt_set_gate(uint8_t vector, uint64_t handler, uint8_t dpl, uint8_t ist)
 {
     struct idt_entry *e = &idt[vector];
     e->offset_low  = handler & 0xFFFF;
     e->selector    = GDT_KERNEL_CODE;
-    e->ist         = 0;
+    e->ist         = ist;
     e->type_attr   = GATE_PRESENT | GATE_DPL(dpl) | GATE_INTERRUPT;
     e->offset_mid  = (handler >> 16) & 0xFFFF;
     e->offset_high = (handler >> 32) & 0xFFFFFFFF;
     e->reserved    = 0;
 }
-
-/* ---------- Handlers registrados ---------- */
 
 struct handler_slot {
     interrupt_handler_t fn;
@@ -71,8 +64,8 @@ static uint64_t counters[256];
 void interrupts_register(uint8_t vector, interrupt_handler_t handler, void *ctx)
 {
     uint64_t flags = irq_save();
-    handlers[vector].fn = handler;
     handlers[vector].ctx = ctx;
+    handlers[vector].fn = handler;
     irq_restore(flags);
 }
 
@@ -85,8 +78,6 @@ uint64_t interrupts_count(uint8_t vector)
 {
     return counters[vector];
 }
-
-/* ---------- IRQs de dispositivos ---------- */
 
 static enum irq_mode irq_mode = IRQ_MODE_PIC;
 
@@ -117,8 +108,6 @@ void irq_disable(uint8_t irq)
     else
         pic_mask(irq);
 }
-
-/* ---------- Exceções ---------- */
 
 static const char *const exception_names[32] = {
     [0]  = "#DE Divide Error",
@@ -158,7 +147,38 @@ const char *exception_name(uint8_t vector)
     return "?";
 }
 
-static void dump_frame(const struct interrupt_frame *f)
+static bool is_text(uint64_t a)
+{
+    return a >= (uint64_t)__text_start && a < (uint64_t)__text_end;
+}
+
+static void backtrace(uint64_t rip, uint64_t rsp, uint64_t lo, uint64_t hi)
+{
+    kprintf("  pilha de chamadas (llvm-addr2line -f -e out\\orion.elf <endereco>):\n");
+    if (is_text(rip))
+        kprintf("    %016lx\n", rip);
+    if (rsp < lo || rsp >= hi || (rsp & 7))
+        return;
+    int shown = 0;
+    for (uint64_t *p = (uint64_t *)rsp; (uint64_t)p < hi && shown < 16; p++) {
+        if (is_text(*p)) {
+            kprintf("    %016lx\n", *p);
+            shown++;
+        }
+    }
+}
+
+void interrupts_backtrace_here(void)
+{
+    struct thread *t = percpu_ready() ? thread_current() : NULL;
+    if (!t || !t->stack)
+        return;
+    uint64_t rsp;
+    __asm__ volatile("movq %%rsp, %0" : "=r"(rsp));
+    backtrace(0, rsp & ~7ull, (uint64_t)t->stack, (uint64_t)t->stack + t->stack_size);
+}
+
+void interrupts_dump(const struct interrupt_frame *f)
 {
     kprintf("  RIP=%016lx CS=%04lx RFLAGS=%016lx\n", f->rip, f->cs, f->rflags);
     kprintf("  RSP=%016lx SS=%04lx ERR=%016lx\n", f->rsp, f->ss, f->err_code);
@@ -168,12 +188,28 @@ static void dump_frame(const struct interrupt_frame *f)
     kprintf("  R12=%016lx R13=%016lx R14=%016lx R15=%016lx\n", f->r12, f->r13, f->r14, f->r15);
     kprintf("  CR0=%016lx CR2=%016lx CR3=%016lx CR4=%016lx\n",
             read_cr0(), read_cr2(), read_cr3(), read_cr4());
+
+    struct thread *t = percpu_ready() ? thread_current() : NULL;
+    if (!t) {
+        backtrace(f->rip, 0, 0, 0);
+        return;
+    }
+    uint64_t base = (uint64_t)t->stack;
+    uint64_t top = base + t->stack_size;
+    kprintf("  thread tid=%u '%s' cpu=%u, pilha %016lx-%016lx (%s)\n", t->tid, t->name,
+            t->cpu, base, top,
+            !t->stack ? "pilha de boot"
+            : (f->rsp >= base && f->rsp < top) ? "rsp dentro" : "RSP FORA DA PILHA");
+    if (t->process)
+        kprintf("  processo pid=%u '%s'\n", t->process->pid, t->process->name);
+    if (t->stack && (heap_in_guard(t->stack, read_cr2()) || heap_in_guard(t->stack, f->rsp)))
+        kprintf("  >>> ESTOURO DA PILHA DO KERNEL: o acesso caiu na pagina de guarda abaixo da pilha <<<\n");
+    if ((f->cs & 3) == 0 && t->stack)
+        backtrace(f->rip, f->rsp, base, top);
 }
 
 static void handle_exception(struct interrupt_frame *f)
 {
-    /* Se alguém registrou um handler específico (ex.: page fault handler
-     * do futuro VMM), deixa ele decidir. */
     if (handlers[f->int_no].fn) {
         handlers[f->int_no].fn(f, handlers[f->int_no].ctx);
         return;
@@ -185,7 +221,7 @@ static void handle_exception(struct interrupt_frame *f)
             return;
     }
 
-    if ((f->cs & 3) == 3) {
+    if ((f->cs & 3) == 3 && f->int_no != EXC_DOUBLE_FAULT) {
         struct process *p = process_current();
         int sig = f->int_no == EXC_DIVIDE_ERROR ? SIGFPE
                 : f->int_no == EXC_INVALID_OPCODE ? SIGILL : SIGSEGV;
@@ -200,6 +236,7 @@ static void handle_exception(struct interrupt_frame *f)
 
     cli();
     smp_halt_others();
+    kprint_panic_mode();
     console_set_colors(COLOR_WHITE, COLOR_RED);
     kprintf("\n*** EXCECAO NAO TRATADA: %s (vetor %lu) na CPU %u ***\n",
             exception_name((uint8_t)f->int_no), f->int_no, percpu_cpu_id());
@@ -213,24 +250,14 @@ static void handle_exception(struct interrupt_frame *f)
                 (err & 8) ? ", bit reservado" : "",
                 (err & 16) ? ", busca de instrucao" : "");
     }
+    if (f->int_no == EXC_DOUBLE_FAULT)
+        kprintf("  Double fault: a CPU nao conseguiu entregar uma excecao (CR2=%016lx).\n"
+                "  A causa mais comum e estouro da pilha do kernel.\n", read_cr2());
 
-    struct thread *t = thread_current();
-    if (t) {
-        uint64_t base = (uint64_t)t->stack;
-        uint64_t top = base + t->stack_size;
-        kprintf("  thread tid=%u '%s' cpu=%u, pilha %016lx-%016lx (%s)\n", t->tid, t->name,
-                t->cpu, base, top,
-                (f->rsp >= base && f->rsp < top) ? "rsp dentro" : "RSP FORA DA PILHA");
-        if (t->process)
-            kprintf("  processo pid=%u '%s'\n", t->process->pid, t->process->name);
-    }
-
-    dump_frame(f);
+    interrupts_dump(f);
     kprintf("Sistema travado.\n");
     halt_forever();
 }
-
-/* ---------- Despacho (chamado de isr_stubs.S) ---------- */
 
 void isr_dispatch(struct interrupt_frame *frame)
 {
@@ -246,8 +273,6 @@ void isr_dispatch(struct interrupt_frame *frame)
     if (vec >= VECTOR_IRQ_BASE && vec < VECTOR_IRQ_BASE + VECTOR_IRQ_COUNT) {
         uint8_t irq = vec - VECTOR_IRQ_BASE;
 
-        /* Modo PIC: IRQ 7/15 podem ser espúrias (ruído / timing do 8259).
-         * Nesse caso não há bit no ISR e não se manda EOI. */
         if (irq_mode == IRQ_MODE_PIC && pic_is_spurious(irq))
             return;
 
@@ -260,26 +285,23 @@ void isr_dispatch(struct interrupt_frame *frame)
             lapic_eoi();
         else
             pic_send_eoi(irq);
-        sched_check_preempt();  /* pode trocar de thread aqui (volta depois) */
+        sched_check_preempt();
         signal_check(frame);
         return;
     }
 
     if (vec == VECTOR_SPURIOUS)
-        return; /* espúria do LAPIC: ignorar, sem EOI */
+        return;
 
     if (handlers[vec].fn)
         handlers[vec].fn(frame, handlers[vec].ctx);
     else
         log_warn("int", "vetor %u sem handler", vec);
 
-    /* Vetores acima das IRQs ISA vêm do LAPIC (timer, IPIs...): EOI nele. */
     lapic_eoi();
     sched_check_preempt();
     signal_check(frame);
 }
-
-/* ---------- Init ---------- */
 
 void idt_init(void)
 {
@@ -288,13 +310,15 @@ void idt_init(void)
     memset(counters, 0, sizeof(counters));
 
     for (int i = 0; i < 256; i++)
-        idt_set_gate((uint8_t)i, ISR_STUB(i), 0);
+        idt_set_gate((uint8_t)i, ISR_STUB(i), 0, 0);
 
-    /* Breakpoint (int3) pode ser disparado de ring 3 no futuro. */
-    idt_set_gate(EXC_BREAKPOINT, ISR_STUB(EXC_BREAKPOINT), 3);
+    idt_set_gate(EXC_BREAKPOINT, ISR_STUB(EXC_BREAKPOINT), 3, 0);
+    idt_set_gate(EXC_DOUBLE_FAULT, ISR_STUB(EXC_DOUBLE_FAULT), 0, GDT_IST_DOUBLE_FAULT);
+    idt_set_gate(EXC_NMI, ISR_STUB(EXC_NMI), 0, GDT_IST_NMI);
 
     idt_load();
-    log_info("idt", "IDT carregada: 256 vetores em %p", (void *)idt);
+    log_info("idt", "IDT carregada: 256 vetores em %p; #DF e NMI em pilhas de emergencia",
+             (void *)idt);
 }
 
 void idt_load(void)

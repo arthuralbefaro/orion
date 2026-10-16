@@ -5,6 +5,7 @@
 #define THREAD_NAME_MAX   24
 #define THREAD_STACK_SIZE (16 * 1024)
 #define SCHED_TIME_SLICE  10
+#define THREAD_STACK_CANARY 0x4F52494F4E535450ull
 
 enum thread_state {
     THREAD_READY,
@@ -37,6 +38,7 @@ struct thread {
     bool     is_idle;
     uint64_t fs_base;
     bool     on_sleep_list;
+    bool     on_runq;
     struct wait_entry *waits;
 
     struct thread *next;
@@ -63,6 +65,7 @@ void sched_post_switch(void);
 
 void sched_runq_lock(void);
 void sched_runq_unlock(void);
+bool sched_runq_held(void);
 void sched_block_switch(uint64_t wake_at);
 bool sched_make_ready(struct thread *t);
 uint64_t sched_deadline(uint64_t ms);

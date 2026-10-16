@@ -10,6 +10,11 @@
 
 #define GDT_RPL_USER    3
 
+#define GDT_IST_COUNT   2
+#define GDT_IST_SIZE    8192
+#define GDT_IST_DOUBLE_FAULT 1
+#define GDT_IST_NMI     2
+
 struct tss {
     uint32_t reserved0;
     uint64_t rsp0;
@@ -25,3 +30,5 @@ struct tss {
 void gdt_init(void);
 void gdt_init_cpu(uint32_t cpu);
 void gdt_set_kernel_stack(uint64_t rsp0);
+bool gdt_alloc_ist(uint32_t cpu);
+bool gdt_in_ist(uint64_t addr);

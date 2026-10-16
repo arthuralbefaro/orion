@@ -2,9 +2,11 @@
 #include <kernel/sched.h>
 #include <arch/x86_64/cpu.h>
 #include <lib/string.h>
+#include <kernel/log.h>
 
 static void entry_attach(struct wait_entry *e, struct waitqueue *wq, struct thread *t)
 {
+    ASSERT(sched_runq_held());
     e->thread = t;
     e->queue = wq;
     e->woken = false;
@@ -16,6 +18,7 @@ static void entry_attach(struct wait_entry *e, struct waitqueue *wq, struct thre
 
 static void entry_detach(struct wait_entry *e)
 {
+    ASSERT(sched_runq_held());
     if (e->queue) {
         struct wait_entry **pp = &e->queue->head;
         while (*pp && *pp != e)

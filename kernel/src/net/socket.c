@@ -68,7 +68,7 @@ void net_deliver_udp(uint32_t src, uint16_t sport, uint16_t dport, const void *d
         if (s->peer_ip && (s->peer_ip != src || s->peer_port != sport))
             continue;
         queue_push(s, src, sport, data, len);
-        wake_up_all_locked(&s->rx_wq);
+        wake_up_all(&s->rx_wq);
         break;
     }
     spin_unlock_irqrestore(&sock_lock, flags);
@@ -81,7 +81,7 @@ void net_deliver_icmp(uint32_t src, const void *data, int len)
         if (s->type != SOCK_RAW || s->proto != IPPROTO_ICMP)
             continue;
         queue_push(s, src, 0, data, len);
-        wake_up_all_locked(&s->rx_wq);
+        wake_up_all(&s->rx_wq);
     }
     spin_unlock_irqrestore(&sock_lock, flags);
 }

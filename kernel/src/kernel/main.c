@@ -95,7 +95,6 @@ void kmain(void)
     pic_init();
     lapic_init();
 
-    
     if (acpi_init() && ioapic_init()) {
         pic_disable();
         lapic_set_lint0_extint(false);
@@ -117,6 +116,7 @@ void kmain(void)
 
     sti();
     smp_init();
+    heap_start_reclaimer();
     pci_init();
     ahci_init();
     e1000_init();
@@ -130,7 +130,6 @@ void kmain(void)
     sti();
     log_info("main", "interrupcoes habilitadas");
 
-    
     bool irqs_ok = lapic_is_enabled();
     if (irqs_ok) {
         uint64_t t0 = time_ticks();

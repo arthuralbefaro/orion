@@ -1,6 +1,3 @@
-/*
- * time.c - tick do sistema e TSC.
- */
 #include <kernel/time.h>
 #include <kernel/log.h>
 #include <kernel/sched.h>
@@ -10,6 +7,8 @@
 #include <drivers/pit.h>
 #include <drivers/pic.h>
 #include <arch/x86_64/percpu.h>
+#include <kernel/smp.h>
+#include <kernel/spinlock.h>
 
 static volatile uint64_t ticks;
 static const char *source = "nenhuma";
@@ -22,11 +21,10 @@ static void tick_handler(struct interrupt_frame *frame, void *ctx)
     (void)ctx;
     if (percpu_cpu_id() == 0)
         ticks++;
+    smp_watchdog_tick();
     sched_tick(time_ticks());
 }
 
-/* Mede quantos ciclos de TSC cabem em 10 ms (usando o canal 2 do PIT em
- * polling, sem depender de interrupções). */
 static uint64_t calibrate_tsc(void)
 {
     uint64_t t0 = rdtsc();
@@ -39,6 +37,7 @@ void time_init(void)
 {
     tsc_boot = rdtsc();
     tsc_hz = calibrate_tsc();
+    spin_set_timeout(tsc_hz);
 
     if (lapic_is_enabled() && lapic_timer_calibrate()) {
         interrupts_register(VECTOR_LAPIC_TIMER, tick_handler, NULL);

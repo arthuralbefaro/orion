@@ -6,6 +6,7 @@
 #include <drivers/input.h>
 #include <fs/block.h>
 #include <lib/string.h>
+#include <arch/x86_64/cpu.h>
 
 struct device {
     const char *name;
@@ -19,10 +20,94 @@ static uint64_t size_zero(void)
     return 0;
 }
 
+static int64_t null_read(struct file *f, void *buf, uint64_t len)
+{
+    (void)f;
+    (void)buf;
+    (void)len;
+    return 0;
+}
+
+static int64_t null_write(struct file *f, const void *buf, uint64_t len)
+{
+    (void)f;
+    (void)buf;
+    return (int64_t)len;
+}
+
+static int64_t zero_read(struct file *f, void *buf, uint64_t len)
+{
+    (void)f;
+    memset(buf, 0, len);
+    return (int64_t)len;
+}
+
+static uint64_t random_state;
+
+static uint64_t random_next(void)
+{
+    uint64_t x = __atomic_load_n(&random_state, __ATOMIC_RELAXED);
+    uint64_t next;
+    do {
+        next = x ? x : (rdtsc() | 1);
+        next ^= next << 13;
+        next ^= next >> 7;
+        next ^= next << 17;
+    } while (!__atomic_compare_exchange_n(&random_state, &x, next, false, __ATOMIC_RELAXED,
+                                          __ATOMIC_RELAXED));
+    return next ^ rdtsc();
+}
+
+static int64_t random_read(struct file *f, void *buf, uint64_t len)
+{
+    (void)f;
+    uint8_t *out = buf;
+    uint64_t done = 0;
+    while (done < len) {
+        uint64_t r = random_next();
+        for (int i = 0; i < 8 && done < len; i++, done++)
+            out[done] = (uint8_t)(r >> (i * 8));
+    }
+    return (int64_t)len;
+}
+
+static const struct file_ops null_ops = {
+    .read = null_read,
+    .write = null_write,
+};
+
+static const struct file_ops zero_ops = {
+    .read = zero_read,
+    .write = null_write,
+};
+
+static const struct file_ops random_ops = {
+    .read = random_read,
+    .write = null_write,
+};
+
+static struct file *null_open(void)
+{
+    return file_alloc(&null_ops, NULL);
+}
+
+static struct file *zero_open(void)
+{
+    return file_alloc(&zero_ops, NULL);
+}
+
+static struct file *random_open(void)
+{
+    return file_alloc(&random_ops, NULL);
+}
+
 static const struct device devices[] = {
-    { "fb0",   fbdev_open,     fbdev_size, S_IFCHR | 0660 },
-    { "input", input_open,     size_zero,  S_IFCHR | 0640 },
-    { "tty",   file_open_tty,  size_zero,  S_IFCHR | 0620 },
+    { "fb0",    fbdev_open,     fbdev_size, S_IFCHR | 0660 },
+    { "input",  input_open,     size_zero,  S_IFCHR | 0640 },
+    { "tty",    file_open_tty,  size_zero,  S_IFCHR | 0620 },
+    { "null",   null_open,      size_zero,  S_IFCHR | 0666 },
+    { "zero",   zero_open,      size_zero,  S_IFCHR | 0666 },
+    { "random", random_open,    size_zero,  S_IFCHR | 0444 },
 };
 
 struct file *blkdev_file_open(struct blockdev *dev);
@@ -192,7 +277,7 @@ void devfs_dump(void)
                     : fbdev_graphics_users() ? "modo grafico" : "pronto";
         else if (strcmp(d->name, "input") == 0)
             state = input_grabbed() ? "em uso" : "livre";
-        else if (strcmp(d->name, "tty") == 0)
+        else
             state = "pronto";
         kprintf("  %-8s %06o %10lu  %s\n", d->name, d->mode, d->size(), state);
     }

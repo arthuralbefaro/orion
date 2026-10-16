@@ -1,6 +1,7 @@
 #include <arch/x86_64/gdt.h>
 #include <arch/x86_64/percpu.h>
 #include <lib/string.h>
+#include <mm/heap.h>
 #include <kernel/log.h>
 
 #define SEG_RW         (1ull << 41)
@@ -30,6 +31,8 @@ struct cpu_gdt {
 
 static struct cpu_gdt cpu_gdts[MAX_CPUS];
 static uint8_t bsp_stack[16 * 1024] ALIGNED(16);
+static uint8_t bsp_ist[GDT_IST_COUNT][GDT_IST_SIZE] ALIGNED(16);
+static uint8_t *ist_stacks[MAX_CPUS][GDT_IST_COUNT];
 
 static void set_tss_descriptor(uint64_t *gdt, uint64_t base, uint32_t limit)
 {
@@ -56,6 +59,10 @@ void gdt_init_cpu(uint32_t cpu)
 
     memset(&g->tss, 0, sizeof(g->tss));
     g->tss.rsp0 = cpu == 0 ? (uint64_t)bsp_stack + sizeof(bsp_stack) : 0;
+    for (int i = 0; i < GDT_IST_COUNT; i++) {
+        uint8_t *stack = cpu == 0 ? bsp_ist[i] : ist_stacks[cpu][i];
+        g->tss.ist[i] = stack ? (uint64_t)stack + GDT_IST_SIZE : 0;
+    }
     g->tss.iopb_offset = sizeof(g->tss);
     set_tss_descriptor(g->gdt, (uint64_t)&g->tss, sizeof(g->tss) - 1);
 
@@ -83,6 +90,28 @@ void gdt_init_cpu(uint32_t cpu)
         : "rax", "memory");
 
     __asm__ volatile("ltr %w0" : : "r"((uint16_t)GDT_TSS) : "memory");
+}
+
+bool gdt_alloc_ist(uint32_t cpu)
+{
+    for (int i = 0; i < GDT_IST_COUNT; i++) {
+        if (!ist_stacks[cpu][i])
+            ist_stacks[cpu][i] = kmalloc(GDT_IST_SIZE);
+        if (!ist_stacks[cpu][i])
+            return false;
+    }
+    return true;
+}
+
+bool gdt_in_ist(uint64_t addr)
+{
+    uint32_t cpu = percpu_cpu_id();
+    for (int i = 0; i < GDT_IST_COUNT; i++) {
+        uint64_t base = cpu == 0 ? (uint64_t)bsp_ist[i] : (uint64_t)ist_stacks[cpu][i];
+        if (base && addr >= base && addr < base + GDT_IST_SIZE)
+            return true;
+    }
+    return false;
 }
 
 void gdt_init(void)

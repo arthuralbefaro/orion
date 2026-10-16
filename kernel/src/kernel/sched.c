@@ -31,6 +31,11 @@ static const char *const state_name[] = {
 
 static void ready_enqueue(struct thread *t)
 {
+    ASSERT_HELD(&runq_lock);
+    if (t->state != THREAD_READY || t->on_runq)
+        panic("sched: thread %s (tid %u) entrando na fila em estado invalido (%s, na fila: %d)",
+              t->name, t->tid, state_name[t->state], t->on_runq);
+    t->on_runq = true;
     t->next = NULL;
     if (ready_tail)
         ready_tail->next = t;
@@ -60,6 +65,7 @@ static struct thread *ready_dequeue(void)
         if (!ready_head)
             ready_tail = NULL;
         t->next = NULL;
+        t->on_runq = false;
     }
     return t;
 }
@@ -115,9 +121,17 @@ struct thread *thread_create_for_process(const char *name, thread_entry_t entry,
     t->stack_size = THREAD_STACK_SIZE;
     t->stack = kmalloc(t->stack_size);
     if (!t->stack) {
+        uint64_t flags = spin_lock_irqsave(&runq_lock);
+        struct thread **pp = &all_threads;
+        while (*pp && *pp != t)
+            pp = &(*pp)->all_next;
+        if (*pp)
+            *pp = t->all_next;
+        spin_unlock_irqrestore(&runq_lock, flags);
         kfree(t);
         return NULL;
     }
+    *(uint64_t *)t->stack = THREAD_STACK_CANARY;
 
     uint64_t *sp = (uint64_t *)((uint8_t *)t->stack + t->stack_size);
     *--sp = (uint64_t)thread_trampoline;
@@ -208,7 +222,12 @@ static void switch_to(struct percpu *cpu, struct thread *prev, struct thread *ne
     cpu->need_resched = false;
     cpu->context_switches++;
 
+    if (prev->stack && *(uint64_t *)prev->stack != THREAD_STACK_CANARY)
+        panic("sched: a pilha do kernel da thread %s (tid %u) estourou", prev->name, prev->tid);
     uint64_t cr3 = next->process ? next->process->pml4_phys : vmm_kernel_pml4();
+    if (!cr3)
+        panic("sched: thread %s (tid %u) sem espaco de enderecamento (processo ja colhido?)",
+              next->name, next->tid);
     if ((read_cr3() & PTE_ADDR_MASK) != cr3)
         write_cr3(cr3);
     gdt_set_kernel_stack(next->kernel_stack_top);
@@ -276,6 +295,11 @@ void sched_runq_unlock(void)
     spin_unlock(&runq_lock);
 }
 
+bool sched_runq_held(void)
+{
+    return spin_held(&runq_lock);
+}
+
 uint64_t sched_deadline(uint64_t ms)
 {
     return time_ticks() + DIV_ROUND_UP(ms * TIME_TICK_HZ, 1000);
@@ -283,6 +307,8 @@ uint64_t sched_deadline(uint64_t ms)
 
 void sched_block_switch(uint64_t wake_at)
 {
+    ASSERT_HELD(&runq_lock);
+    ASSERT(!interrupts_enabled());
     struct thread *t = percpu_get()->current;
     if (wake_at) {
         t->wake_at = wake_at;
@@ -298,6 +324,7 @@ void sched_block_switch(uint64_t wake_at)
 
 bool sched_make_ready(struct thread *t)
 {
+    ASSERT_HELD(&runq_lock);
     if (t->state != THREAD_BLOCKED && t->state != THREAD_SLEEPING)
         return false;
     sleeping_remove(t);
@@ -349,6 +376,10 @@ NORETURN void thread_exit(void)
     if (t->is_idle || !t->stack)
         panic("thread_exit chamado pela thread %s", t->name);
     spin_lock(&runq_lock);
+    if (t->waits)
+        panic("thread_exit: %s (tid %u) saiu ainda registrada numa fila de espera", t->name, t->tid);
+    if (t->on_sleep_list || t->on_runq)
+        panic("thread_exit: %s (tid %u) saiu ainda numa fila do escalonador", t->name, t->tid);
     t->state = THREAD_ZOMBIE;
     schedule_locked();
     panic("thread zombie voltou a executar");

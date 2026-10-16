@@ -73,7 +73,7 @@ int signal_send(struct process *p, int sig)
     }
 
     uint64_t flags = irq_save();
-    p->sig_pending |= SIGMASK(sig);
+    __atomic_fetch_or(&p->sig_pending, SIGMASK(sig), __ATOMIC_SEQ_CST);
     struct thread *t = p->thread;
     if (t) {
         sched_runq_lock();
@@ -151,7 +151,7 @@ void signal_check(struct interrupt_frame *f)
         int sig = next_pending(p);
         if (!sig)
             return;
-        p->sig_pending &= ~SIGMASK(sig);
+        __atomic_fetch_and(&p->sig_pending, ~SIGMASK(sig), __ATOMIC_SEQ_CST);
 
         uint64_t action = p->sig_handlers[sig].sa_handler;
         if (sig == SIGKILL)
@@ -183,7 +183,7 @@ long signal_sigaction(int sig, const struct user_sigaction *act, struct user_sig
     if (act) {
         p->sig_handlers[sig] = *act;
         if (act->sa_handler == SIG_IGN || (act->sa_handler == SIG_DFL && default_ignores(sig)))
-            p->sig_pending &= ~SIGMASK(sig);
+            __atomic_fetch_and(&p->sig_pending, ~SIGMASK(sig), __ATOMIC_SEQ_CST);
     }
     return 0;
 }

@@ -147,6 +147,24 @@ function Wait-For([string]$needle, [double]$timeout) {
     return $log.ToString().Contains($needle)
 }
 
+function Wait-After([string]$needle, [double]$timeout, [int]$from) {
+    $stream = $client.GetStream()
+    $buf = New-Object byte[] 65536
+    $end = (Get-Date).AddSeconds($timeout)
+    while ((Get-Date) -lt $end) {
+        if ($stream.DataAvailable) {
+            $n = $stream.Read($buf, 0, $buf.Length)
+            if ($n -gt 0) {
+                [void]$log.Append([System.Text.Encoding]::ASCII.GetString($buf, 0, $n))
+                if ($log.ToString().IndexOf($needle, $from) -ge 0) { return $true }
+            }
+        } else {
+            Start-Sleep -Milliseconds 50
+        }
+    }
+    return ($log.ToString().IndexOf($needle, $from) -ge 0)
+}
+
 function Send-Serial([string]$text) {
     $bytes = [System.Text.Encoding]::ASCII.GetBytes($text)
     $stream = $client.GetStream()
@@ -230,6 +248,7 @@ function Take-Screenshot([string]$path) {
 }
 
 $exitCode = 0
+$cmdPos = 0
 try {
     $client = Connect-Port $SerialPort $BootTimeout
 
@@ -259,7 +278,7 @@ try {
         $i = $step.IndexOf(':')
         if ($i -ge 0) { $kind = $step.Substring(0, $i); $arg = $step.Substring($i + 1) }
         switch ($kind) {
-            "cmd"  { Write-Host "  cmd  > $arg" -ForegroundColor DarkGray; Send-Serial ($arg + "`r"); Pump-Serial $CommandDelay }
+            "cmd"  { Write-Host "  cmd  > $arg" -ForegroundColor DarkGray; $cmdPos = $log.Length; Send-Serial ($arg + "`r"); Pump-Serial $CommandDelay }
             "raw"  { Write-Host "  raw  > $arg" -ForegroundColor DarkGray; Send-Serial $arg; Pump-Serial 0.3 }
             "key"  { Write-Host "  key  > $arg" -ForegroundColor DarkGray; Send-Bytes @([byte][Convert]::ToInt32($arg, 16)); Pump-Serial 0.6 }
             "keys" {
@@ -271,6 +290,15 @@ try {
             }
             "mon"  { Write-Host "  mon  > $arg" -ForegroundColor DarkGray; Send-Monitor $arg; Pump-Serial 0.35 }
             "wait" { Pump-Serial ([double]$arg) }
+            "until" {
+                $j = $arg.IndexOf(':')
+                $secs = [double]$arg.Substring(0, $j)
+                $needle = $arg.Substring($j + 1)
+                Write-Host "  until> $needle ($secs s)" -ForegroundColor DarkGray
+                if (-not (Wait-After $needle $secs $cmdPos)) {
+                    Write-Host "  AVISO: '$needle' nao apareceu em $secs s" -ForegroundColor Yellow
+                }
+            }
             "shot" { Pump-Serial 0.4; Take-Screenshot $arg }
             default { Write-Host "  passo desconhecido: $step" -ForegroundColor Yellow }
         }

@@ -89,6 +89,14 @@ if ($runAll -or $OnlyA) {
         "cmd:printenv SHELL", "wait:1",
         "cmd:env | grep HOME", "wait:1",
         "cmd:top 1", "wait:3",
+        "cmd:ps -l", "wait:1",
+        "cmd:uptime", "cmd:free", "wait:1",
+        "cmd:time sleep 1", "wait:3",
+        "cmd:kill -l", "cmd:kill 9999", "cmd:true", "wait:1",
+        "cmd:cat /dev/null | wc", "wait:1",
+        "cmd:head -c 1000 /dev/zero | wc", "wait:1",
+        "cmd:head -c 64 /dev/random | wc", "wait:1",
+        "cmd:stress 300 8", "until:240:stress: 300 processos",
         "cmd:unset GREETING", 'cmd:echo vazio[$GREETING]', "wait:1",
         "key:0B", "cmd:heaptest", "wait:1", "cmd:preempt", "wait:2",
         "cmd:arp", "cmd:net",
@@ -143,6 +151,17 @@ if ($runAll -or $OnlyA) {
     Expect $a "Orion top   \d+ processo\(s\)   4 CPU\(s\)" "top mostrou o resumo do sistema"
     Expect $a "\n\s+2\s+1\s+2\s+\d+\s+rodando\s+sh" "top listou o sh"
     Expect $a "vazio\[\]" "unset apagou a variavel"
+    Expect $a "PID\s+PPID\s+PGID\s+PAGINAS\s+ESTADO\s+NOME" "ps -l mostrou o cabecalho"
+    Expect $a "\n\s+\d+\s+\d+\s+\d+\s+\d+\s+rodando\s+ps" "ps -l listou a si mesmo"
+    Expect $a "ligado ha \d\d:\d\d:\d\d, [1-9]\d* processo\(s\), 4 CPU\(s\)" "uptime contou processos e CPUs"
+    Expect $a "memoria:\s+\d+\s+\d+\s+\d+" "free mostrou a memoria"
+    Expect $a "real 1\.\d{3} s" "time mediu o sleep 1"
+    Expect $a "15 TERM" "kill -l listou os sinais"
+    Expect $a "kill: 9999: processo nao encontrado" "kill num pid inexistente"
+    Expect $a "cat /dev/null \| wc\s*\n\s+0\s+0\s+0" "/dev/null le vazio"
+    Expect $a "/dev/zero \| wc\s*\n\s+0\s+\d+\s+1000" "/dev/zero entregou 1000 bytes"
+    Expect $a "/dev/random \| wc\s*\n\s+\d+\s+\d+\s+64" "/dev/random entregou 64 bytes"
+    Expect $a "stress: 300 processos, 0 falha\(s\) ok" "stress com 300 processos"
     Expect $a ": OK" "heaptest OK"
     Expect $a "OK \(as duas rodaram\)" "preempt OK"
     Expect $a "0 pty\(s\) viva\(s\)" "nenhuma pty vazada"

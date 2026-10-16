@@ -1,10 +1,8 @@
-/*
- * log.c - klog() e panic().
- */
 #include <kernel/log.h>
 #include <arch/x86_64/cpu.h>
 #include <drivers/console.h>
 #include <kernel/smp.h>
+#include <arch/x86_64/interrupts.h>
 
 static const char *level_tag[] = {
     [LOG_DEBUG] = "dbg ",
@@ -46,6 +44,7 @@ NORETURN void panic(const char *fmt, ...)
 {
     cli();
     smp_halt_others();
+    kprint_panic_mode();
 
     console_set_graphics(false);
     console_set_colors(COLOR_WHITE, COLOR_RED);
@@ -55,6 +54,8 @@ NORETURN void panic(const char *fmt, ...)
     va_start(ap, fmt);
     kvprintf(fmt, ap);
     va_end(ap);
+    kprintf("\n");
+    interrupts_backtrace_here();
 
     kprintf("\nSistema travado. Reinicie a maquina.\n");
     halt_forever();

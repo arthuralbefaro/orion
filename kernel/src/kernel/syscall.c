@@ -78,7 +78,7 @@ static long sys_sysinfo(struct user_sysinfo *out)
     heap_get_stats(&hs);
     out->heap_used = hs.slab_bytes_used + hs.large_bytes_used;
     out->cpus = smp_cpu_count();
-    out->procs = 0;
+    out->procs = (uint32_t)process_count();
     return 0;
 }
 

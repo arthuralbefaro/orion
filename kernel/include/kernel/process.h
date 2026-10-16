@@ -68,3 +68,4 @@ bool process_resolve_path(struct process *p, const char *path, char *out, size_t
 
 void process_dump(void);
 int  process_list(struct user_procinfo *out, int max);
+int  process_count(void);
