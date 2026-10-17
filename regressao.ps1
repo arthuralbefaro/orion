@@ -121,6 +121,8 @@ if ($runAll -or $OnlyA) {
         "cmd:date", "wait:1",
         "cmd:ls /dev", "wait:1",
         "cmd:vfstest -n /", "until:60:falha(s))",
+        "cmd:tmptest", "until:400:falha(s))",
+        "cmd:vfstest /tmp", "until:200:falha(s))",
         "cmd:polltest", "wait:6",
         "cmd:fbtest 2", "wait:1", "shot:out\shots\reg-fbtest.ppm", "wait:2",
         "cmd:evtest 10", "wait:0.8", "mon:sendkey a", "mon:sendkey ctrl", "mon:sendkey up", "mon:mouse_move 10 5", "until:20:evento(s)",
@@ -282,6 +284,17 @@ if ($runAll -or $OnlyA) {
     Expect $a "/dev esta em outro sistema de arquivos\s+ok" "vfstest: st_dev diferente por montagem"
     Expect $a "umount do que nao e montagem da EINVAL\s+ok" "vfstest: umount fora de montagem"
     Expect $a "vfstest: TUDO OK" "vfstest -n: montagens, .. e erros de caminho"
+    Expect $a "tmpfs\s+/tmp montado" "tmpfs montado em /tmp no boot"
+    Expect $a "tmpfs\s+/run montado" "tmpfs montado em /run no boot"
+    Expect $a "1000 arquivos criados e apagados sem vazar pagina\s+ok" "tmpfs: 1000 arquivos sem vazar pagina"
+    Expect $a "fechar libera as paginas\s+ok" "tmpfs: arquivo apagado e aberto libera as paginas no close"
+    Expect $a "e da ENOSPC\s+ok" "tmpfs: size= limita com ENOSPC"
+    Expect $a "tmptest: TUDO OK" "tmptest: tmpfs completo"
+    Expect $a "umount com a arvore funda +ok" "tmpfs: umount de arvore com 600 niveis"
+    Expect $a "ftruncate de 256 GiB e esparso +ok" "tmpfs: arquivo esparso enorme sem gastar memoria"
+    Expect $a "nr_inodes limita com ENOSPC +ok" "tmpfs: nr_inodes"
+    Expect $a "rename no mesmo diretorio durante o readdir termina +ok" "tmpfs: rename durante o readdir"
+    Expect $a "(?s)vfstest /tmp.*?vfstest: TUDO OK" "vfstest no tmpfs"
     Expect $a "sda" "ls /dev listou o disco"
     Expect $a "polltest: TUDO OK" "polltest TUDO OK"
     Expect $a "fbtest: gradiente \+ retangulo desenhados" "fbtest desenhou"

@@ -415,9 +415,13 @@ static void test_review(void)
             close(fd);
         }
         int full = errno == ENOSPC;
-        check("raiz fixa do FAT enche com ENOSPC", made > 10 && full);
-        ok = rename(P("C0001"), P("C0000")) == 0 && err_is(stat(P("C0001"), &sb), ENOENT);
-        check("rename por cima com a raiz cheia", ok);
+        if (made < 2000) {
+            check("raiz fixa do FAT enche com ENOSPC", made > 10 && full);
+            ok = rename(P("C0001"), P("C0000")) == 0 && err_is(stat(P("C0001"), &sb), ENOENT);
+            check("rename por cima com a raiz cheia", ok);
+        } else {
+            printf("  (raiz sem limite de entradas: teste de raiz cheia pulado)\n");
+        }
         for (int i = 0; i < made; i++) {
             char nm[600];
             snprintf(nm, sizeof(nm), "%s/C%04d", base, i);

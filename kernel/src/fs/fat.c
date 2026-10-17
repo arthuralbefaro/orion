@@ -1375,8 +1375,9 @@ static void fat_unmount(struct mount *m)
     m->priv = NULL;
 }
 
-static int fat_mount(struct mount *m, struct blockdev *dev)
+static int fat_mount(struct mount *m, struct blockdev *dev, const char *data)
 {
+    (void)data;
     uint8_t *bpb = kmalloc(512);
     if (!bpb)
         return -ENOMEM;

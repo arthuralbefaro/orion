@@ -4,7 +4,7 @@ Sistema operacional x86_64 escrito do zero em C (gnu11), bootado pelo Limine.
 Kernel com SMP, memoria virtual com areas (VMAs) e paginas sob demanda, fork
 copy-on-write, threads, futex, sinais no formato do Linux, VFS com vnodes e
 montagens (`mount`/`umount`; FAT com leitura e escrita na raiz e em `/mnt`,
-devfs em `/dev`), rede IPv4 (UDP/ICMP) e um compositor de janelas em espaco de
+devfs em `/dev`, tmpfs em `/tmp` e `/run`), rede IPv4 (UDP/ICMP) e um compositor de janelas em espaco de
 usuario.
 
 Desde a versao 2.0 o espaco de usuario e Linux: os programas sao binarios
@@ -118,7 +118,7 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
     ifconfig ping nslookup dhcp mkfs mount umount
-    testes: memtest fstest vfstest polltest forktest ptytest limtest stress sctest filetest
+    testes: memtest fstest vfstest tmptest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
 

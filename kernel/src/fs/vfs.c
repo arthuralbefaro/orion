@@ -1,6 +1,7 @@
 #include <fs/vfs.h>
 #include <fs/fat.h>
 #include <fs/devfs.h>
+#include <fs/tmpfs.h>
 #include <fs/block.h>
 #include <kernel/file.h>
 #include <kernel/log.h>
@@ -24,7 +25,7 @@ static struct mount *mounts;
 static struct mount *root_mount;
 static uint32_t next_mount_id = 1;
 
-static const struct fs_type *const fs_types[] = { &fat_fs_type, &devfs_type };
+static const struct fs_type *const fs_types[] = { &fat_fs_type, &devfs_type, &tmpfs_type };
 
 const struct fs_type *vfs_find_type(const char *name)
 {
@@ -870,7 +871,7 @@ static void mount_free(struct mount *m)
 }
 
 int vfs_mount(const struct fs_type *type, struct blockdev *dev, const char *source,
-              struct vnode *target, const char *point, uint32_t flags)
+              struct vnode *target, const char *point, uint32_t flags, const char *data)
 {
     if (type->needs_dev && !dev)
         return -ENOTBLK;
@@ -899,7 +900,7 @@ int vfs_mount(const struct fs_type *type, struct blockdev *dev, const char *sour
         strlcpy(m->source, source ? source : type->name, sizeof(m->source));
         strlcpy(m->point, point, sizeof(m->point));
         mutex_init(&m->ns_lock, "vfs-ns");
-        r = type->mount(m, m->dev);
+        r = type->mount(m, m->dev, data);
         if (r < 0) {
             mutex_deinit(&m->ns_lock);
             kfree(m);
@@ -1011,7 +1012,7 @@ int vfs_mount_kernel(const char *type, struct blockdev *dev, const char *source,
         r = vfs_walk(NULL, point, &target);
     if (r < 0)
         return r;
-    r = vfs_mount(t, dev, source, target, point, 0);
+    r = vfs_mount(t, dev, source, target, point, 0, NULL);
     vnode_put(target);
     return r;
 }
@@ -1064,7 +1065,7 @@ void vfs_init(void)
             continue;
         char src[VFS_SOURCE_MAX];
         ksnprintf(src, sizeof(src), "/dev/%s", dev->name);
-        if (vfs_mount(&fat_fs_type, dev, src, NULL, "/", 0) == 0) {
+        if (vfs_mount(&fat_fs_type, dev, src, NULL, "/", 0, NULL) == 0) {
             log_info("vfs", "raiz montada: %s em %s", root_mount->subtype, dev->name);
             break;
         }

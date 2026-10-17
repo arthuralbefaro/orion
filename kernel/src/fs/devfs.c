@@ -169,9 +169,10 @@ static struct file *devfs_open(struct vnode *v, int flags)
     return d ? d->open() : NULL;
 }
 
-static int devfs_mount(struct mount *m, struct blockdev *dev)
+static int devfs_mount(struct mount *m, struct blockdev *dev, const char *data)
 {
     (void)dev;
+    (void)data;
     struct vnode *root = vnode_new(m, DEVFS_ROOT_INO, S_IFDIR | 0755);
     if (!root)
         return -ENOMEM;

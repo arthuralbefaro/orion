@@ -1352,3 +1352,49 @@ Uma linha por decisao, na ordem em que foram tomadas.
   se algo falhar. A rodada nao achou outros problemas novos; a lista de
   deslocados percorrida com a trava global foi considerada aceitavel (so
   cresce com arquivos apagados ou renomeados e ainda abertos).
+
+## v2.1.0-a2 (tmpfs)
+
+- `tmpfs` e o terceiro tipo da VFS: arvore de nos na memoria do kernel, os
+  dados de cada arquivo num vetor de paginas fisicas (uma por 4 KiB, zero =
+  buraco que le zeros). Montado no boot em `/tmp` e `/run`, e pelo `mount`
+  (`mount -t tmpfs tmpfs /x`, com `size=` em bytes, `k`, `m`, `g` ou `%` da
+  RAM; o padrao e metade da RAM, como no Linux). Passar do limite da
+  `ENOSPC`.
+- Um no vive enquanto estiver ligado a um diretorio ou enquanto algum vnode
+  apontar para ele (contador `vrefs`, mexido so com o mutex da montagem). Assim
+  arquivo apagado e ainda aberto continua com as paginas, e elas voltam ao
+  alocador no ultimo `close`, nao no `unlink`. O vnode e liberado quando a
+  ultima referencia cai e o no fica: abrir de novo cria outro vnode para o
+  mesmo no.
+- A posicao do `getdents64` no tmpfs e um numero de sequencia dado a cada
+  entrada quando ela entra no diretorio (cresce sempre), entao apagar ou
+  renomear durante a leitura nao pula nem repete entradas antigas.
+- O criterio da etapa ("1000 arquivos criados e apagados sem vazar pagina") e
+  o `tmptest`: depois de uma rodada de aquecimento, uma segunda rodada de 1000
+  arquivos de 3000 bytes tem que devolver exatamente as paginas livres
+  (tolerancia de 4 paginas para o heap do kernel). Na pratica volta igual.
+- `vfstest /tmp` roda a mesma bateria da VFS no tmpfs (a parte de raiz FAT
+  cheia se desliga sozinha quando o diretorio nao enche).
+- Revisao adversarial, corrigido: o vetor de paginas de cada arquivo tinha o
+  tamanho do arquivo e ficava fora do limite `size=` (um `ftruncate` grande
+  prendia centenas de MiB do heap do kernel); virou uma arvore radix de ate 3
+  niveis de 512 entradas, de altura variavel (altura 0: o proprio no aponta
+  para a unica pagina de dados; cresce pondo a raiz antiga na entrada 0 de
+  uma tabela nova), com cada pagina de tabela contada no limite. Arquivo
+  esparso de 256 GiB custa so as tabelas do que foi escrito; o maior
+  arquivo e 512 GiB. O `umount` liberava a arvore com recursao do tamanho da
+  profundidade dos diretorios (estourava a pilha de 16 KiB com algumas
+  centenas de niveis); agora e iterativo. `rename` no mesmo diretorio dava
+  posicao nova a entrada, e quem renomeava enquanto lia o diretorio nunca
+  chegava ao fim. Entrou `nr_inodes=` (padrao: metade das paginas da RAM,
+  como no Linux), `size=0` e ilimitado, opcao desconhecida da `EINVAL`, e as
+  opcoes do `mount` so sao copiadas para o tmpfs (ate 256 bytes).
+- Segunda rodada no tmpfs: os dois tmpfs do boot (cada um com metade da RAM)
+  somados podiam pegar toda a memoria fisica, e o kernel entra em panico
+  quando falta pagina para tabela de paginas (pendencia da 8.4). Agora o
+  tmpfs recusa pagina nova (`ENOSPC`) quando a memoria livre cai abaixo de
+  1/16 da RAM (no minimo 2048 paginas), qualquer que seja o `size=`. E uma
+  escrita que falhava no meio deixava tabelas da radix alem do fim do
+  arquivo, contadas no limite ate o `unlink`; escrita curta e `truncate`
+  agora liberam o que passa do fim.

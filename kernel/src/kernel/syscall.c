@@ -1085,7 +1085,6 @@ static long copy_type(char *out, size_t size, const char *utype)
 static long sys_mount(const char *usource, const char *utarget, const char *utype, uint64_t flags,
                       const void *data)
 {
-    (void)data;
     if ((flags & MS_MGC_MSK) == MS_MGC_VAL)
         flags &= ~(uint64_t)MS_MGC_MSK;
     uint64_t known = MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_SYNCHRONOUS | MS_SILENT |
@@ -1102,6 +1101,13 @@ static long sys_mount(const char *usource, const char *utarget, const char *utyp
     if (!t)
         return -ENODEV;
 
+    char opts[256];
+    opts[0] = 0;
+    if (data && (t == vfs_find_type("tmpfs"))) {
+        long n = strncpy_from_user(opts, data, sizeof(opts));
+        if (n < 0)
+            return n == -ENAMETOOLONG ? -EINVAL : -EFAULT;
+    }
     struct upath *up = kmalloc(sizeof(*up));
     if (!up)
         return -ENOMEM;
@@ -1130,7 +1136,7 @@ static long sys_mount(const char *usource, const char *utarget, const char *utyp
     if (r == 0 && !up->full_ok)
         r = -ENAMETOOLONG;
     if (r == 0) {
-        r = vfs_mount(t, dev, source, target, up->full, (flags & MS_RDONLY) ? MNT_RDONLY : 0);
+        r = vfs_mount(t, dev, source, target, up->full, (flags & MS_RDONLY) ? MNT_RDONLY : 0, opts);
         if (r == 0)
             log_info("vfs", "%s montado em %s (%s%s)", source, up->full, t->name,
                      (flags & MS_RDONLY) ? ", somente leitura" : "");

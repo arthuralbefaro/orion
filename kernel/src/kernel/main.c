@@ -12,6 +12,7 @@
 #include <fs/vfs.h>
 #include <fs/block.h>
 #include <fs/devfs.h>
+#include <fs/tmpfs.h>
 #include <drivers/tty.h>
 #include <drivers/rtc.h>
 #include <kernel/process.h>
@@ -127,6 +128,7 @@ void kmain(void)
     vfs_init();
     vfs_flush_init();
     devfs_init();
+    tmpfs_init();
     vfs_mount_extra();
     cli();
 

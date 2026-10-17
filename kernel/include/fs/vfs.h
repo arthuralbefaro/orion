@@ -28,7 +28,7 @@ typedef bool (*vfs_dir_cb)(const struct vfs_dirent *entry, void *ctx);
 struct fs_type {
     const char *name;
     bool needs_dev;
-    int (*mount)(struct mount *m, struct blockdev *dev);
+    int (*mount)(struct mount *m, struct blockdev *dev, const char *data);
     void (*unmount)(struct mount *m);
     int (*sync)(struct mount *m);
     int (*lookup)(struct vnode *dir, const char *name, struct vnode **out);
@@ -120,7 +120,7 @@ void *vfs_read_all(const char *path, uint64_t *size_out);
 bool vfs_is_rdonly(const struct vnode *v);
 
 int vfs_mount(const struct fs_type *type, struct blockdev *dev, const char *source,
-              struct vnode *target, const char *point, uint32_t flags);
+              struct vnode *target, const char *point, uint32_t flags, const char *data);
 int vfs_umount(struct vnode *root);
 bool vfs_sync(void);
 void vfs_flush_init(void);

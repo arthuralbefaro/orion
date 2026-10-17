@@ -22,7 +22,7 @@ na primeira vez, com SHA-256 conferido. Os programas ficam em `user/musl/<nome>`
 em `user/include/orion.h`. A regressao demora uns 20 minutos; o estresse 5x,
 outros 10.
 
-Proxima etapa: 2.2.
+Proxima etapa: 2.3.
 
 ## Checklist
 
@@ -47,8 +47,8 @@ Proxima etapa: 2.2.
 | 1.10 | Doom | [x] | 06:28 | 07:10 | `fe72b5e` |
 | 1.11 | tcc dentro do Orion | [x] | 07:10 | 07:54 | `4f1b270` |
 | 1.12 | Programas na musl, aposentar a libc propria | [x] | 07:54 | 08:50 | 171ba11 |
-| 2.1 | VFS com inodes | [x] | 08:51 | 11:05 | (ver diario) |
-| 2.2 | tmpfs | [ ] | | | |
+| 2.1 | VFS com inodes | [x] | 08:51 | 11:05 | 9f729b3 |
+| 2.2 | tmpfs | [x] | 11:06 | 11:47 | (ver diario) |
 | 2.3 | procfs | [ ] | | | |
 | 2.4 | Cache de paginas unificado | [ ] | | | |
 | 2.5 | ext2 leitura, piloto em Rust | [ ] | | | |
@@ -528,3 +528,21 @@ Pendente: o mutex nao e justo e, sem IPI para acordar CPU ociosa, o
 do estresse o `exec` simultaneo de 64 processos espera a trava do FAT (le o
 ELF inteiro com ela; resolve na 2.4); `/proc/mounts` (o `mount` sem argumentos
 ja le dele) chega na 2.3.
+
+#### 2.2 tmpfs - 11:06 as 11:47 - FEITO
+`tmpfs` montado no boot em `/tmp` e `/run` e pelo `mount -t tmpfs` (opcoes
+`size=` e `nr_inodes=`). Dados numa arvore radix de altura variavel (arquivo
+de uma pagina custa uma pagina; arquivo esparso de 256 GiB custa so as
+tabelas do que foi escrito), cada pagina contada no limite da montagem e
+recusada quando a memoria livre cai abaixo de 1/16 da RAM. Arquivo apagado e
+aberto guarda as paginas ate o ultimo `close`. O criterio da etapa passa
+exato: o `tmptest` cria e apaga 1000 arquivos duas vezes e as paginas livres
+voltam ao mesmo numero. `vfstest /tmp` passa inteiro. Duas rodadas de
+revisao: 7 problemas reais na primeira (o vetor de paginas fora do limite, a
+recursao do `umount` que estourava a pilha, `rename` que fazia o `readdir`
+nao terminar...), 2 na segunda (os dois tmpfs juntos podiam esgotar a RAM e
+derrubar o kernel; tabelas sobrando depois de escrita que falha).
+Regressao 243 -> 254, estresse 5x verde. Versao 2.1.0-a2.
+Licao de processo: rodar o `test.ps1` enquanto a regressao roda derruba o
+QEMU da regressao (as portas 4444/4445 sao as mesmas); uma sequencia C
+"falhou" por isso.
