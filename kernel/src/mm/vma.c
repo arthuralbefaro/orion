@@ -243,6 +243,48 @@ bool vma_resize(struct process *p, struct vma *v, uint64_t new_end)
     return true;
 }
 
+long vma_remap(struct process *p, uint64_t old, uint64_t old_len, uint64_t new_len, bool may_move)
+{
+    struct vma *v = vma_find(p, old);
+    uint64_t old_end = old + old_len;
+    if (!v || v->start > old || old_end > v->end)
+        return -EFAULT;
+    if (v->flags & (VMA_SHARED | VMA_NOFREE | VMA_FILE | VMA_IMAGE | VMA_STACK | VMA_HEAP))
+        return -EINVAL;
+    if (new_len == old_len)
+        return (long)old;
+    if (new_len < old_len) {
+        long r = vma_unmap(p, old + new_len, old_end);
+        return r < 0 ? r : (long)old;
+    }
+    uint64_t new_end = old + new_len;
+    if (old_end == v->end && new_end <= USER_ADDR_MAX - PAGE_SIZE && vma_range_free(p, old_end, new_end) &&
+        vma_resize(p, v, new_end))
+        return (long)old;
+    if (!may_move)
+        return -ENOMEM;
+    if (v->start < old) {
+        v = split(v, old);
+        if (!v)
+            return -ENOMEM;
+    }
+    if (v->end > old_end && !split(v, old_end))
+        return -ENOMEM;
+    uint32_t flags = v->flags;
+    uint64_t dst = vma_find_free(p, new_len);
+    if (!dst || !vma_add(p, dst, dst + new_len, flags, NULL, 0, 0))
+        return -ENOMEM;
+    for (uint64_t off = 0; off < old_len; off += PAGE_SIZE) {
+        uint64_t pte = vmm_get_pte_in(p->pml4_phys, old + off);
+        if (!(pte & (PTE_PRESENT | PTE_PROTNONE)))
+            continue;
+        vmm_unmap_page_in(p->pml4_phys, old + off);
+        vmm_map_page_in(p->pml4_phys, dst + off, pte & PTE_ADDR_MASK, pte & ~PTE_ADDR_MASK);
+    }
+    long r = vma_unmap(p, old, old_end);
+    return r < 0 ? r : (long)dst;
+}
+
 bool vma_copy_all(struct process *dst, struct process *src)
 {
     struct vma **tail = &dst->vmas;

@@ -137,6 +137,7 @@ if (Test-Path $MuslDir) {
     $MuslFlags = @("cc", "-target", "x86_64-linux-musl", "-static", "-O2", "-s", "-Wall", "-Wextra",
                    "-Wno-unused-parameter")
     $muslLinks = @{}
+    $muslInstalls = @()
     $PyCmd = $null
     foreach ($prog in Get-ChildItem $MuslDir -Directory) {
         $mout = Join-Path $OutDir "$($prog.Name).elf"
@@ -179,6 +180,9 @@ if (Test-Path $MuslDir) {
                     $mdeps += @(Get-ChildItem -Path (Join-Path $prog.FullName $t.Substring(4).Trim()) -File -Recurse -ErrorAction SilentlyContinue)
                 } elseif ($t.StartsWith("link ")) {
                     foreach ($n in ($t.Substring(5).Trim() -split '\s+')) { $muslLinks[$n] = $prog.Name }
+                } elseif ($t.StartsWith("install ")) {
+                    $parts = $t.Substring(8).Trim() -split '\s+'
+                    $muslInstalls += , @((Join-Path $genDir $parts[0]), $parts[1])
                 }
             }
         }
@@ -203,6 +207,26 @@ New-Item -ItemType Directory -Force -Path (Join-Path $EspDir "EFI\BOOT"), (Join-
 Copy-Item (Join-Path $LimineDir "BOOTX64.EFI") (Join-Path $EspDir "EFI\BOOT\BOOTX64.EFI") -Force
 Copy-Item $KernelElf (Join-Path $EspDir "boot\$Kernel.elf") -Force
 foreach ($name in $userBins.Keys) { Copy-Item $userBins[$name] (Join-Path $EspDir "bin\$name") -Force }
+foreach ($inst in $muslInstalls) {
+    $from = (Resolve-Path $inst[0]).Path
+    $to = if ($inst[1] -eq ".") { $EspDir } else { Join-Path $EspDir $inst[1] }
+    $manifest = $from.TrimEnd('\') + ".installed"
+    $now = @{}
+    foreach ($f in Get-ChildItem $from -Recurse -File) {
+        $rel = $f.FullName.Substring($from.Length).TrimStart('\')
+        $now[$rel] = $true
+        $dest = Join-Path $to $rel
+        if ((Test-Path $dest) -and (Get-Item $dest).Length -eq $f.Length -and (Get-Item $dest).LastWriteTime -ge $f.LastWriteTime) { continue }
+        New-Item -ItemType Directory -Force -Path (Split-Path $dest -Parent) | Out-Null
+        Copy-Item $f.FullName $dest -Force
+    }
+    if (Test-Path $manifest) {
+        foreach ($rel in Get-Content $manifest) {
+            if ($rel -and -not $now.ContainsKey($rel)) { Remove-Item (Join-Path $to $rel) -Force -ErrorAction SilentlyContinue }
+        }
+    }
+    Set-Content -Path $manifest -Value ($now.Keys | Sort-Object) -Encoding ascii
+}
 if ($userBins.ContainsKey("doom")) {
     $wad = $null
     try { $wad = & (Join-Path $Root "tools\freedoom.ps1") } catch { Write-Warning "sem o freedoom1.wad ($_); o doom fica sem IWAD" }

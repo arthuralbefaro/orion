@@ -62,6 +62,9 @@
 #define SYS_READLINKAT    267
 #define SYS_FACCESSAT     269
 #define SYS_FACCESSAT2    439
+#define SYS_MREMAP        25
+#define MREMAP_MAYMOVE    1
+#define MREMAP_FIXED      2
 #define SYS_DUP3          292
 #define SYS_PIPE2         293
 #define SYS_READV         19

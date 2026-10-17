@@ -35,6 +35,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 21 | access | parcial | so confere a existencia (permissoes na 4.1) |
 | 22 | pipe | completa | |
 | 24 | sched_yield | completa | |
+| 25 | mremap | parcial | memoria anonima privada: encolhe, cresce no lugar, ou move com `MREMAP_MAYMOVE` (leva as paginas sem copiar); sem `MREMAP_FIXED` nem area de arquivo/compartilhada |
 | 28 | madvise | parcial | `MADV_DONTNEED` descarta paginas privadas; as outras dicas sao aceitas sem efeito |
 | 32 | dup | completa | |
 | 33 | dup2 | completa | ate o `RLIMIT_NOFILE` |

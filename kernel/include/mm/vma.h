@@ -34,6 +34,7 @@ long vma_unmap(struct process *p, uint64_t start, uint64_t end);
 long vma_protect(struct process *p, uint64_t start, uint64_t end, uint32_t prot);
 long vma_discard(struct process *p, uint64_t start, uint64_t end);
 bool vma_resize(struct process *p, struct vma *v, uint64_t new_end);
+long vma_remap(struct process *p, uint64_t old, uint64_t old_len, uint64_t new_len, bool may_move);
 bool vma_copy_all(struct process *dst, struct process *src);
 void vma_release_all(struct process *p);
 bool vma_fault(struct process *p, uint64_t addr, uint64_t err);

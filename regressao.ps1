@@ -113,6 +113,8 @@ if ($runAll -or $OnlyA) {
         "cmd:lua -e 'print(os.execute([[echo dentro-do-lua]]))'", "wait:3",
         "cmd:seq 1 10 | paste -s -d + -; echo orion | tr a-z A-Z | cut -c2-; find /bin -name 'lu*'", "wait:4",
         "cmd:test -x /bin/dash && echo dash-executavel", "wait:2",
+        "cmd:tcc /lib/tcc/hello.c -o /tcchello && /tcchello", "until:120:ola do tcc",
+        "cmd:printf '#include <stdlib.h>\nint main(void) { return atoi(`"7`"); }\n' > /tcc7.c; tcc /tcc7.c -o /tcc7; /tcc7; echo tcc-status=`$?; rm /tcc7.c /tcc7 /tcchello", "until:120:tcc-status=7",
         "cmd:exit 7", "wait:2",
         "cmd:sleep 100", "wait:2", "key:03", "wait:2",
         "cmd:hello um dois", "wait:1",
@@ -225,6 +227,11 @@ if ($runAll -or $OnlyA) {
     Expect $a "variavel __thread \(TLS\)\s+ok" "musl: TLS"
     Expect $a "printf com ponto flutuante\s+ok" "musl: printf com ponto flutuante (SSE)"
     Expect $a "mhello: fim, TUDO OK" "mhello: partida da musl completa"
+    Expect $a "realloc grande preserva o conteudo \(mremap\) +ok" "mremap pelo realloc da musl"
+    Expect $a "mremap move a area e leva as paginas +ok" "mremap com MREMAP_MAYMOVE"
+    Expect $a "mremap cresce no lugar sem MAYMOVE +ok" "mremap cresce no lugar"
+    Expect $a "ola do tcc dentro do Orion: 42" "tcc compila e roda C dentro do Orion"
+    Expect $a "tcc-status=7" "programa do tcc devolve o codigo de saida"
     Expect $a "pthread_create de 8 threads +ok" "mthreads: 8 threads da musl criadas"
     Expect $a "8 threads somando num contador atomico +ok" "mthreads: contador atomico entre threads"
     Expect $a "contador protegido por pthread_mutex +ok" "mthreads: pthread_mutex"

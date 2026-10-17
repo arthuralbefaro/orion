@@ -24,7 +24,7 @@ def find_zig():
 
 
 def program_spec(prog, zig):
-    srcs, extra, deps, links = [], [], [], []
+    srcs, extra, deps, links, installs = [], [], [], [], []
     gen = ROOT / "out" / "gen" / prog.name
     spec = prog / "build.txt"
     if spec.exists():
@@ -58,11 +58,14 @@ def program_spec(prog, zig):
                 deps += [Path(f) for f in glob.glob(str(prog / t[4:].strip()), recursive=True)]
             elif t.startswith("link "):
                 links += t[5:].split()
+            elif t.startswith("install "):
+                src, dst = t[8:].split()[:2]
+                installs.append((gen / src, dst))
     srcs += sorted(prog.glob("*.c"))
     deps += sorted(prog.glob("*.h"))
     if gen.exists():
         deps += sorted(gen.glob("*.h"))
-    return srcs, extra, deps, links
+    return srcs, extra, deps, links, installs
 
 
 def build_all(quiet=False):
@@ -75,8 +78,10 @@ def build_all(quiet=False):
     bindir.mkdir(parents=True, exist_ok=True)
     built = []
     links = {}
+    installs = []
     for prog in sorted(p for p in musl.iterdir() if p.is_dir()):
-        srcs, extra, deps, plinks = program_spec(prog, zig)
+        srcs, extra, deps, plinks, pinst = program_spec(prog, zig)
+        installs += pinst
         for n in plinks:
             links[n] = prog.name
         elf = out / f"{prog.name}.elf"
@@ -95,6 +100,22 @@ def build_all(quiet=False):
     for n, owner in links.items():
         if n not in taken:
             shutil.copyfile(out / f"{owner}.elf", bindir / n)
+    for src, dst in installs:
+        target = out / "esp" if dst == "." else out / "esp" / dst
+        manifest = src.parent / (src.name + ".installed")
+        now = set()
+        for f in src.rglob("*"):
+            if f.is_file():
+                rel = f.relative_to(src)
+                now.add(str(rel).replace("/", "\\"))
+                t = target / rel
+                t.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(f, t)
+        if manifest.exists():
+            for rel in manifest.read_text().split():
+                if rel not in now:
+                    (target / rel.replace("\\", "/")).unlink(missing_ok=True)
+        manifest.write_text("\n".join(sorted(now)) + "\n")
     wad = None
     if "doom" in built:
         sys.path.insert(0, str(ROOT / "tools"))

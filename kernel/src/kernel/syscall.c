@@ -797,6 +797,25 @@ static long sys_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, u
     return r;
 }
 
+static long sys_mremap(uint64_t old, uint64_t old_len, uint64_t new_len, int flags)
+{
+    if (!IS_ALIGNED(old, PAGE_SIZE) || !old_len || !new_len || (flags & ~MREMAP_MAYMOVE))
+        return -EINVAL;
+    if (old_len > USER_ADDR_MAX || new_len > USER_ADDR_MAX)
+        return -ENOMEM;
+    old_len = PAGE_ALIGN_UP(old_len);
+    new_len = PAGE_ALIGN_UP(new_len);
+    if (!user_range_ok(old, old_len))
+        return -EFAULT;
+    struct process *p = process_current();
+    mutex_lock(&p->mm_lock);
+    long r = vma_remap(p, old, old_len, new_len, (flags & MREMAP_MAYMOVE) != 0);
+    if (r >= 0 && ((uint64_t)r != old || new_len < old_len || p->free_n))
+        process_mm_tlb_sync(p);
+    mutex_unlock(&p->mm_lock);
+    return r;
+}
+
 static long sys_munmap(uint64_t addr, uint64_t len)
 {
     if (!IS_ALIGNED(addr, PAGE_SIZE) || len == 0 || !user_range_ok(addr, len))
@@ -1337,6 +1356,7 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_RENAMEAT:    ret = sys_renameat((int)f->rdi, (const char *)f->rsi, (int)f->rdx, (const char *)f->r10); break;
     case SYS_READLINKAT:  ret = sys_readlinkat((int)f->rdi, (const char *)f->rsi, (char *)f->rdx, f->r10); break;
     case SYS_FACCESSAT:   ret = sys_faccessat((int)f->rdi, (const char *)f->rsi, (int)f->rdx); break;
+    case SYS_MREMAP:      ret = sys_mremap(f->rdi, f->rsi, f->rdx, (int)f->r10); break;
     case SYS_FACCESSAT2:  ret = sys_faccessat2((int)f->rdi, (const char *)f->rsi, (int)f->rdx, (int)f->r10); break;
     case SYS_DUP3:        ret = sys_dup3((int)f->rdi, (int)f->rsi, (int)f->rdx); break;
     case SYS_PIPE2:       ret = sys_pipe2((int *)f->rdi, (int)f->rsi); break;

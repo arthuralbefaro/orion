@@ -16,7 +16,7 @@ ou sinais), 5 vezes seguidas:
 
     .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
 
-Proxima etapa: 1.11.
+Proxima etapa: 1.12.
 
 ## Checklist
 
@@ -39,7 +39,7 @@ Proxima etapa: 1.11.
 | 1.8 | Tempo e sinais completos | [x] | 04:28 | 05:37 | (ver diario) |
 | 1.9 | dash, lua, sbase | [x] | 05:37 | 06:28 | (ver diario) |
 | 1.10 | Doom | [x] | 06:28 | 07:10 | (ver diario) |
-| 1.11 | tcc dentro do Orion | [ ] | | | |
+| 1.11 | tcc dentro do Orion | [x] | 07:10 | 07:54 | (ver diario) |
 | 1.12 | Programas na musl, aposentar a libc propria | [ ] | | | |
 | 2.1 | VFS com inodes | [ ] | | | |
 | 2.2 | tmpfs | [ ] | | | |
@@ -462,3 +462,21 @@ WAD tambem no Linux/CI, `__pycache__` fora do git.
 Regressao 207 -> 213, estresse 5x verde.
 Pendente: a tecla Pause (sequencia E1 que o driver nao trata; Scroll Lock
 faz a pausa); som.
+
+#### 1.11 tcc dentro do Orion - 07:10 as 07:54 - FEITO
+TinyCC (ramo `mob`, commit `e23dabe`) compila C dentro do Orion: `tcc
+/lib/tcc/hello.c -o /tcchello && /tcchello` imprime a mensagem, e um programa
+escrito na hora pelo dash devolve o codigo de saida certo. `tools/tcc_gen.py`
+monta o que o tcc precisa no sistema (3,3 MB): cabecalhos e `libtcc1.a` do
+tcc, cabecalhos da musl que vem com o Zig, `crt1.o` e uma `libc.a` completa
+(a do Zig 0.16 precisou receber os objetos da `libzigc` e da `compiler_rt`,
+para onde foram `memcpy`, `strlen` e a matematica), e o `build.txt` ganhou
+`install` para levar isso ao ESP. O tcc mostrou o `mremap` faltando (o
+`realloc` grande da musl usa): virou syscall de verdade (encolhe, cresce no
+lugar ou move as paginas), testada no `mhello`. A pesquisa (versao certa do
+tcc, o que falta na libc do Zig) rodou num subagente antes. A revisao achou 8
+problemas, 6 corrigidos (`mremap` que podia falhar no meio, parser do link do
+Zig com espacos, `install` que nao apagava sobras...).
+Regressao 213 -> 218, estresse 5x verde.
+Pendente: `mremap` com `MREMAP_FIXED` ou em area de arquivo; panico sem
+memoria para tabela de pagina (8.4).

@@ -1,0 +1,6 @@
+gen tools/tcc_gen.py
+src ../../../third_party/tinycc/tcc.c
+flag -fno-strict-aliasing -I@gen -Wno-unused-function -Wno-missing-field-initializers -Wno-sign-compare -Wno-unterminated-string-initialization
+dep ../../../third_party/tinycc/*.h
+dep ../../../third_party/tinycc/*.c
+install sysroot .

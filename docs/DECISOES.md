@@ -1104,3 +1104,55 @@ Uma linha por decisao, na ordem em que foram tomadas.
     Windows que vem do `regressao.ps1`. Sem rede, o build avisa e segue sem
     IWAD em vez de falhar inteiro.
   - `__pycache__` saiu do git.
+
+## v2.0.0-a11 (tcc dentro do Orion)
+
+- TinyCC do ramo `mob` (commit `e23dabe`, 0.9.28rc), nao a 0.9.27 de 2017:
+  a libc do Zig usa relocacao TLS (`R_X86_64_TPOFF32`) que a 0.9.27 nao liga,
+  e o `mob` ja traz a correcao de ligacao estatica com a musl. O `mob` e um
+  ramo de escrita publica, por isso o commit e o SHA-256 do snapshot ficam
+  fixos em `third_party/LICENSES.md`.
+- O tcc compila como um arquivo so (`tcc.c` inclui o resto). O `config.h`
+  sai de `tools/tcc_gen.py`: alvo x86_64, `CONFIG_TCC_STATIC` (sem `dlopen`),
+  `-static` como padrao (nao ha carregador dinamico no Orion) e
+  `CONFIG_TCC_PREDEFS 0`, que faz o tcc ler o `tccdefs.h` do disco em vez de
+  embuti-lo (evita gerar o `tccdefs_.h` com o `c2str`).
+- O que o tcc precisa dentro do sistema (3,3 MB) e montado pelo mesmo
+  gerador em `out/gen/tcc/sysroot` e copiado para o ESP pela diretiva nova
+  `install` do `build.txt`: `/lib/tcc/include` (cabecalhos do tcc),
+  `/lib/tcc/libtcc1.a` (compilada com o Zig, `-fno-pic`), `/usr/include` (os
+  cabecalhos da musl que o Zig traz: `generic-musl` e por cima
+  `x86_64-linux-musl`) e `/usr/lib` (`crt1.o`, `libc.a` e bibliotecas
+  vazias para `-lm`, `-lpthread`...).
+- A `libc.a` do Zig 0.16 nao basta sozinha: `memcpy`, `strlen`, as funcoes de
+  matematica e outras foram para a `libzigc` e a `compiler_rt` do Zig. O
+  gerador liga um programa com `--verbose-link`, acha as tres no cache e junta
+  os objetos das duas ultimas na `libc.a` que vai para o Orion. O Zig tambem
+  nao gera `crti.o`/`crtn.o`; a musl so os usa para `_init`/`_fini` fracos,
+  entao vao objetos vazios.
+- `mremap` (25) virou syscall de verdade, porque o `realloc` da musl o usa
+  para blocos grandes (o tcc mostrou o aviso). Memoria anonima privada:
+  encolher desfaz o fim; crescer usa o espaco logo depois se estiver livre;
+  com `MREMAP_MAYMOVE` cria a area nova e muda as entradas de pagina de lugar
+  (as paginas nao sao copiadas nem liberadas), com shootdown de TLB no fim.
+  `MREMAP_FIXED` e areas de arquivo ou compartilhadas ficam para depois.
+- O executavel que o tcc gera tem segmentos que nao comecam em fronteira de
+  pagina e nao tem `PT_PHDR`; o carregador do Orion ja tratava os dois casos
+  (o `AT_PHDR` tem o fallback da 1.1) e o binario roda sem mudanca.
+- A regressao entra no dash, compila `/lib/tcc/hello.c` e um programa escrito
+  na hora com `printf`, roda os dois e confere a saida e o codigo de saida.
+- Depois de uma revisao, antes do commit:
+  - `mremap` divide a area antes de mover qualquer pagina, entao a remocao
+    da area velha no fim nao precisa alocar e nao falha no meio; os erros do
+    `vma_unmap` sao devolvidos (antes um encolhimento sem memoria dizia que
+    tinha dado certo); o shootdown so acontece quando alguma pagina saiu do
+    lugar.
+  - `tcc_gen.py` acha os arquivos do Zig na saida do `--verbose-link` mesmo
+    com espacos no caminho, pega o diretorio de bibliotecas pelo `zig env` e
+    falha com mensagem clara se os cabecalhos da musl nao vierem.
+  - `install` espelha a origem: guarda a lista do que copiou e apaga do ESP o
+    que saiu da origem.
+  - Fica pendente: um `mremap` que precise de tabelas de pagina novas sem
+    memoria livre ainda entra em panico, como a falta de pagina (etapa 8.4); e
+    um `mremap` de faixa que atravessa duas areas vizinhas iguais da `EFAULT`
+    (o Orion nao funde areas vizinhas; o Linux funde).
