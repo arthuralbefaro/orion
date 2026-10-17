@@ -127,7 +127,7 @@ int64_t input_read(void *buf, uint64_t len)
             uint64_t now = time_uptime_ms();
             wait_ms = now >= deadline ? 1 : deadline - now;
         }
-        wait_sleep_timeout(&readers, &lock, wait_ms);
+        wait_sleep_intr(&readers, &lock, wait_ms);
         spin_unlock_irqrestore(&lock, flags);
         if (signal_pending_current())
             return -EINTR;

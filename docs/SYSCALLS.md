@@ -78,9 +78,10 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 160 | setrlimit | completa | subir o maximo da `EPERM` |
 | 162 | sync | completa | |
 | 186 | gettid | completa | tid de cada thread; a principal tem o pid |
+| 202 | futex | parcial | `FUTEX_WAIT` (timeout relativo), `FUTEX_WAKE`, `FUTEX_REQUEUE`, `FUTEX_CMP_REQUEUE`, com e sem `FUTEX_PRIVATE_FLAG`; sem as operacoes PI, `WAKE_OP` e `*_BITSET` (a musl nao usa) |
 | 204 | sched_getaffinity | completa | mascara com todas as CPUs online (a musl usa para contar CPUs) |
 | 217 | getdents64 | completa | `d_type` preenchido; `lseek(fd, 0, SEEK_SET)` recomeca |
-| 218 | set_tid_address | parcial | guarda o endereco e zera a palavra na saida da thread; o `futex` wake chega na 1.7 |
+| 218 | set_tid_address | completa | zera a palavra na saida da thread e acorda um esperador do futex nela |
 | 228 | clock_gettime | parcial | `CLOCK_REALTIME` e `CLOCK_MONOTONIC` (o resto na 1.8) |
 | 231 | exit_group | completa | encerra todas as threads do processo |
 | 257 | openat | completa | `AT_FDCWD` ou descritor de diretorio |

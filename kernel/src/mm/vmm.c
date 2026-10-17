@@ -235,8 +235,9 @@ void vmm_destroy_address_space(uint64_t pml4_phys)
     pmm_free_page(pml4_phys);
 }
 
-bool vmm_cow_fault(uint64_t pml4_phys, uint64_t virt)
+bool vmm_cow_fault(uint64_t pml4_phys, uint64_t virt, uint64_t *release)
 {
+    *release = 0;
     virt = PAGE_ALIGN_DOWN(virt);
     uint64_t pte = vmm_get_pte_in(pml4_phys, virt);
     if (!(pte & PTE_PRESENT) || !(pte & PTE_COW))
@@ -256,7 +257,7 @@ bool vmm_cow_fault(uint64_t pml4_phys, uint64_t virt)
         return false;
     memcpy(phys_to_virt(fresh), phys_to_virt(phys), PAGE_SIZE);
     vmm_map_page_in(pml4_phys, virt, fresh, flags);
-    pmm_free_page(phys);
+    *release = phys;
     cow_faults++;
     cow_copies++;
     return true;

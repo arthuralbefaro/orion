@@ -1,4 +1,5 @@
 #include <kernel/process.h>
+#include <kernel/futex.h>
 #include <kernel/sched.h>
 #include <kernel/elf.h>
 #include <kernel/log.h>
@@ -302,13 +303,30 @@ static struct process *process_alloc(const char *name)
     return p;
 }
 
+void process_get_cwd(struct process *p, char *out, size_t size)
+{
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    strlcpy(out, p->cwd, size);
+    spin_unlock_irqrestore(&p->tlock, flags);
+}
+
+void process_set_cwd(struct process *p, const char *path)
+{
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    strlcpy(p->cwd, path, sizeof(p->cwd));
+    spin_unlock_irqrestore(&p->tlock, flags);
+}
+
 bool process_resolve_path(struct process *p, const char *path, char *out, size_t out_size)
 {
     char tmp[PROCESS_CWD_MAX * 2];
-    if (path[0] == '/')
+    if (path[0] == '/') {
         strlcpy(tmp, path, sizeof(tmp));
-    else
-        ksnprintf(tmp, sizeof(tmp), "%s/%s", p->cwd, path);
+    } else {
+        char cwd[PROCESS_CWD_MAX];
+        process_get_cwd(p, cwd, sizeof(cwd));
+        ksnprintf(tmp, sizeof(tmp), "%s/%s", cwd, path);
+    }
 
     size_t o = 0;
     out[o++] = '/';
@@ -397,7 +415,7 @@ static void give_std_fds(struct process *p)
         p->fds[i] = file_open_tty();
 }
 
-static void link_thread(struct process *p, struct thread *t)
+static void link_and_start(struct process *p, struct thread *t)
 {
     uint64_t flags = spin_lock_irqsave(&p->tlock);
     t->proc_next = p->threads;
@@ -406,6 +424,9 @@ static void link_thread(struct process *p, struct thread *t)
     __atomic_fetch_add(&p->thread_refs, 1, __ATOMIC_ACQ_REL);
     if (p->group_exit || p->execing)
         t->kill_me = true;
+    sched_runq_lock();
+    sched_make_ready(t);
+    sched_runq_unlock();
     spin_unlock_irqrestore(&p->tlock, flags);
 }
 
@@ -428,8 +449,7 @@ static struct process *process_start(struct process *p, const char *name)
         return NULL;
     }
     t->utid = p->pid;
-    link_thread(p, t);
-    thread_unblock(t);
+    link_and_start(p, t);
     return p;
 }
 
@@ -608,6 +628,19 @@ struct file *process_fd_get(struct process *p, int fd)
     return p->fds[fd];
 }
 
+void process_fd_close_if(struct process *p, int fd, struct file *f)
+{
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    bool mine = fd >= 0 && fd < p->fd_cap && p->fds[fd] == f;
+    if (mine) {
+        p->fds[fd] = NULL;
+        p->fd_flags[fd] = 0;
+    }
+    spin_unlock_irqrestore(&p->tlock, flags);
+    if (mine)
+        file_unref(f);
+}
+
 int process_fd_close(struct process *p, int fd)
 {
     uint64_t flags = spin_lock_irqsave(&p->tlock);
@@ -698,6 +731,10 @@ int process_fork_stack(struct interrupt_frame *frame, uint64_t newsp)
     mutex_lock(&parent->mm_lock);
     bool copied = vma_copy_all(child, parent) && share_user_pages(child, parent);
     process_mm_tlb_sync(parent);
+    child->entry = parent->entry;
+    child->stack_top = parent->stack_top;
+    child->brk_start = parent->brk_start;
+    child->brk = parent->brk;
     mutex_unlock(&parent->mm_lock);
     if (!copied) {
         vma_release_all(child);
@@ -705,16 +742,12 @@ int process_fork_stack(struct interrupt_frame *frame, uint64_t newsp)
         process_free(child);
         return -ENOMEM;
     }
-    child->entry = parent->entry;
-    child->stack_top = parent->stack_top;
-    child->brk_start = parent->brk_start;
-    child->brk = parent->brk;
     child->pgid = parent->pgid;
     memcpy(child->sig_handlers, parent->sig_handlers, SIG_TABLE_SIZE);
-    strlcpy(child->cwd, parent->cwd, sizeof(child->cwd));
     child->parent = parent;
     memcpy(child->rlimits, parent->rlimits, sizeof(child->rlimits));
     uint64_t tflags = spin_lock_irqsave(&parent->tlock);
+    strlcpy(child->cwd, parent->cwd, sizeof(child->cwd));
     if (!fd_table_resize(child, parent->fd_cap)) {
         spin_unlock_irqrestore(&parent->tlock, tflags);
         vmm_destroy_address_space(child->pml4_phys);
@@ -749,17 +782,20 @@ int process_fork_stack(struct interrupt_frame *frame, uint64_t newsp)
     if (!t) {
         process_unregister(child);
         kfree(copy);
+        for (int i = 0; i < child->fd_cap; i++)
+            if (child->fds[i])
+                file_unref(child->fds[i]);
         vmm_destroy_address_space(child->pml4_phys);
         process_free(child);
         return -ENOMEM;
     }
     struct thread *self = thread_current();
+    int pid = (int)child->pid;
     t->utid = child->pid;
     t->sig_blocked = self->sig_blocked;
     t->fs_base = self->fs_base;
-    link_thread(child, t);
-    thread_unblock(t);
-    return (int)child->pid;
+    link_and_start(child, t);
+    return pid;
 }
 
 long process_clone(struct interrupt_frame *frame, uint64_t flags, uint64_t newsp, uint64_t ptid,
@@ -796,8 +832,7 @@ long process_clone(struct interrupt_frame *frame, uint64_t flags, uint64_t newsp
         copy_to_user((void *)ptid, &tid, sizeof(tid));
     if (flags & CLONE_CHILD_SETTID)
         copy_to_user((void *)ctid, &tid, sizeof(tid));
-    link_thread(p, t);
-    thread_unblock(t);
+    link_and_start(p, t);
     return (long)tid;
 }
 
@@ -968,7 +1003,8 @@ static NORETURN void thread_leave(int status)
     struct thread *self = thread_current();
     if (self->clear_child_tid) {
         int32_t zero = 0;
-        copy_to_user((void *)self->clear_child_tid, &zero, sizeof(zero));
+        if (copy_to_user((void *)self->clear_child_tid, &zero, sizeof(zero)) == 0)
+            futex_wake((uint32_t *)self->clear_child_tid, 1, false);
         self->clear_child_tid = 0;
     }
     process_unpin_all();
@@ -985,8 +1021,10 @@ static NORETURN void thread_leave(int status)
         p->group_exit_status = status;
     }
     spin_unlock_irqrestore(&p->tlock, flags);
-    if (!last)
+    if (!last) {
+        signal_retarget(p, __atomic_load_n(&p->sig_pending, __ATOMIC_SEQ_CST));
         thread_exit();
+    }
 
     p->exit_code = p->group_exit_status;
     p->alarm_at = 0;
@@ -996,12 +1034,12 @@ static NORETURN void thread_leave(int status)
             p->fds[i] = NULL;
         }
     vma_release_all(p);
+    while (p->free_n)
+        pmm_free_page(p->free_batch[--p->free_n]);
     flags = spin_lock_irqsave(&proc_lock);
     p->state = PROC_ZOMBIE;
     orphan_children_locked(p);
-    if (p->parent)
-        signal_send(p->parent, SIGCHLD);
-    else
+    if (!p->parent)
         p->autofree = true;
     spin_unlock_irqrestore(&proc_lock, flags);
     thread_exit();
@@ -1076,12 +1114,30 @@ void process_unpin_all(void)
 
 void process_mm_tlb_sync(struct process *p)
 {
-    if (p->live_threads <= 1)
-        return;
-    if (interrupts_enabled())
+    if (p->live_threads > 1) {
+        if (!interrupts_enabled()) {
+            smp_flush_tlb_others();
+            return;
+        }
         smp_tlb_shootdown_sync();
-    else
-        smp_flush_tlb_others();
+    }
+    while (p->free_n)
+        pmm_free_page(p->free_batch[--p->free_n]);
+}
+
+void process_defer_free(struct process *p, uint64_t phys)
+{
+    if (p->live_threads <= 1) {
+        pmm_free_page(phys);
+        return;
+    }
+    if (p->free_n == PROCESS_FREE_BATCH)
+        process_mm_tlb_sync(p);
+    if (p->free_n == PROCESS_FREE_BATCH) {
+        pmm_free_page(phys);
+        return;
+    }
+    p->free_batch[p->free_n++] = phys;
 }
 
 int process_kill(int pid, int sig)
@@ -1181,6 +1237,8 @@ void process_thread_reaped(struct process *p)
     bool autofree = p->autofree;
     if (autofree)
         unregister_locked(p);
+    else if (p->parent)
+        signal_send(p->parent, SIGCHLD);
     spin_unlock_irqrestore(&proc_lock, flags);
 
     if (pml4)

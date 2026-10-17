@@ -787,3 +787,88 @@ Uma linha por decisao, na ordem em que foram tomadas.
     foi desfeito.
   - Escrita no lado escravo do pty e interrompivel; antes uma thread presa
     ali segurava `exit_group` e `execve` para sempre.
+
+## v2.0.0-a7 (futex)
+
+- Uma trava global (`futex_lock`) e 64 baldes de esperadores. Cada esperador
+  e uma struct na pilha de quem espera, com fila de espera propria; acordar e
+  tirar a struct do balde, marcar `woken` e acordar a fila dela. Com uma
+  trava so, o `REQUEUE` e so trocar a chave e mudar de balde. Uma trava por
+  balde so compensa com muitas CPUs disputando enderecos diferentes.
+- Chave: com `FUTEX_PRIVATE_FLAG`, ou numa area privada, e (processo,
+  endereco virtual), que e o que as threads de um processo dividem. Numa area
+  `MAP_SHARED` sem a flag, e o endereco fisico da palavra, o que faz um mutex
+  `PTHREAD_PROCESS_SHARED` funcionar entre pai e filho. Area privada depois do
+  `fork` continua com a chave por processo: o copy-on-write separa as paginas,
+  entao dois processos nunca esperam na mesma palavra privada.
+- `FUTEX_WAIT` le a palavra uma vez antes de pegar a trava (para a falta de
+  pagina acontecer com interrupcoes ligadas) e de novo com a trava, que e a
+  leitura que vale: quem muda a palavra e chama `FUTEX_WAKE` pega a mesma
+  trava, entao ou o esperador ve o valor novo, ou ja esta no balde quando o
+  wake procura.
+- O sono e o `wait_sleep_intr` da 1.6, com o tempo que falta ate o prazo:
+  sinal devolve `EINTR`, prazo vencido `ETIMEDOUT`, acordar sem ser por wake
+  nem sinal (um `kick`, por exemplo) volta a dormir. Timeout zero devolve
+  `ETIMEDOUT` sem dormir; o resto e arredondado para cima em milissegundos.
+- `clear_child_tid` agora acorda um esperador depois de zerar a palavra, que
+  e o que o `pthread_join` da musl espera; sem isso ele girava.
+- Sem `FUTEX_WAIT_BITSET`, `WAKE_OP` e as operacoes PI: a musl usa so
+  `WAIT`, `WAKE` e `REQUEUE` (PI so com `PTHREAD_PRIO_INHERIT`, que devolve
+  erro). `ENOSYS` para o resto.
+- O comando `mutex` do shell do kernel mostra quantas threads estao no futex;
+  a regressao confere que sobra zero depois dos testes.
+- Depois de uma revisao do futex, antes do commit:
+  - Prazo enorme (como `{INT64_MAX, ...}`, que a musl manda quando o
+    `abstime` esta muito longe) passou a ser "sem prazo" em vez de estourar a
+    conta e vencer na hora. Timeout zero tem uma flag propria, e o prazo leva
+    um tick de folga para nunca vencer antes do pedido.
+  - Fila por chave em ordem de chegada (FIFO): com a pilha (LIFO) de antes,
+    quem voltava a esperar logo era sempre o primeiro acordado, e o mais
+    antigo podia nunca sair.
+  - A leitura da palavra com a trava segurada, se falhar (a pagina sumiu
+    entre as duas leituras), solta a trava, traz a pagina de novo e tenta outra
+    vez, em vez de devolver `EFAULT`.
+  - Retornos como os do Linux: `REQUEUE` devolve acordados mais movidos,
+    `WAKE` com contagem zero acorda um, endereco fora da metade de usuario da
+    `EFAULT` e desalinhado `EINVAL`.
+  - Os testes do `mfutex` nao dependem mais de `usleep` para saber se a thread
+    ja esta esperando: contam os esperadores com um `CMP_REQUEUE` da palavra
+    para ela mesma, que nao acorda ninguem.
+  - Fica para a 1.8: sem `SA_RESTART` de verdade, toda espera interrompida
+    devolve `EINTR`.
+
+### Segunda revisao da 1.6 (corrigida junto com a 1.7)
+
+- Paginas de usuario so voltam ao alocador depois do shootdown de TLB. Com
+  mais de uma thread, `munmap`, `MADV_DONTNEED`, `brk` encolhendo e
+  `MAP_FIXED` guardam as paginas num lote do processo (`free_batch`, 32
+  entradas, protegido pelo `mm_lock`) e o `process_mm_tlb_sync` as libera
+  depois do shootdown sincrono. Antes, outra CPU com a traducao velha no TLB
+  podia escrever numa pagina que ja era de outro processo. A copia do
+  copy-on-write faz o mesmo com a referencia da pagina antiga.
+- A thread nova entra na lista do processo e na fila de prontas na mesma
+  secao critica. Antes, entre as duas coisas, um `exit_group` ou um sinal
+  podia acordar a thread, ela saia e era liberada, e o criador mexia nela
+  depois. O `fork` guarda o pid antes de soltar o filho.
+- `SIGCHLD` so e enviado quando o filho ja pode ser colhido (no
+  `process_thread_reaped`). Um handler com `waitpid(WNOHANG)` recebia o
+  sinal cedo demais, nao achava o filho e nao recebia outro sinal.
+- Sinal para o processo nao acorda mais uma thread que o bloqueia: fica
+  pendente ate alguem desbloquear. Quando uma thread sai, ou bloqueia um
+  sinal pendente (pelo `sigprocmask`, pela mascara do handler ou pelo
+  `sigreturn`), outra thread que o aceite e acordada. A troca de mascara e o
+  calculo do que ficou bloqueado acontecem sob o `tlock`.
+- `fork` copia `brk`, pilha e entrada junto com as VMAs, sob o `mm_lock`, e o
+  `cwd` junto com a tabela de descritores, sob o `tlock`; `chdir`, `getcwd` e
+  a resolucao de caminhos relativos leem e escrevem o `cwd` sob o `tlock`.
+- `pipe2` e `openpty` que falham depois de instalar os descritores so fecham
+  o numero se ele ainda for o arquivo que instalaram (outra thread podia ter
+  fechado e reaberto o mesmo numero).
+- `fork` que falha ao criar a thread solta as referencias dos arquivos.
+- Leitura de `/dev/input` e interrompivel.
+- Depois de um NMI o kernel nao entrega sinais (o NMI roda numa pilha de
+  emergencia). Fica pendente: um NMI que chegue na janela entre a entrada da
+  syscall e o `swapgs` ainda roda com o GS do usuario; so acontece com NMI de
+  fora (o monitor do QEMU) e e assunto da etapa de robustez.
+- Fica para a 1.8: `nanosleep` acordado por sinal ainda devolve 0 sem o tempo
+  restante.

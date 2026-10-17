@@ -16,7 +16,7 @@ ou sinais), 5 vezes seguidas:
 
     .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
 
-Proxima etapa: 1.7.
+Proxima etapa: 1.8.
 
 ## Checklist
 
@@ -35,7 +35,7 @@ Proxima etapa: 1.7.
 | 1.4 | Memoria do jeito Linux (VMAs, mmap) | [x] | 02:13 | 02:51 | (ver diario) |
 | 1.5 | Programas contra a musl com `zig cc` (plano B: musl pelo build.ps1) | [x] | 02:52 | 03:10 | (ver diario) |
 | 1.6 | Threads (clone) | [x] | 03:10 | 03:50 | (ver diario) |
-| 1.7 | futex | [ ] | | | |
+| 1.7 | futex | [x] | 03:50 | 04:28 | (ver diario) |
 | 1.8 | Tempo e sinais completos | [ ] | | | |
 | 1.9 | dash, lua, sbase | [ ] | | | |
 | 1.10 | Doom | [ ] | | | |
@@ -359,3 +359,31 @@ que tinham ficado de fora da tabela.
 Regressao 154 -> 164, estresse 5x verde.
 Fica para a 1.7: sem `futex` a musl espera girando (a 202 aparece como
 desconhecida e a regressao a tolera so ate la).
+
+#### 1.7 futex - 03:50 as 04:28 - FEITO
+`futex` com `WAIT` (timeout relativo), `WAKE`, `REQUEUE` e `CMP_REQUEUE`,
+privado e compartilhado: trava global, 64 baldes, esperador na pilha com fila
+propria, chave por (processo, endereco) ou pelo endereco fisico numa area
+`MAP_SHARED`. `clear_child_tid` acorda o `pthread_join`. O comando `mutex` do
+shell do kernel mostra quantas threads estao no futex. Programa novo `mfutex`
+(contra a musl, 20 verificacoes): 1 milhao de operacoes de `pthread_mutex`
+entre 8 threads (cerca de 0,5 s no QEMU), condvar produtor/consumidor, barreira,
+semaforo, `timedwait`, `EAGAIN`/`ETIMEDOUT`/`EINTR`/`EINVAL`, `CMP_REQUEUE`,
+mutex `PROCESS_SHARED` entre dois processos e `fork` com thread no futex.
+A verificacao "nenhuma syscall desconhecida" voltou a valer sem excecao.
+Duas revisoes rodaram antes do commit, cada achado conferido por dois
+revisores independentes. A do futex achou 12 problemas, corrigidos: conta do
+prazo estourando com timeout enorme, ordem LIFO, `EFAULT` espurio na segunda
+leitura, retornos diferentes do Linux, e testes que dependiam de `usleep`
+(agora contam os esperadores). A segunda revisao do codigo da 1.6 achou 18
+problemas, 16 corrigidos aqui. O mais serio: paginas voltavam ao alocador
+antes do shootdown de TLB, e outra CPU podia escrever numa pagina ja
+reaproveitada. Os outros: thread nova liberada antes do criador terminar de
+solta-la, `SIGCHLD` antes de o filho poder ser colhido, sinal nao redirecionado
+quando a thread sai ou o bloqueia, `cwd`, `brk` e descritores sem trava no
+`fork`/`chdir`/`pipe2`, NMI entregando sinal. `mthreads` ganhou
+`mmap`/`munmap` concorrente e handler de `SIGCHLD` com `WNOHANG`.
+Regressao 164 -> 179, estresse 5x verde.
+Fica para a 1.8: `SA_RESTART` (toda espera interrompida devolve `EINTR`) e
+`nanosleep` interrompivel com o tempo restante. Fica para a robustez (fase 8):
+NMI na janela antes do `swapgs` da syscall.

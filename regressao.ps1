@@ -75,7 +75,7 @@ if ($runAll -or $OnlyA) {
         "cmd:fputest", "until:60:fputest: fim", "cmd:auxtest", "until:30:auxtest: fim",
         "cmd:sctest", "until:30:sctest: fim", "cmd:filetest", "until:60:filetest: fim",
         "cmd:mhello", "until:30:mhello: fim",
-        "cmd:mthreads", "until:120:mthreads: fim",
+        "cmd:mthreads", "until:120:mthreads: fim", "cmd:mfutex", "until:240:mfutex: fim",
         "cmd:sleep 100", "wait:2", "key:03", "wait:2",
         "cmd:hello um dois", "wait:1",
         "cmd:date", "wait:1",
@@ -124,7 +124,7 @@ if ($runAll -or $OnlyA) {
         "cmd:ulimit -a", "cmd:stress 220 220 9000 &", "wait:6", "cmd:ps | wc", "cmd:wait", "until:120:pronto  stress",
         "key:0B", "cmd:heaptest", "wait:1", "cmd:preempt", "wait:2",
         "cmd:arp", "cmd:net",
-        "cmd:dev", "cmd:pty", "cmd:mem"
+        "cmd:dev", "cmd:pty", "cmd:mutex", "cmd:mem"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp @buildFlag -LogPath "out\reg-a.log" `
         -Script $stepsA -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
@@ -179,8 +179,23 @@ if ($runAll -or $OnlyA) {
     Expect $a "exit com outra thread presa num read +ok" "mthreads: exit acorda thread presa num read"
     Expect $a "execve com outra thread presa num read +ok" "mthreads: execve com thread presa num read"
     Expect $a "execve feito por uma thread que nao e a principal +ok" "mthreads: execve a partir de outra thread"
+    Expect $a "mmap/munmap em 4 threads ao mesmo tempo +ok" "mthreads: mmap/munmap concorrente entre threads"
+    Expect $a "handler de SIGCHLD colhe todos com WNOHANG +ok" "mthreads: SIGCHLD so chega quando o filho pode ser colhido"
     Expect $a "mthreads: fim, TUDO OK" "mthreads: threads da musl completas"
-    ExpectNot $a "syscall (?!202 )\d+ desconhecida" "nenhuma syscall desconhecida na sequencia A (futex fica para a 1.7)"
+    Expect $a "pthread_mutex entre 8 threads, 1 milhao de operacoes +ok" "mfutex: 1 milhao de operacoes de mutex entre 8 threads"
+    Expect $a "condvar produtor/consumidor, 4\+4 threads, fila de 4 +ok" "mfutex: condvar produtor/consumidor"
+    Expect $a "pthread_barrier, 8 threads, 2000 rodadas +ok" "mfutex: pthread_barrier"
+    Expect $a "sem_wait/sem_post entre threads +ok" "mfutex: semaforo"
+    Expect $a "pthread_cond_timedwait expira com ETIMEDOUT +ok" "mfutex: timedwait expira"
+    Expect $a "FUTEX_WAIT com timeout devolve ETIMEDOUT +ok" "mfutex: FUTEX_WAIT com timeout"
+    Expect $a "sinal interrompe FUTEX_WAIT com EINTR +ok" "mfutex: sinal interrompe FUTEX_WAIT"
+    Expect $a "FUTEX_WAIT com timeout enorme continua esperando +ok" "mfutex: timeout enorme nao vence na hora"
+    Expect $a "fork com uma thread em FUTEX_WAIT +ok" "mfutex: fork com thread no futex"
+    Expect $a "FUTEX_CMP_REQUEUE acorda 1 e move 3 +ok" "mfutex: FUTEX_CMP_REQUEUE"
+    Expect $a "mutex compartilhado entre dois processos \(MAP_SHARED\) +ok" "mfutex: futex compartilhado entre processos"
+    Expect $a "mfutex: fim, TUDO OK" "mfutex: futex completo"
+    Expect $a "futex: 0 thread\(s\) esperando" "nenhuma thread esquecida na fila do futex"
+    ExpectNot $a "syscall \d+ desconhecida" "nenhuma syscall desconhecida na sequencia A"
     Expect $a "flag NT ligada dentro do handler\s+ok" "flag NT do usuario nao derruba o iretq do rt_sigreturn"
     Expect $a "Copias de usuario: [1-9]\d* falta\(s\) recuperada\(s\)" "tabela de excecoes recuperou as faltas"
     Expect $a "morto por sinal 2" "Ctrl\+C matou o sleep com SIGINT"

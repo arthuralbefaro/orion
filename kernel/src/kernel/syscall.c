@@ -18,6 +18,7 @@
 #include <fs/devfs.h>
 #include <drivers/pty.h>
 #include <kernel/wait.h>
+#include <kernel/futex.h>
 #include <kernel/signal.h>
 #include <mm/heap.h>
 #include <net/socket.h>
@@ -314,13 +315,13 @@ static long install_pair(struct file *a, struct file *b, int *ufds, bool cloexec
     fds[0] = process_fd_alloc(p, a, 0, cloexec);
     fds[1] = process_fd_alloc(p, b, 0, cloexec);
     if (fds[0] < 0 || fds[1] < 0) {
-        if (fds[0] >= 0) process_fd_close(p, fds[0]); else file_unref(a);
-        if (fds[1] >= 0) process_fd_close(p, fds[1]); else file_unref(b);
+        if (fds[0] >= 0) process_fd_close_if(p, fds[0], a); else file_unref(a);
+        if (fds[1] >= 0) process_fd_close_if(p, fds[1], b); else file_unref(b);
         return -EMFILE;
     }
     if (copy_to_user(ufds, fds, sizeof(fds)) < 0) {
-        process_fd_close(p, fds[0]);
-        process_fd_close(p, fds[1]);
+        process_fd_close_if(p, fds[0], a);
+        process_fd_close_if(p, fds[1], b);
         return -EFAULT;
     }
     return 0;
@@ -735,7 +736,7 @@ static long sys_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, u
     struct process *p = process_current();
     mutex_lock(&p->mm_lock);
     long r = do_mmap(addr, len, prot, flags, fd, off);
-    if (flags & MAP_FIXED)
+    if ((flags & MAP_FIXED) || r < 0 || p->free_n)
         process_mm_tlb_sync(p);
     mutex_unlock(&p->mm_lock);
     return r;
@@ -809,10 +810,12 @@ static long sys_getcwd(char *ubuf, size_t size)
     struct process *p = process_current();
     if (!user_range_ok((uint64_t)ubuf, size))
         return -EFAULT;
-    size_t n = strlen(p->cwd) + 1;
+    char cwd[PROCESS_CWD_MAX];
+    process_get_cwd(p, cwd, sizeof(cwd));
+    size_t n = strlen(cwd) + 1;
     if (n > size)
         return -ERANGE;
-    long r = copy_to_user(ubuf, p->cwd, n);
+    long r = copy_to_user(ubuf, cwd, n);
     return r < 0 ? r : (long)n;
 }
 
@@ -828,7 +831,7 @@ static long sys_chdir(const char *upath)
         return -ENOENT;
     if (!n.is_dir)
         return -ENOTDIR;
-    strlcpy(p->cwd, full, sizeof(p->cwd));
+    process_set_cwd(p, full);
     return 0;
 }
 
@@ -1255,6 +1258,8 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_VFORK:       ret = process_fork(f); break;
     case SYS_PAUSE:       ret = sys_pause(); break;
     case SYS_EXIT_GROUP:  process_exit((int)f->rdi);
+    case SYS_FUTEX:       ret = futex_syscall((uint32_t *)f->rdi, (int)f->rsi, (uint32_t)f->rdx, f->r10,
+                                          (uint32_t *)f->r8, (uint32_t)f->r9); break;
     case SYS_SCHED_GETAFFINITY: ret = sys_sched_getaffinity((int)f->rdi, f->rsi, (void *)f->rdx); break;
     case SYS_SIGALTSTACK: ret = sys_sigaltstack((const struct user_stack_t *)f->rdi, (struct user_stack_t *)f->rsi); break;
     case SYS_RT_SIGRETURN: ret = signal_sigreturn(f); full_restore = true; break;

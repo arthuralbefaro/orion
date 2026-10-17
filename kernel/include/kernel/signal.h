@@ -66,6 +66,7 @@ void signal_reset_on_exec(struct process *p);
 
 int  signal_send(struct process *p, int sig);
 int  signal_send_thread(struct thread *t, int sig);
+void signal_retarget(struct process *p, uint64_t sigs);
 bool signal_pending_current(void);
 void signal_check(struct interrupt_frame *f);
 

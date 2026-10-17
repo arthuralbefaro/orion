@@ -96,11 +96,33 @@ static void wake_receiver(struct process *p, int sig)
         if (!target || t == me)
             target = t;
     }
-    if (!target)
-        target = p->threads;
     if (target)
         wake_thread(target);
     spin_unlock_irqrestore(&p->tlock, flags);
+}
+
+void signal_retarget(struct process *p, uint64_t sigs)
+{
+    while (sigs) {
+        wake_receiver(p, __builtin_ctzll(sigs) + 1);
+        sigs &= sigs - 1;
+    }
+}
+
+static void set_mask(struct thread *self, uint64_t mask)
+{
+    struct process *p = self->process;
+    mask &= ~SIG_UNBLOCKABLE;
+    if (!p) {
+        self->sig_blocked = mask;
+        return;
+    }
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    uint64_t before = self->sig_blocked;
+    self->sig_blocked = mask;
+    uint64_t moved = __atomic_load_n(&p->sig_pending, __ATOMIC_SEQ_CST) & mask & ~before;
+    spin_unlock_irqrestore(&p->tlock, flags);
+    signal_retarget(p, moved);
 }
 
 int signal_send(struct process *p, int sig)
@@ -179,8 +201,7 @@ static bool push_sigframe(struct process *p, struct interrupt_frame *f, int sig)
     if (copy_to_user((void *)sp, &sf, sizeof(sf)) < 0)
         return false;
 
-    self->sig_blocked |= sa->sa_mask | SIGMASK(sig);
-    self->sig_blocked &= ~SIG_UNBLOCKABLE;
+    set_mask(self, self->sig_blocked | sa->sa_mask | SIGMASK(sig));
     f->rsp = sp;
     f->rip = sa->sa_handler;
     f->rdi = (uint64_t)sig;
@@ -257,18 +278,11 @@ long signal_procmask(int how, const uint64_t *set, uint64_t *old)
     if (!set)
         return 0;
     uint64_t v = *set & ~SIG_UNBLOCKABLE;
-    uint64_t before = self->sig_blocked;
     switch (how) {
-    case SIG_BLOCK:   self->sig_blocked |= v; break;
-    case SIG_UNBLOCK: self->sig_blocked &= ~v; break;
-    case SIG_SETMASK: self->sig_blocked = v; break;
+    case SIG_BLOCK:   set_mask(self, self->sig_blocked | v); break;
+    case SIG_UNBLOCK: set_mask(self, self->sig_blocked & ~v); break;
+    case SIG_SETMASK: set_mask(self, v); break;
     default: return -EINVAL;
-    }
-    struct process *p = self->process;
-    uint64_t moved = p ? __atomic_load_n(&p->sig_pending, __ATOMIC_SEQ_CST) & self->sig_blocked & ~before : 0;
-    while (moved) {
-        wake_receiver(p, __builtin_ctzll(moved) + 1);
-        moved &= moved - 1;
     }
     return 0;
 }
@@ -285,7 +299,7 @@ long signal_sigreturn(struct interrupt_frame *f)
     }
 
     struct interrupt_frame saved = sf.ctx;
-    thread_current()->sig_blocked = sf.mask & ~SIG_UNBLOCKABLE;
+    set_mask(thread_current(), sf.mask);
     fpu_sanitize(sf.fpu);
     fpu_restore(sf.fpu);
 

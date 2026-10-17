@@ -35,6 +35,8 @@ struct interrupt_frame;
 
 enum process_state { PROC_RUNNING, PROC_ZOMBIE };
 
+#define PROCESS_FREE_BATCH 32
+
 struct process {
     uint32_t pid;
     char name[PROCESS_NAME_MAX];
@@ -56,6 +58,8 @@ struct process {
     struct thread *threads;
     uint32_t live_threads;
     uint32_t thread_refs;
+    uint32_t free_n;
+    uint64_t free_batch[PROCESS_FREE_BATCH];
     bool execing;
     bool group_exit;
     int group_exit_status;
@@ -86,6 +90,7 @@ long process_clone(struct interrupt_frame *frame, uint64_t flags, uint64_t newsp
 struct file *process_fd_pin(int fd);
 void process_unpin_all(void);
 void process_mm_tlb_sync(struct process *p);
+void process_defer_free(struct process *p, uint64_t phys);
 NORETURN void process_exit_signal(int sig);
 int  process_kill(int pid, int sig);
 int  process_setpgid(int pid, int pgid);
@@ -97,7 +102,10 @@ void process_thread_reaped(struct process *p);
 int  process_fd_install(struct process *p, struct file *f);
 struct file *process_fd_get(struct process *p, int fd);
 int  process_fd_close(struct process *p, int fd);
+void process_fd_close_if(struct process *p, int fd, struct file *f);
 
+void process_get_cwd(struct process *p, char *out, size_t size);
+void process_set_cwd(struct process *p, const char *path);
 bool process_resolve_path(struct process *p, const char *path, char *out, size_t out_size);
 
 void process_dump(void);

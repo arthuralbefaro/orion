@@ -29,6 +29,7 @@
 #include <mm/memory.h>
 #include <mm/uaccess.h>
 #include <kernel/mutex.h>
+#include <kernel/futex.h>
 #include <lib/string.h>
 
 #define LINE_MAX 128
@@ -113,6 +114,7 @@ static void cmd_mutex(const char *args)
 {
     (void)args;
     mutex_dump();
+    kprintf("futex: %lu thread(s) esperando\n", futex_waiters());
 }
 
 static void cmd_heaptest(const char *args)

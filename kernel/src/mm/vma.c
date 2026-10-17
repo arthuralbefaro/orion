@@ -115,7 +115,7 @@ static void drop_pages(struct process *p, uint64_t start, uint64_t end)
             continue;
         vmm_unmap_page_in(p->pml4_phys, va);
         if (!(pte & PTE_NOFREE)) {
-            pmm_free_page(pte & PTE_ADDR_MASK);
+            process_defer_free(p, pte & PTE_ADDR_MASK);
             if (p->pages)
                 p->pages--;
         }
@@ -302,8 +302,11 @@ static bool fault_locked(struct process *p, uint64_t addr, uint64_t err)
         return true;
     }
     if (present) {
-        if (!write || !(pte & PTE_COW) || !vmm_cow_fault(p->pml4_phys, page))
+        uint64_t old = 0;
+        if (!write || !(pte & PTE_COW) || !vmm_cow_fault(p->pml4_phys, page, &old))
             return false;
+        if (old)
+            process_defer_free(p, old);
         process_mm_tlb_sync(p);
         return true;
     }

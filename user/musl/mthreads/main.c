@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -78,6 +79,42 @@ static void *exec_false(void *arg)
     return NULL;
 }
 
+static volatile int map_bad;
+
+static void *map_churn(void *arg)
+{
+    unsigned seed = (unsigned)(long)arg * 2654435761u;
+    for (int i = 0; i < 400; i++) {
+        size_t len = 4096 * (1 + (seed >> 28));
+        seed = seed * 1103515245u + 12345u;
+        unsigned *m = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (m == MAP_FAILED) {
+            map_bad = 1;
+            break;
+        }
+        size_t n = len / sizeof(unsigned);
+        unsigned tag = seed ^ (unsigned)i;
+        for (size_t j = 0; j < n; j += 64)
+            m[j] = tag + (unsigned)j;
+        sched_yield();
+        for (size_t j = 0; j < n; j += 64)
+            if (m[j] != tag + (unsigned)j)
+                map_bad = 1;
+        munmap(m, len);
+    }
+    return NULL;
+}
+
+static volatile int reaped;
+
+static void on_chld(int sig)
+{
+    (void)sig;
+    int st;
+    while (waitpid(-1, &st, WNOHANG) > 0)
+        reaped++;
+}
+
 static int child_status(pid_t pid)
 {
     int st = 0;
@@ -143,6 +180,27 @@ int main(void)
     int st = 0;
     waitpid(pid, &st, 0);
     check("exit numa thread encerra o processo inteiro", WIFEXITED(st) && WEXITSTATUS(st) == 5);
+
+    pthread_t churn[4];
+    for (int i = 0; i < 4; i++)
+        pthread_create(&churn[i], NULL, map_churn, (void *)(long)(i + 1));
+    for (int i = 0; i < 4; i++)
+        pthread_join(churn[i], NULL);
+    check("mmap/munmap em 4 threads ao mesmo tempo", !map_bad);
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_chld;
+    sa.sa_flags = SA_RESTART;
+    sigaction(SIGCHLD, &sa, NULL);
+    for (int i = 0; i < 20; i++)
+        if (fork() == 0)
+            _exit(0);
+    for (int i = 0; i < 300 && reaped < 20; i++)
+        usleep(10000);
+    signal(SIGCHLD, SIG_DFL);
+    printf("  filhos colhidos pelo handler de SIGCHLD: %d\n", reaped);
+    check("handler de SIGCHLD colhe todos com WNOHANG", reaped == 20);
 
     pthread_t bg;
     pthread_create(&bg, NULL, quitter, NULL);

@@ -283,7 +283,8 @@ void isr_dispatch(struct interrupt_frame *frame)
 
     if (vec < VECTOR_EXCEPTIONS_END) {
         handle_exception(frame);
-        signal_check(frame);
+        if (vec != EXC_NMI)
+            signal_check(frame);
         return;
     }
 
