@@ -92,157 +92,107 @@ static const struct device devices[] = {
 struct file *blkdev_file_open(struct blockdev *dev);
 uint64_t blkdev_file_size(struct blockdev *dev);
 
-static const char *tail_of(const char *path)
+#define DEVFS_ROOT_INO  1
+#define DEVFS_BLOCK_INO 100
+
+static int devfs_vnode(struct mount *m, uint64_t ino, uint32_t mode, uint64_t size, void *priv,
+                       struct vnode **out)
 {
-    size_t n = strlen(DEVFS_ROOT);
-    if (strncmp(path, DEVFS_ROOT, n) != 0)
-        return NULL;
-    if (path[n] == '\0')
-        return path + n;
-    if (path[n] != '/')
-        return NULL;
-    return path + n + 1;
+    struct vnode *v = vcache_find(m, ino);
+    if (!v) {
+        v = vnode_new(m, ino, mode);
+        if (!v)
+            return -ENOMEM;
+        v->size = size;
+        v->priv = priv;
+        v = vcache_insert(v);
+    }
+    *out = v;
+    return 0;
 }
 
-static const struct device *find(const char *path)
+static int devfs_lookup(struct vnode *dir, const char *name, struct vnode **out)
 {
-    const char *name = tail_of(path);
-    if (!name || !*name)
-        return NULL;
+    if (dir->ino != DEVFS_ROOT_INO)
+        return -ENOTDIR;
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+        vnode_get(dir);
+        *out = dir;
+        return 0;
+    }
     for (size_t i = 0; i < ARRAY_SIZE(devices); i++)
         if (strcmp(devices[i].name, name) == 0)
-            return &devices[i];
-    return NULL;
-}
-
-static struct blockdev *find_block(const char *path)
-{
-    const char *name = tail_of(path);
-    if (!name || !*name)
-        return NULL;
-    return blockdev_find(name);
-}
-
-static void fill_block_node(struct blockdev *d, uint64_t ino, struct vfs_node *out)
-{
-    memset(out, 0, sizeof(*out));
-    strlcpy(out->name, d->name, sizeof(out->name));
-    out->is_dir = false;
-    out->size = blkdev_file_size(d);
-    out->ino = ino;
-    out->fs = NULL;
-}
-
-static void fill_node(const struct device *d, uint64_t ino, struct vfs_node *out)
-{
-    memset(out, 0, sizeof(*out));
-    strlcpy(out->name, d->name, sizeof(out->name));
-    out->is_dir = false;
-    out->size = d->size();
-    out->ino = ino;
-    out->fs = NULL;
-}
-
-bool devfs_owns(const char *path)
-{
-    return tail_of(path) != NULL;
-}
-
-bool devfs_is_root(const char *path)
-{
-    const char *tail = tail_of(path);
-    return tail && *tail == '\0';
-}
-
-bool devfs_lookup(const char *path, struct vfs_node *out)
-{
-    if (devfs_is_root(path)) {
-        memset(out, 0, sizeof(*out));
-        strlcpy(out->name, "dev", sizeof(out->name));
-        out->is_dir = true;
-        return true;
+            return devfs_vnode(dir->mnt, i + 2, devices[i].mode, devices[i].size(),
+                               (void *)&devices[i], out);
+    for (uint32_t i = 0; i < blockdev_count(); i++) {
+        struct blockdev *b = blockdev_at(i);
+        if (strcmp(b->name, name) == 0)
+            return devfs_vnode(dir->mnt, DEVFS_BLOCK_INO + i, S_IFBLK | 0600, blkdev_file_size(b), b,
+                               out);
     }
-    const struct device *d = find(path);
-    if (d) {
-        fill_node(d, (uint64_t)(d - devices) + 1, out);
-        return true;
-    }
-    struct blockdev *b = find_block(path);
-    if (b) {
-        fill_block_node(b, 100, out);
-        return true;
-    }
-    return false;
+    return -ENOENT;
 }
 
-uint32_t devfs_mode(const char *path)
+static int devfs_readdir(struct vnode *dir, uint64_t *pos, vfs_dir_cb cb, void *ctx)
 {
-    if (devfs_is_root(path))
-        return S_IFDIR | 0755;
-    const struct device *d = find(path);
-    if (d)
-        return d->mode;
-    return find_block(path) ? (S_IFBLK | 0600) : 0;
-}
-
-static int devdir_readdir(struct file *f, uint64_t index, struct vfs_node *out)
-{
-    (void)f;
-    if (index < ARRAY_SIZE(devices)) {
-        fill_node(&devices[index], index + 1, out);
-        return 1;
+    struct vfs_dirent e;
+    (void)dir;
+    uint64_t total = ARRAY_SIZE(devices) + blockdev_count();
+    for (uint64_t i = *pos; i < total; i++) {
+        if (i < ARRAY_SIZE(devices)) {
+            strlcpy(e.name, devices[i].name, sizeof(e.name));
+            e.ino = i + 2;
+            e.mode = devices[i].mode;
+            e.size = devices[i].size();
+        } else {
+            uint32_t bi = (uint32_t)(i - ARRAY_SIZE(devices));
+            struct blockdev *b = blockdev_at(bi);
+            strlcpy(e.name, b->name, sizeof(e.name));
+            e.ino = DEVFS_BLOCK_INO + bi;
+            e.mode = S_IFBLK | 0600;
+            e.size = blkdev_file_size(b);
+        }
+        e.next = i + 1;
+        if (!cb(&e, ctx))
+            return 0;
+        *pos = i + 1;
     }
-    uint32_t bi = (uint32_t)(index - ARRAY_SIZE(devices));
-    struct blockdev *b = blockdev_at(bi);
-    if (!b)
-        return 0;
-    fill_block_node(b, 100 + bi, out);
-    return 1;
+    return 0;
 }
 
-static const struct file_ops devdir_ops = {
-    .readdir = devdir_readdir,
+static struct file *devfs_open(struct vnode *v, int flags)
+{
+    (void)flags;
+    if (v->ino >= DEVFS_BLOCK_INO)
+        return blkdev_file_open(v->priv);
+    const struct device *d = v->priv;
+    return d ? d->open() : NULL;
+}
+
+static int devfs_mount(struct mount *m, struct blockdev *dev)
+{
+    (void)dev;
+    struct vnode *root = vnode_new(m, DEVFS_ROOT_INO, S_IFDIR | 0755);
+    if (!root)
+        return -ENOMEM;
+    m->root = vcache_insert(root);
+    return 0;
+}
+
+const struct fs_type devfs_type = {
+    .name = "devfs",
+    .needs_dev = false,
+    .mount = devfs_mount,
+    .lookup = devfs_lookup,
+    .readdir = devfs_readdir,
+    .open = devfs_open,
 };
 
-struct file *devfs_open(const char *path)
+struct blockdev *devfs_vnode_blockdev(const struct vnode *v)
 {
-    if (devfs_is_root(path)) {
-        struct file *f = file_alloc(&devdir_ops, NULL);
-        if (!f)
-            return NULL;
-        devfs_lookup(path, &f->node);
-        f->has_node = true;
-        f->mode = S_IFDIR | 0755;
-        return f;
-    }
-    const struct device *d = find(path);
-    if (d) {
-        struct file *f = d->open();
-        if (!f)
-            return NULL;
-        fill_node(d, (uint64_t)(d - devices) + 1, &f->node);
-        f->has_node = true;
-        f->mode = d->mode;
-        return f;
-    }
-    struct blockdev *b = find_block(path);
-    return b ? blkdev_file_open(b) : NULL;
-}
-
-bool devfs_readdir(vfs_dir_cb cb, void *ctx)
-{
-    struct vfs_node n;
-    for (size_t i = 0; i < ARRAY_SIZE(devices); i++) {
-        fill_node(&devices[i], i + 1, &n);
-        if (!cb(&n, ctx))
-            return true;
-    }
-    for (uint32_t i = 0; i < blockdev_count(); i++) {
-        fill_block_node(blockdev_at(i), 100 + i, &n);
-        if (!cb(&n, ctx))
-            break;
-    }
-    return true;
+    if (v->mnt->type != &devfs_type || v->ino < DEVFS_BLOCK_INO)
+        return NULL;
+    return v->priv;
 }
 
 void devfs_dump(void)
@@ -265,5 +215,11 @@ void devfs_dump(void)
 void devfs_init(void)
 {
     input_init();
-    log_info("devfs", "%zu dispositivo(s) em %s", ARRAY_SIZE(devices), DEVFS_ROOT);
+    if (!vfs_mounted())
+        return;
+    int r = vfs_mount_kernel("devfs", NULL, "devfs", DEVFS_ROOT);
+    if (r < 0)
+        log_warn("devfs", "nao foi possivel montar em %s (erro %d)", DEVFS_ROOT, -r);
+    else
+        log_info("devfs", "%zu dispositivo(s) em %s", ARRAY_SIZE(devices), DEVFS_ROOT);
 }

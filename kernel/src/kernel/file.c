@@ -5,7 +5,7 @@
 #include <kernel/process.h>
 #include <kernel/spinlock.h>
 #include <kernel/syscall.h>
-#include <fs/devfs.h>
+#include <fs/vfs.h>
 #include <drivers/tty.h>
 #include <drivers/pty.h>
 #include <drivers/console.h>
@@ -36,6 +36,7 @@ void file_unref(struct file *f)
     if (__atomic_sub_fetch(&f->refcount, 1, __ATOMIC_SEQ_CST) == 0) {
         if (f->ops->close)
             f->ops->close(f);
+        vnode_put(f->vn);
         kfree(f->path);
         kfree(f);
     }
@@ -49,11 +50,6 @@ int64_t file_read(struct file *f, void *buf, uint64_t len)
 int64_t file_write(struct file *f, const void *buf, uint64_t len)
 {
     return f->ops->write ? f->ops->write(f, buf, len) : -EBADF;
-}
-
-int file_readdir(struct file *f, uint64_t index, struct vfs_node *out)
-{
-    return f->ops->readdir ? f->ops->readdir(f, index, out) : -ENOTDIR;
 }
 
 long file_ioctl(struct file *f, uint64_t request, uint64_t arg)
@@ -145,57 +141,28 @@ bool file_is_tty(const struct file *f)
 
 static int64_t vfs_file_read(struct file *f, void *buf, uint64_t len)
 {
-    if (f->node.is_dir)
-        return -EISDIR;
-    int64_t n = vfs_read(&f->node, f->offset, buf, len);
+    if ((f->flags & O_ACCMODE) == O_WRONLY)
+        return -EBADF;
+    int64_t n = vfs_read(f->vn, f->offset, buf, len);
     if (n > 0)
         f->offset += (uint64_t)n;
     return n;
 }
 
-struct readdir_ctx {
-    uint64_t want;
-    uint64_t seen;
-    struct vfs_node *out;
-    bool found;
-};
-
-static bool readdir_cb(const struct vfs_node *e, void *ctx)
-{
-    struct readdir_ctx *r = ctx;
-    if (r->seen++ == r->want) {
-        *r->out = *e;
-        r->found = true;
-        return false;
-    }
-    return true;
-}
-
-static int vfs_file_readdir(struct file *f, uint64_t index, struct vfs_node *out)
-{
-    if (!f->node.is_dir)
-        return -ENOTDIR;
-    struct readdir_ctx r = { .want = index, .out = out };
-    f->node.fs->ops->readdir(f->node.fs, &f->node, readdir_cb, &r);
-    return r.found ? 1 : 0;
-}
-
 static int64_t vfs_file_write(struct file *f, const void *buf, uint64_t len)
 {
-    if (f->node.is_dir)
-        return -EISDIR;
-    if (f->flags & O_APPEND)
-        f->offset = f->node.size;
-    int64_t n = vfs_write(&f->node, f->offset, buf, len);
-    if (n > 0)
-        f->offset += (uint64_t)n;
-    return n < 0 ? -EIO : n;
+    if ((f->flags & O_ACCMODE) == O_RDONLY)
+        return -EBADF;
+    uint64_t off = f->offset;
+    int64_t n = vfs_write(f->vn, &off, buf, len, (f->flags & O_APPEND) != 0);
+    if (n >= 0)
+        f->offset = off;
+    return n;
 }
 
 static const struct file_ops vfs_ops = {
     .read = vfs_file_read,
     .write = vfs_file_write,
-    .readdir = vfs_file_readdir,
 };
 
 bool file_is_regular(const struct file *f)
@@ -203,31 +170,16 @@ bool file_is_regular(const struct file *f)
     return f->ops == &vfs_ops;
 }
 
-struct file *file_open_path(const char *path, int flags)
+struct file *file_from_vnode(struct vnode *v, int flags)
 {
-    if (devfs_owns(path))
-        return devfs_open(path);
-
-    struct vfs_node node;
-    bool found = vfs_lookup(path, &node);
-    if (!found) {
-        if (!(flags & O_CREAT))
-            return NULL;
-        if (!vfs_create(path, false, &node))
-            return NULL;
-    } else if ((flags & O_TRUNC) && !node.is_dir && (flags & (O_WRONLY | O_RDWR))) {
-        if (!vfs_truncate(&node, 0))
-            return NULL;
-    }
-
     struct file *f = file_alloc(&vfs_ops, NULL);
     if (!f)
         return NULL;
-    f->node = node;
-    f->has_node = true;
+    f->vn = v;
+    f->mode = v->mode;
     f->flags = (uint32_t)flags;
     if (flags & O_APPEND)
-        f->offset = node.size;
+        f->offset = v->size;
     return f;
 }
 

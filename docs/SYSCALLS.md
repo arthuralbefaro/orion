@@ -17,7 +17,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 1 | write | completa | idem |
 | 2 | open | parcial | `O_CREAT`, `O_EXCL`, `O_TRUNC`, `O_APPEND`, `O_NONBLOCK`, `O_DIRECTORY`, `O_CLOEXEC`; sem modo de permissao |
 | 3 | close | completa | |
-| 4 | stat | completa | `struct stat` do Linux (144 bytes); datas sao a hora do boot ate a 2.1 |
+| 4 | stat | completa | `struct stat` do Linux (144 bytes); `st_dev` e o numero da montagem, `st_ino` e estavel enquanto o arquivo existe (2.1); datas sao a hora do boot ate a 2.7 |
 | 5 | fstat | completa | idem |
 | 6 | lstat | completa | igual ao `stat` (ainda nao ha links simbolicos) |
 | 7 | poll | completa | ate 32 descritores; `EINTR` com sinal |
@@ -30,9 +30,11 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 14 | rt_sigprocmask | completa | mascara no formato Linux (bit `sig-1`), 64 sinais; `sigsetsize` = 8 |
 | 15 | rt_sigreturn | completa | volta por `iretq`, restaura registradores e SSE |
 | 16 | ioctl | parcial | `TCGETS`, `TCSETS`/`W`/`F`, `TIOCGWINSZ`, `TIOCSWINSZ`, `TIOCGPGRP`, `TIOCSPGRP`, `TIOCINQ`, framebuffer, input e rede |
+| 17 | pread64 | completa | arquivos regulares; `ESPIPE` em pipe, terminal e dispositivo |
+| 18 | pwrite64 | completa | idem; escrever depois do fim preenche o buraco com zeros |
 | 19 | readv | completa | ate 1024 pedacos |
 | 20 | writev | completa | ate 1024 pedacos |
-| 21 | access | parcial | so confere a existencia (permissoes na 4.1) |
+| 21 | access | parcial | confere a existencia; `W_OK` em arquivo de montagem so de leitura da `EROFS` (permissoes na 4.1) |
 | 22 | pipe | completa | |
 | 24 | sched_yield | completa | |
 | 25 | mremap | parcial | memoria anonima privada: encolhe, cresce no lugar, ou move com `MREMAP_MAYMOVE` (leva as paginas sem copiar); sem `MREMAP_FIXED` nem area de arquivo/compartilhada |
@@ -60,10 +62,12 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 63 | uname | completa | |
 | 72 | fcntl | parcial | `F_GETFL`/`F_SETFL` (`O_NONBLOCK`), `F_DUPFD`, `F_DUPFD_CLOEXEC`, `F_GETFD`, `F_SETFD`; sem travas de arquivo |
 | 74 | fsync | parcial | descarrega tudo (`sync`) |
-| 77 | ftruncate | completa | |
+| 76 | truncate | completa | como o `ftruncate`, pelo caminho |
+| 77 | ftruncate | completa | estender preenche com zeros; `EINVAL` em descritor so de leitura |
 | 79 | getcwd | completa | |
-| 80 | chdir | completa | |
-| 82 | rename | completa | |
+| 80 | chdir | completa | o processo guarda o vnode do diretorio (2.1); o texto do `getcwd` acompanha |
+| 81 | fchdir | completa | |
+| 82 | rename | completa | entre diretorios do mesmo sistema de arquivos; `EXDEV` entre montagens; por cima de destino existente (no FAT apaga o destino e depois renomeia, sem ser atomico) |
 | 83 | mkdir | parcial | sem modo de permissao |
 | 84 | rmdir | completa | |
 | 87 | unlink | completa | |
@@ -86,6 +90,8 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 158 | arch_prctl | parcial | `ARCH_SET_FS` e `ARCH_GET_FS` |
 | 160 | setrlimit | completa | subir o maximo da `EPERM` |
 | 162 | sync | completa | |
+| 165 | mount | parcial | tipos `vfat` (`fat`, `msdos`) com dispositivo de bloco e `devfs` (`devtmpfs`); `MS_RDONLY`; `MS_NOSUID`, `MS_NODEV`, `MS_NOEXEC`, `MS_SYNCHRONOUS`, `MS_SILENT` e os de `atime` aceitos sem efeito; `MS_REMOUNT`, `MS_BIND` e `MS_MOVE` dao `EINVAL`; um ponto de montagem por diretorio |
+| 166 | umount2 | parcial | `EBUSY` com arquivo aberto, cwd ou montagem dentro; so a flag `UMOUNT_NOFOLLOW` (`MNT_FORCE`, `MNT_DETACH`, `MNT_EXPIRE` dao `EINVAL`) |
 | 186 | gettid | completa | tid de cada thread; a principal tem o pid |
 | 200 | tkill | completa | |
 | 201 | time | completa | |
@@ -99,7 +105,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 230 | clock_nanosleep | parcial | `REALTIME`, `MONOTONIC`, `BOOTTIME`, `TAI`, relativo ou `TIMER_ABSTIME`; relogios de CPU dao `EOPNOTSUPP` |
 | 231 | exit_group | completa | encerra todas as threads do processo |
 | 234 | tgkill | completa | |
-| 257 | openat | completa | `AT_FDCWD` ou descritor de diretorio |
+| 257 | openat | completa | `AT_FDCWD` ou descritor de diretorio; o caminho e resolvido componente a componente, `..` atravessa montagens (2.1) |
 | 258 | mkdirat | parcial | idem; sem modo de permissao |
 | 262 | newfstatat | completa | `AT_EMPTY_PATH` e `AT_SYMLINK_NOFOLLOW` aceitos |
 | 263 | unlinkat | completa | `AT_REMOVEDIR` |

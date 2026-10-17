@@ -42,6 +42,8 @@ struct cpu_times {
     uint64_t stime;
 };
 
+struct vnode;
+
 struct process {
     uint32_t pid;
     char name[PROCESS_NAME_MAX];
@@ -54,6 +56,7 @@ struct process {
     uint64_t pages;
     struct vma *vmas;
     char cwd[PROCESS_CWD_MAX];
+    struct vnode *cwd_vn;
     int exit_code;
     uint32_t pgid;
     uint64_t sig_pending;
@@ -119,7 +122,9 @@ int  process_fd_close(struct process *p, int fd);
 void process_fd_close_if(struct process *p, int fd, struct file *f);
 
 void process_get_cwd(struct process *p, char *out, size_t size);
-void process_set_cwd(struct process *p, const char *path);
+void process_set_cwd(struct process *p, const char *path, struct vnode *v);
+struct vnode *process_cwd_vnode(struct process *p);
+void process_update_cwd_path(struct process *p, struct vnode *v, const char *path);
 bool process_resolve_path(struct process *p, const char *path, char *out, size_t out_size);
 
 void process_dump(void);

@@ -22,7 +22,7 @@ na primeira vez, com SHA-256 conferido. Os programas ficam em `user/musl/<nome>`
 em `user/include/orion.h`. A regressao demora uns 20 minutos; o estresse 5x,
 outros 10.
 
-Proxima etapa: 2.1.
+Proxima etapa: 2.2.
 
 ## Checklist
 
@@ -46,8 +46,8 @@ Proxima etapa: 2.1.
 | 1.9 | dash, lua, sbase | [x] | 05:37 | 06:28 | `7208886` |
 | 1.10 | Doom | [x] | 06:28 | 07:10 | `fe72b5e` |
 | 1.11 | tcc dentro do Orion | [x] | 07:10 | 07:54 | `4f1b270` |
-| 1.12 | Programas na musl, aposentar a libc propria | [x] | 07:54 | 08:50 | (ver diario) |
-| 2.1 | VFS com inodes | [ ] | | | |
+| 1.12 | Programas na musl, aposentar a libc propria | [x] | 07:54 | 08:50 | 171ba11 |
+| 2.1 | VFS com inodes | [x] | 08:51 | 11:05 | (ver diario) |
 | 2.2 | tmpfs | [ ] | | | |
 | 2.3 | procfs | [ ] | | | |
 | 2.4 | Cache de paginas unificado | [ ] | | | |
@@ -505,3 +505,26 @@ programas.
 Regressao 218 -> 218 (mesmas verificacoes, agora sobre a musl), estresse 5x
 verde. Versao 2.0.0 e tag `v2.0`: fases 0 e 1 completas, marco M1 ("rodar
 `dash`, `lua`, `tcc` e Doom compilados para Linux, sem mudar uma linha deles").
+
+#### 2.1 VFS com vnodes e montagens - 08:51 as 11:05 - FEITO
+O VFS de caminho fixo (prefixos `/dev` e `/mnt` no codigo, copia do no em
+cada descritor, `..` resolvido como texto) virou uma camada de vnodes: cache
+com contagem de referencia, tabela de montagens com `mount`/`umount` (165/166),
+caminho resolvido componente a componente com `..` atravessando montagens,
+processo com o vnode do diretorio atual. FAT e devfs viraram tipos de sistema
+de arquivos montados pela VFS nova (raiz, `/dev`, e o segundo disco em `/mnt`
+no boot ou com `/bin/mount`); `/bin/mount`, `/bin/umount` e `vfstest` sao
+novos, e `pread64`, `pwrite64`, `truncate` e `fchdir` entraram. No FAT:
+`rename` entre diretorios e por cima de destino, arquivo apagado continua
+legivel enquanto aberto, buracos leem zeros, `O_APPEND` atomico, posicao
+estavel no `getdents64`. Foram quatro rodadas de revisao adversarial (a cada
+rodada, os achados conferidos por outro agente e as correcoes revisadas na
+seguinte): 16 problemas reais na primeira (dois corrompiam o disco), 10 na
+segunda, 6 na terceira e 2 na quarta, todos corrigidos e com teste no
+`vfstest` quando dava para provocar.
+Regressao 218 -> 243, estresse 5x verde. Versao 2.1.0-a1.
+Pendente: o mutex nao e justo e, sem IPI para acordar CPU ociosa, o
+`bdflush` chega a esperar 10 s atras de escritas seguidas no FAT; na partida
+do estresse o `exec` simultaneo de 64 processos espera a trava do FAT (le o
+ELF inteiro com ela; resolve na 2.4); `/proc/mounts` (o `mount` sem argumentos
+ja le dele) chega na 2.3.

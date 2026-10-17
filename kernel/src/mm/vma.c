@@ -379,7 +379,7 @@ static bool fault_locked(struct process *p, uint64_t addr, uint64_t err)
             uint64_t n = v->file_size - off;
             if (n > PAGE_SIZE)
                 n = PAGE_SIZE;
-            if (vfs_read(&v->file->node, off, mem, n) < 0) {
+            if (vfs_read(v->file->vn, off, mem, n) < 0) {
                 pmm_free_page(phys);
                 return false;
             }

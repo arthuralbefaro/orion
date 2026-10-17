@@ -1,60 +1,129 @@
 #pragma once
 
 #include <kernel/compiler.h>
+#include <kernel/mutex.h>
+#include <kernel/syscall.h>
 
-#define VFS_NAME_MAX 256
-#define VFS_PATH_MAX 512
+#define VFS_NAME_MAX   256
+#define VFS_PATH_MAX   512
+#define VFS_SOURCE_MAX 32
 
-struct filesystem;
+#define MNT_RDONLY 1u
 
-struct vfs_node {
+struct vnode;
+struct mount;
+struct file;
+struct blockdev;
+
+struct vfs_dirent {
     char name[VFS_NAME_MAX];
-    bool is_dir;
-    uint64_t size;
     uint64_t ino;
-    uint64_t dir_ino;
-    uint32_t dir_offset;
-    struct filesystem *fs;
+    uint64_t size;
+    uint64_t next;
+    uint32_t mode;
 };
 
-typedef bool (*vfs_dir_cb)(const struct vfs_node *entry, void *ctx);
+typedef bool (*vfs_dir_cb)(const struct vfs_dirent *entry, void *ctx);
 
-struct fs_ops {
-    bool (*root)(struct filesystem *fs, struct vfs_node *out);
-    bool (*lookup)(struct filesystem *fs, const struct vfs_node *dir, const char *name, struct vfs_node *out);
-    int64_t (*read)(struct filesystem *fs, const struct vfs_node *node, uint64_t offset, void *buf, uint64_t len);
-    bool (*readdir)(struct filesystem *fs, const struct vfs_node *dir, vfs_dir_cb cb, void *ctx);
-    int64_t (*write)(struct filesystem *fs, struct vfs_node *node, uint64_t offset, const void *buf, uint64_t len);
-    bool (*create)(struct filesystem *fs, const struct vfs_node *dir, const char *name, bool is_dir,
-                   struct vfs_node *out);
-    bool (*unlink)(struct filesystem *fs, const struct vfs_node *dir, const char *name, bool is_dir);
-    bool (*truncate)(struct filesystem *fs, struct vfs_node *node, uint64_t size);
-    bool (*rename)(struct filesystem *fs, const struct vfs_node *dir, const char *from, const char *to);
-    bool (*sync)(struct filesystem *fs);
+struct fs_type {
+    const char *name;
+    bool needs_dev;
+    int (*mount)(struct mount *m, struct blockdev *dev);
+    void (*unmount)(struct mount *m);
+    int (*sync)(struct mount *m);
+    int (*lookup)(struct vnode *dir, const char *name, struct vnode **out);
+    int (*readdir)(struct vnode *dir, uint64_t *pos, vfs_dir_cb cb, void *ctx);
+    int64_t (*read)(struct vnode *v, uint64_t offset, void *buf, uint64_t len);
+    int64_t (*write)(struct vnode *v, uint64_t *offset, const void *buf, uint64_t len, bool append);
+    int (*truncate)(struct vnode *v, uint64_t size);
+    int (*create)(struct vnode *dir, const char *name, uint32_t mode, struct vnode **out);
+    int (*unlink)(struct vnode *dir, const char *name, struct vnode *victim);
+    int (*rename)(struct vnode *odir, const char *oname, struct vnode *ndir, const char *nname,
+                  struct vnode *v, struct vnode *victim);
+    struct file *(*open)(struct vnode *v, int flags);
+    void (*release)(struct vnode *v);
 };
 
-struct filesystem {
-    const char *type;
-    const struct fs_ops *ops;
+struct vnode {
+    struct mount *mnt;
+    uint64_t key;
+    uint64_t ino;
+    uint32_t mode;
+    int32_t refs;
+    uint64_t size;
+    bool hashed;
+    bool unlinked;
+    bool displaced;
+    struct vnode *hnext;
+    struct vnode *dnext;
+    struct mount *covered_by;
+    struct mutex io_lock;
     void *priv;
 };
+
+struct mount {
+    const struct fs_type *type;
+    const char *subtype;
+    void *priv;
+    struct blockdev *dev;
+    struct vnode *root;
+    struct vnode *covered;
+    struct mount *next;
+    uint32_t flags;
+    uint32_t id;
+    uint32_t nvnodes;
+    struct vnode *displaced;
+    char source[VFS_SOURCE_MAX];
+    char point[VFS_PATH_MAX];
+    struct mutex ns_lock;
+};
+
+static inline bool vnode_is_dir(const struct vnode *v)
+{
+    return (v->mode & S_IFMT) == S_IFDIR;
+}
+
+static inline bool vnode_is_reg(const struct vnode *v)
+{
+    return (v->mode & S_IFMT) == S_IFREG;
+}
 
 void vfs_init(void);
 bool vfs_mounted(void);
 const char *vfs_root_type(void);
+const struct fs_type *vfs_find_type(const char *name);
 
-bool vfs_lookup(const char *path, struct vfs_node *out);
-int64_t vfs_read(const struct vfs_node *node, uint64_t offset, void *buf, uint64_t len);
+struct vnode *vnode_new(struct mount *m, uint64_t key, uint32_t mode);
+struct vnode *vcache_find(struct mount *m, uint64_t key);
+uint64_t vcache_ino(struct mount *m, uint64_t key);
+struct vnode *vcache_insert(struct vnode *v);
+void vcache_rekey(struct vnode *v, uint64_t key);
+void vcache_unhash(struct vnode *v);
+void vnode_get(struct vnode *v);
+void vnode_put(struct vnode *v);
+struct vnode *vfs_root(void);
+
+int vfs_walk(struct vnode *start, const char *path, struct vnode **out);
+int vfs_open(struct vnode *start, const char *path, int flags, struct file **out);
+int vfs_mkdir(struct vnode *start, const char *path);
+int vfs_unlink(struct vnode *start, const char *path, bool is_dir);
+int vfs_rename(struct vnode *ostart, const char *opath, struct vnode *nstart, const char *npath);
+
+int64_t vfs_read(struct vnode *v, uint64_t offset, void *buf, uint64_t len);
+int64_t vfs_write(struct vnode *v, uint64_t *offset, const void *buf, uint64_t len, bool append);
+int vfs_truncate(struct vnode *v, uint64_t size);
+int vfs_readdir_vnode(struct vnode *dir, uint64_t *pos, vfs_dir_cb cb, void *ctx);
+int vfs_getpath(struct vnode *v, char *buf, size_t size);
 bool vfs_readdir(const char *path, vfs_dir_cb cb, void *ctx);
+void *vfs_read_vnode(struct vnode *v, uint64_t *size_out);
 void *vfs_read_all(const char *path, uint64_t *size_out);
+bool vfs_is_rdonly(const struct vnode *v);
 
-int64_t vfs_write(struct vfs_node *node, uint64_t offset, const void *buf, uint64_t len);
-bool vfs_create(const char *path, bool is_dir, struct vfs_node *out);
-bool vfs_unlink(const char *path, bool is_dir);
-bool vfs_truncate(struct vfs_node *node, uint64_t size);
-bool vfs_rename(const char *from, const char *to);
+int vfs_mount(const struct fs_type *type, struct blockdev *dev, const char *source,
+              struct vnode *target, const char *point, uint32_t flags);
+int vfs_umount(struct vnode *root);
 bool vfs_sync(void);
 void vfs_flush_init(void);
 bool vfs_mount_extra(void);
 const char *vfs_mnt_device(void);
-bool vfs_writable(void);
+int vfs_mount_kernel(const char *type, struct blockdev *dev, const char *source, const char *point);

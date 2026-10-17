@@ -147,7 +147,10 @@ static inline const char *orion_strerror(int err)
         [ENOSYS] = "Funcao nao implementada", [EIO] = "Erro de entrada/saida",
         [EEXIST] = "Arquivo ja existe", [ENOTEMPTY] = "Diretorio nao vazio",
         [EROFS] = "Sistema de arquivos somente leitura", [EINTR] = "Chamada interrompida",
-        [ENAMETOOLONG] = "Nome muito longo",
+        [ENAMETOOLONG] = "Nome muito longo", [EBUSY] = "Recurso ocupado",
+        [EXDEV] = "Link entre dispositivos diferentes", [ENOTBLK] = "Nao e um dispositivo de bloco",
+        [ENODEV] = "Dispositivo ou tipo de sistema de arquivos desconhecido", [ENOSPC] = "Sem espaco no dispositivo",
+        [EFBIG] = "Arquivo grande demais",
     };
     if (err >= 0 && err < (int)(sizeof(msgs) / sizeof(msgs[0])) && msgs[err])
         return msgs[err];

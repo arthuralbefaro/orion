@@ -127,6 +127,7 @@ void kmain(void)
     vfs_init();
     vfs_flush_init();
     devfs_init();
+    vfs_mount_extra();
     cli();
 
     sti();

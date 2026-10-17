@@ -24,6 +24,7 @@ struct mutex {
 
 void mutex_init(struct mutex *m, const char *name);
 void mutex_init_private(struct mutex *m, const char *name);
+void mutex_deinit(struct mutex *m);
 void mutex_lock(struct mutex *m);
 bool mutex_trylock(struct mutex *m);
 void mutex_unlock(struct mutex *m);

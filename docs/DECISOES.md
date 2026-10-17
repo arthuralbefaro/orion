@@ -1189,3 +1189,166 @@ Uma linha por decisao, na ordem em que foram tomadas.
   quebrado; o `forktest` ganhou um teste do heap do `brk` atraves do `fork`
   (o `malloc` da musl usa `mmap`, e o teste de heap antigo deixou de exercitar
   o `brk`); mudar o `orion.h` recompila os programas que o usam.
+
+## v2.1.0-a1 (VFS com vnodes e montagens)
+
+- O VFS antigo resolvia o caminho inteiro a cada chamada e devolvia uma copia
+  do no (`struct vfs_node`) que cada `struct file` guardava. Dois descritores
+  do mesmo arquivo tinham tamanhos diferentes depois de uma escrita, `/mnt` e
+  `/dev` eram prefixos fixos no codigo e `..` era resolvido como texto. Agora
+  existe um `struct vnode` por arquivo vivo, compartilhado por todos que o
+  usam e contado por referencia (`vnode_get`/`vnode_put`), num cache de 256
+  baldes indexado por (montagem, numero do inode). Um vnode sai do cache e e
+  liberado quando a ultima referencia cai; nao ha lista de vnodes sem uso
+  (isso fica para o cache de paginas da 2.4, que vai precisar segurar paginas
+  de arquivos fechados).
+- Travas: `vfs_lock` (spinlock) protege o cache, as contagens, o ponteiro
+  `covered_by` e a contagem de vnodes por montagem; `mount_lock` (mutex)
+  serializa `mount`, `umount` e `sync`; cada montagem tem `ns_lock` (mutex)
+  que serializa criar, apagar e renomear naquela montagem, de modo que a
+  checagem "o nome existe?" e a mudanca sao uma coisa so. A ordem e
+  `mount_lock` -> `ns_lock` -> trava do sistema de arquivos -> `vfs_lock`, e
+  `p->tlock` -> `vfs_lock`. Consultas de nome nao pegam `ns_lock` (o FAT
+  serializa as proprias). `vnode_put` pode liberar os clusters de um arquivo
+  apagado e por isso nunca e chamado com a trava do FAT nem com spinlock.
+- Montagens: `struct mount` tem a raiz, o vnode coberto e a lista global. O
+  vnode coberto ganha `covered_by`; o caminho e resolvido componente a
+  componente e, depois de cada passo, desce para a raiz da montagem que
+  cobre o vnode. `..` na raiz de uma montagem sobe para o vnode coberto e so
+  entao pergunta ao sistema de arquivos; `..` na raiz global fica nela. O
+  `umount` so acontece se a raiz da montagem tiver exatamente as referencias
+  da propria montagem e de quem pediu, e se nao houver outro vnode vivo da
+  montagem (arquivo aberto, cwd, area de `mmap` ou outra montagem dentro);
+  senao `EBUSY`. Um diretorio aceita uma montagem so (`EBUSY` na segunda),
+  e um disco nao monta duas vezes, nem a particao junto com o disco inteiro.
+- `mount`/`umount2` sao as syscalls 165/166 do Linux; os tipos sao `vfat` e
+  `devfs`. A raiz e montada no boot como antes (a primeira particao FAT), o
+  devfs vai para `/dev` e o segundo disco, se tiver FAT, para `/mnt` (o
+  comando `mount` do shell do kernel continua fazendo isso). `/bin/mount` e
+  `/bin/umount` sao programas novos; `mount` sem argumentos le
+  `/proc/mounts`, que chega na 2.3. `build.ps1` e o `Makefile` criam `dev` e
+  `mnt` na raiz da ESP para servirem de ponto de montagem; se faltar, o
+  kernel cria no boot.
+- O processo guarda o vnode do diretorio atual alem do texto. Caminho
+  relativo comeca nesse vnode, e o `openat` com descritor comeca no vnode do
+  descritor, entao renomear o diretorio atual ou apaga-lo nao confunde mais a
+  resolucao (criar arquivo num cwd apagado da `ENOENT`, como no Linux). O
+  texto do `getcwd` continua sendo o caminho normalizado do `chdir`; sem links
+  simbolicos (2.7) os dois sempre concordam. `fchdir` (81) entrou junto.
+- FAT: o numero do inode de um diretorio e o primeiro cluster (raiz = 1) e o
+  de um arquivo e a posicao da entrada no diretorio pai, porque arquivo vazio
+  nao tem cluster e o primeiro cluster muda num `truncate` para zero seguido
+  de escrita. O `rename` move a entrada e troca a chave do vnode no cache. O
+  `unlink` tira a entrada e marca o vnode como apagado; os clusters so voltam
+  ao FAT quando o ultimo descritor fecha, entao ler e escrever num arquivo
+  apagado e ainda aberto funciona e criar outro com o mesmo nome nao mistura
+  os dois. `rename` agora atravessa diretorios (corrigindo o `..` do
+  diretorio movido e recusando mover um diretorio para dentro dele mesmo) e
+  substitui o destino existente; no FAT isso e apagar o destino e depois
+  renomear, sem ser atomico. Escrever depois do fim e `ftruncate` para cima
+  preenchem o intervalo com zeros (antes sobrava lixo do fim do ultimo
+  cluster). Todas as operacoes do FAT pegam a trava do FAT do comeco ao fim;
+  antes o `create` consultava o nome e escrevia a entrada em dois passos.
+- Corrigido na mudanca: escrever num arquivo vazio a partir de um deslocamento
+  maior que um cluster gravava o cluster errado como o primeiro da cadeia.
+- `pread64`/`pwrite64` (17/18) e `truncate` (76) entraram; o `vfstest` usa os
+  dois primeiros e eles faltavam.
+- `st_dev` passou a ser o numero da montagem (raiz 1, `/dev` 2...) e `st_ino`
+  e o numero do vnode, o mesmo que o `getdents64` devolve.
+- Teste: `vfstest` (montagens e `..`, devfs montado num diretorio,
+  `EBUSY`, vnode compartilhado, arquivo apagado e aberto, `rename` em todas as
+  formas, cwd apagado, buracos e `truncate`, erros de caminho). Na sequencia
+  A roda com `-n` (sem escrever na raiz: o vvfat do QEMU as vezes deixa no
+  hospedeiro o que o Orion apagou); na C roda inteiro em `/mnt`, seguido de
+  `umount` ocupado, `mount -r` com `EROFS` e remontagem.
+- Revisao adversarial antes do commit (4 revisores, cada achado conferido por
+  outro), corrigido:
+  - `..` a partir de um diretorio apagado lia a entrada `..` dos clusters
+    ainda vivos do apagado e recriava um vnode para o pai, cujos clusters ja
+    podiam ter sido liberados: criar arquivo ali escrevia em cluster livre.
+    Agora `..` num diretorio apagado da `ENOENT`.
+  - `rename` por cima de um destino apagava o destino antes de saber se o
+    nome novo era valido e se havia espaco; uma falha perdia o arquivo. O
+    `rename` do sistema de arquivos recebe o destino e faz tudo sob a trava
+    do FAT: grava a entrada nova, so entao tira a do destino e a da origem.
+  - `O_APPEND` lia o tamanho fora da trava do FAT, e dois processos
+    escrevendo no fim do mesmo arquivo se sobrescreviam. A escrita recebe a
+    flag e o deslocamento e decide o fim do arquivo dentro da trava.
+  - O `mutex` de cada montagem entrava no registro global de mutexes e nao
+    saia no `umount`: o registro apontava para memoria liberada (a regressao
+    viu a tabela do comando `mutex` corrompida).
+  - Volumes FAT forjados: setor diferente do dispositivo, tabela FAT menor
+    que o numero de clusters ou volume maior que o disco agora sao recusados
+    (antes liam e escreviam fora do buffer da FAT no heap).
+  - `rename` so de maiusculas e minusculas devolvia sucesso sem fazer nada
+    (a busca do FAT nao diferencia).
+  - A posicao do `getdents64` era a contagem de entradas vivas; apagar
+    durante a leitura do diretorio pulava entradas (`rm -r` em diretorio
+    grande deixava arquivos). Agora a posicao e um cookie do sistema de
+    arquivos (no FAT, o deslocamento da proxima entrada), devolvido em `d_off`,
+    e o `getdents64` enche o buffer numa passada so.
+  - Depois de renomear o diretorio atual, o texto do `getcwd` ficava velho. O
+    `getcwd` confere se o texto ainda leva ao vnode do cwd e, se nao, refaz o
+    caminho subindo por `..` e procurando o nome pelo inode (`vfs_getpath`);
+    cwd apagado da `ENOENT`, como no Linux.
+  - Menores: preencher um buraco grande andava a cadeia de clusters desde o
+    comeco para cada cluster; diretorios FAT limitados a 65536 entradas (as
+    chaves de arquivo dependem disso); caminho relativo longo demais era
+    truncado em vez de dar `ENAMETOOLONG`; `errno` de `O_CREAT` em
+    diretorio, `unlink(".")`, `rename` com `..`, `access(W_OK)` em diretorio
+    de montagem so leitura e `execve("")`.
+- Segunda rodada de revisao (sobre as correcoes da primeira), corrigido:
+  a checagem de "diretorio apagado" no `..` era feita antes de pegar a trava
+  do FAT e ainda deixava a corrida aberta entre duas CPUs (agora e conferida
+  dentro da trava, para qualquer nome); o `getcwd` que refazia o texto podia
+  desfazer um `chdir` feito ao mesmo tempo por outra thread (agora so troca o
+  texto se o vnode do cwd for o mesmo); as protecoes contra laco do
+  `rename` e do `getcwd` aceitavam o resultado quando o limite estourava;
+  uma falha de disco no meio do `rename` por cima ainda podia perder o
+  destino (a ordem virou: entrada nova, tira a origem, tira o destino, e a
+  origem volta se a ultima etapa falhar); `fchdir` para um diretorio ja
+  apagado falhava (o Linux aceita; o `getcwd` e que da `ENOENT`); `read` e
+  `write` em arquivo regular ignoravam o modo de abertura (agora `EBADF`);
+  `O_APPEND` era atomico so por pedaco interno de 64 KiB (agora uma trava por
+  vnode segura o `write`/`writev` inteiro); o `st_ino` de arquivo FAT mudava
+  no `rename`. O vnode passou a ter `key` (a chave do cache, que no FAT e a
+  posicao da entrada) separada de `ino` (o que o `stat` mostra, fixo enquanto
+  o vnode vive); um vnode renomeado ou apagado e aberto entra na lista de
+  "deslocados" da montagem, e um vnode novo cuja chave coincida com o `ino`
+  de um deslocado recebe um numero novo. O `d_ino` do `getdents64` usa o
+  `ino` do vnode vivo; sem vnode vivo, e a chave (pode divergir do `stat` so
+  nesse caso raro, de nome novo no lugar de um arquivo renomeado e aberto).
+  O `mkfs` do Orion podia gerar uma FAT um setor menor que o necessario, que a
+  checagem nova do `fat_mount` recusaria.
+- Observado e deixado para o escalonador: o `mutex` nao e justo (quem solta
+  pode pegar de novo antes de o acordado rodar), e sem IPI para acordar CPU
+  ociosa o acordado demora; numa sequencia de escritas pequenas o `bdflush`
+  chegou a esperar 10 s pela trava do FAT (so atrasa o descarregamento).
+  Passar a trava direto para quem espera resolveria a fome, mas cada troca
+  passaria a custar a latencia de acordar a outra CPU; fica para quando
+  houver IPI de acordar.
+- Tambem observado: na partida do estresse (64 filhos fazendo `exec` de
+  `/bin/true` ao mesmo tempo) processos esperam mais de 5 s pela trava do FAT
+  da raiz, porque cada `exec` le o ELF inteiro com a trava pega e o TCG do
+  QEMU e lento. O padrao de trava e o mesmo de antes da 2.1; o cache de
+  paginas da 2.4 tira a leitura de dentro da trava.
+- Terceira rodada (sobre as correcoes da segunda), corrigido: o `ino`
+  alternativo de um vnode cuja chave coincide com a de um deslocado vinha de
+  um contador e mudava a cada `stat`; agora e uma funcao da chave (mistura de
+  bits com o bit 63 ligado), a mesma que o `getdents64` usa quando nao ha vnode
+  vivo; o vnode sai da lista de deslocados antes de liberar os clusters (senao
+  um `mkdir` na janela pegava o cluster e um `ino` que o `readdir` nao
+  mostrava); `chdir` e `execve` relativos nao falham mais so porque o texto do
+  cwd nao coube; no `rename`, a origem e salva inteira (entrada curta e as de
+  nome longo) e volta inteira se uma etapa falhar, e o `..` do diretorio
+  movido e gravado antes e desfeito na falha; `dir_add_entry` nao descarrega
+  mais a FAT (uma falha ali dizia "nao gravou" com a entrada ja no disco).
+- Quarta rodada: a volta atras do `rename` podia gravar lixo da pilha no `..`
+  de um diretorio movido quando a falha vinha antes de o `..` ser trocado
+  (agora so desfaz o que foi feito); e `rename` por cima de um arquivo numa
+  raiz FAT12/16 cheia dava `ENOSPC`, porque a entrada nova era criada antes
+  de sair a antiga. Agora, sem espaco, o destino (ou a propria origem, no
+  `rename` so de maiusculas) sai primeiro, com as entradas salvas para voltar
+  se algo falhar. A rodada nao achou outros problemas novos; a lista de
+  deslocados percorrida com a trava global foi considerada aceitavel (so
+  cresce com arquivos apagados ou renomeados e ainda abertos).

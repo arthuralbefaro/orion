@@ -10,7 +10,6 @@ struct file_ops {
     int64_t (*read)(struct file *f, void *buf, uint64_t len);
     int64_t (*write)(struct file *f, const void *buf, uint64_t len);
     void    (*close)(struct file *f);
-    int     (*readdir)(struct file *f, uint64_t index, struct vfs_node *out);
     long    (*ioctl)(struct file *f, uint64_t request, uint64_t arg);
     int64_t (*mmap)(struct file *f, uint64_t addr, uint64_t len, int prot, uint64_t offset);
     short   (*poll)(struct file *f, struct poll_table *pt);
@@ -23,8 +22,7 @@ struct file {
     int32_t refcount;
     uint32_t mode;
     uint32_t flags;
-    struct vfs_node node;
-    bool has_node;
+    struct vnode *vn;
     char *path;
 };
 
@@ -35,12 +33,11 @@ void file_unref(struct file *f);
 bool file_is_tty(const struct file *f);
 bool file_is_regular(const struct file *f);
 struct file *file_open_tty(void);
-struct file *file_open_path(const char *path, int flags);
+struct file *file_from_vnode(struct vnode *v, int flags);
 bool file_make_pipe(struct file **reader, struct file **writer);
 
 int64_t file_read(struct file *f, void *buf, uint64_t len);
 int64_t file_write(struct file *f, const void *buf, uint64_t len);
-int     file_readdir(struct file *f, uint64_t index, struct vfs_node *out);
 long    file_ioctl(struct file *f, uint64_t request, uint64_t arg);
 int64_t file_mmap(struct file *f, uint64_t addr, uint64_t len, int prot, uint64_t offset);
 short   file_poll(struct file *f, struct poll_table *pt);

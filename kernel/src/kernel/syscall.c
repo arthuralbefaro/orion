@@ -33,31 +33,47 @@ extern void syscall_entry(void);
 #define EXEC_MAX_ARGS 256
 #define EXEC_ARG_MAX  4096
 
-static long resolve_at(int dirfd, const char *upath, char *full, size_t size)
+struct upath {
+    char path[USER_PATH_MAX];
+    char full[PROCESS_CWD_MAX];
+    bool full_ok;
+    struct vnode *start;
+};
+
+static long upath_get(int dirfd, const char *upath, struct upath *up)
 {
-    char kpath[USER_PATH_MAX];
-    long r = strncpy_from_user(kpath, upath, sizeof(kpath));
+    up->start = NULL;
+    up->full_ok = false;
+    long r = strncpy_from_user(up->path, upath, sizeof(up->path));
     if (r < 0)
         return r;
+    if (!up->path[0])
+        return -ENOENT;
     struct process *p = process_current();
-    if (kpath[0] == '/' || dirfd == AT_FDCWD) {
-        if (!kpath[0])
-            return -ENOENT;
-        return process_resolve_path(p, kpath, full, size) ? 0 : -ENAMETOOLONG;
+    if (up->path[0] == '/' || dirfd == AT_FDCWD) {
+        up->full_ok = process_resolve_path(p, up->path, up->full, sizeof(up->full));
+        up->start = up->path[0] == '/' ? vfs_root() : process_cwd_vnode(p);
+    } else {
+        struct file *dir = process_fd_pin(dirfd);
+        if (!dir)
+            return -EBADF;
+        if (!dir->vn || !vnode_is_dir(dir->vn))
+            return -ENOTDIR;
+        if (dir->path) {
+            char joined[USER_PATH_MAX + PROCESS_CWD_MAX + 2];
+            ksnprintf(joined, sizeof(joined), "%s/%s", dir->path, up->path);
+            up->full_ok = process_resolve_path(p, joined, up->full, sizeof(up->full));
+        }
+        vnode_get(dir->vn);
+        up->start = dir->vn;
     }
-    struct file *dir = process_fd_pin(dirfd);
-    if (!dir)
-        return -EBADF;
-    if (!dir->path || !dir->has_node || !dir->node.is_dir)
-        return -ENOTDIR;
-    char joined[USER_PATH_MAX + PROCESS_CWD_MAX + 2];
-    ksnprintf(joined, sizeof(joined), "%s/%s", dir->path, kpath);
-    return process_resolve_path(p, joined, full, size) ? 0 : -ENAMETOOLONG;
+    return up->start ? 0 : -ENOENT;
 }
 
-static long resolve_user(const char *upath, char *full, size_t size)
+static void upath_put(struct upath *up)
 {
-    return resolve_at(AT_FDCWD, upath, full, size);
+    vnode_put(up->start);
+    up->start = NULL;
 }
 
 static char *kstrdup(const char *s)
@@ -69,26 +85,13 @@ static char *kstrdup(const char *s)
     return d;
 }
 
-static bool path_lookup(const char *full, struct vfs_node *n, uint32_t *mode)
+static long walk_user(int dirfd, const char *upath, struct vnode **out, struct upath *up)
 {
-    if (devfs_owns(full)) {
-        uint32_t m = devfs_mode(full);
-        if (!m)
-            return false;
-        if (n) {
-            memset(n, 0, sizeof(*n));
-            n->is_dir = (m & S_IFMT) == S_IFDIR;
-        }
-        if (mode)
-            *mode = m;
-        return true;
-    }
-    struct vfs_node tmp;
-    if (!vfs_lookup(full, n ? n : &tmp))
-        return false;
-    if (mode)
-        *mode = 0;
-    return true;
+    long r = upath_get(dirfd, upath, up);
+    if (r == 0)
+        r = vfs_walk(up->start, up->path, out);
+    upath_put(up);
+    return r;
 }
 
 static long sys_sysinfo(struct user_sysinfo *uout)
@@ -164,11 +167,103 @@ static long sys_read(int fd, void *ubuf, size_t len)
     return total;
 }
 
-static long sys_write(int fd, const void *ubuf, size_t len)
+static long positional_file(int fd, int64_t off, bool writing, struct file **out)
 {
     struct file *f = process_fd_pin(fd);
     if (!f)
         return -EBADF;
+    if (off < 0)
+        return -EINVAL;
+    if (!f->vn || !file_is_regular(f))
+        return -ESPIPE;
+    if (vnode_is_dir(f->vn))
+        return -EISDIR;
+    uint32_t acc = f->flags & O_ACCMODE;
+    if (writing ? acc == O_RDONLY : acc == O_WRONLY)
+        return -EBADF;
+    *out = f;
+    return 0;
+}
+
+static long sys_pread64(int fd, void *ubuf, size_t len, int64_t off)
+{
+    struct file *f;
+    long r = positional_file(fd, off, false, &f);
+    if (r < 0)
+        return r;
+    if (!user_range_ok((uint64_t)ubuf, len))
+        return -EFAULT;
+    struct kbuf kb;
+    uint8_t *k = kbuf_get(&kb, len ? len : 1);
+    long total = 0;
+    while ((size_t)total < len) {
+        size_t want = len - (size_t)total;
+        if (want > kb.size)
+            want = kb.size;
+        int64_t n = vfs_read(f->vn, (uint64_t)off + (uint64_t)total, k, want);
+        if (n < 0) {
+            if (!total)
+                total = n;
+            break;
+        }
+        if (n > 0 && copy_to_user((uint8_t *)ubuf + total, k, (size_t)n) < 0) {
+            if (!total)
+                total = -EFAULT;
+            break;
+        }
+        total += n;
+        if ((size_t)n < want)
+            break;
+    }
+    kbuf_put(&kb);
+    return total;
+}
+
+static long sys_pwrite64(int fd, const void *ubuf, size_t len, int64_t off)
+{
+    struct file *f;
+    long r = positional_file(fd, off, true, &f);
+    if (r < 0)
+        return r;
+    if (!user_range_ok((uint64_t)ubuf, len))
+        return -EFAULT;
+    struct kbuf kb;
+    uint8_t *k = kbuf_get(&kb, len ? len : 1);
+    long total = 0;
+    while ((size_t)total < len) {
+        size_t want = len - (size_t)total;
+        if (want > kb.size)
+            want = kb.size;
+        if (copy_from_user(k, (const uint8_t *)ubuf + total, want) < 0) {
+            if (!total)
+                total = -EFAULT;
+            break;
+        }
+        uint64_t at = (uint64_t)off + (uint64_t)total;
+        int64_t n = vfs_write(f->vn, &at, k, want, false);
+        if (n < 0) {
+            if (!total)
+                total = n;
+            break;
+        }
+        total += n;
+        if ((size_t)n < want)
+            break;
+    }
+    kbuf_put(&kb);
+    return total;
+}
+
+static bool append_lock(struct file *f)
+{
+    if (!f->vn || !file_is_regular(f) || !(f->flags & O_APPEND))
+        return false;
+    mutex_lock(&f->vn->io_lock);
+    return true;
+}
+
+static long write_file(struct file *f, const void *ubuf, size_t len)
+{
     if (!user_range_ok((uint64_t)ubuf, len))
         return -EFAULT;
     if (len == 0)
@@ -200,30 +295,31 @@ static long sys_write(int fd, const void *ubuf, size_t len)
     return total;
 }
 
+static long sys_write(int fd, const void *ubuf, size_t len)
+{
+    struct file *f = process_fd_pin(fd);
+    if (!f)
+        return -EBADF;
+    bool locked = append_lock(f);
+    long r = write_file(f, ubuf, len);
+    if (locked)
+        mutex_unlock(&f->vn->io_lock);
+    return r;
+}
+
 static long sys_openat(int dirfd, const char *upath, int flags)
 {
-    char full[PROCESS_CWD_MAX];
-    long r = resolve_at(dirfd, upath, full, sizeof(full));
+    struct upath up;
+    long r = upath_get(dirfd, upath, &up);
+    struct file *f = NULL;
+    if (r == 0)
+        r = vfs_open(up.start, up.path, flags, &f);
+    upath_put(&up);
     if (r < 0)
         return r;
-    struct vfs_node n;
-    uint32_t mode = 0;
-    bool exists = path_lookup(full, &n, &mode);
-    if (exists && (flags & O_CREAT) && (flags & O_EXCL))
-        return -EEXIST;
-    if (!exists && !(flags & O_CREAT))
-        return -ENOENT;
-    if (exists && (flags & O_DIRECTORY) && !n.is_dir)
-        return -ENOTDIR;
-    if (exists && n.is_dir && (flags & O_ACCMODE) != O_RDONLY)
-        return -EISDIR;
-    if (!exists && !vfs_writable())
-        return -EROFS;
-    struct file *f = file_open_path(full, flags);
-    if (!f)
-        return exists ? -EIO : -ENOENT;
     f->flags = (uint32_t)flags & ~(uint32_t)(O_CREAT | O_EXCL | O_TRUNC | O_CLOEXEC);
-    f->path = kstrdup(full);
+    if (up.full_ok)
+        f->path = kstrdup(up.full);
     int fd = process_fd_alloc(process_current(), f, 0, (flags & O_CLOEXEC) != 0);
     if (fd < 0)
         file_unref(f);
@@ -237,16 +333,12 @@ static long sys_open(const char *upath, int flags)
 
 static long sys_mkdirat(int dirfd, const char *upath)
 {
-    char full[PROCESS_CWD_MAX];
-    long r = resolve_at(dirfd, upath, full, sizeof(full));
-    if (r < 0)
-        return r;
-    struct vfs_node n;
-    if (vfs_lookup(full, &n))
-        return -EEXIST;
-    if (!vfs_writable())
-        return -EROFS;
-    return vfs_create(full, true, NULL) ? 0 : -EIO;
+    struct upath up;
+    long r = upath_get(dirfd, upath, &up);
+    if (r == 0)
+        r = vfs_mkdir(up.start, up.path);
+    upath_put(&up);
+    return r;
 }
 
 static long sys_mkdir(const char *upath)
@@ -256,18 +348,12 @@ static long sys_mkdir(const char *upath)
 
 static long sys_unlinkat(int dirfd, const char *upath, bool is_dir)
 {
-    char full[PROCESS_CWD_MAX];
-    long r = resolve_at(dirfd, upath, full, sizeof(full));
-    if (r < 0)
-        return r;
-    struct vfs_node n;
-    if (!vfs_lookup(full, &n))
-        return -ENOENT;
-    if (n.is_dir != is_dir)
-        return is_dir ? -ENOTDIR : -EISDIR;
-    if (!vfs_writable())
-        return -EROFS;
-    return vfs_unlink(full, is_dir) ? 0 : (is_dir ? -ENOTEMPTY : -EIO);
+    struct upath up;
+    long r = upath_get(dirfd, upath, &up);
+    if (r == 0)
+        r = vfs_unlink(up.start, up.path, is_dir);
+    upath_put(&up);
+    return r;
 }
 
 static long sys_unlink(const char *upath, bool is_dir)
@@ -277,16 +363,20 @@ static long sys_unlink(const char *upath, bool is_dir)
 
 static long sys_renameat(int olddir, const char *ufrom, int newdir, const char *uto)
 {
-    char a[PROCESS_CWD_MAX], b[PROCESS_CWD_MAX];
-    long r = resolve_at(olddir, ufrom, a, sizeof(a));
-    if (r < 0)
-        return r;
-    r = resolve_at(newdir, uto, b, sizeof(b));
-    if (r < 0)
-        return r;
-    if (!vfs_writable())
-        return -EROFS;
-    return vfs_rename(a, b) ? 0 : -EIO;
+    struct upath *a = kmalloc(sizeof(*a) * 2);
+    if (!a)
+        return -ENOMEM;
+    struct upath *b = a + 1;
+    b->start = NULL;
+    long r = upath_get(olddir, ufrom, a);
+    if (r == 0)
+        r = upath_get(newdir, uto, b);
+    if (r == 0)
+        r = vfs_rename(a->start, a->path, b->start, b->path);
+    upath_put(a);
+    upath_put(b);
+    kfree(a);
+    return r;
 }
 
 static long sys_rename(const char *ufrom, const char *uto)
@@ -299,9 +389,25 @@ static long sys_ftruncate(int fd, uint64_t size)
     struct file *f = process_fd_pin(fd);
     if (!f)
         return -EBADF;
-    if (!f->has_node)
+    if ((int64_t)size < 0)
         return -EINVAL;
-    return vfs_truncate(&f->node, size) ? 0 : -EIO;
+    if (!f->vn || !vnode_is_reg(f->vn) || (f->flags & O_ACCMODE) == O_RDONLY)
+        return -EINVAL;
+    return vfs_truncate(f->vn, size);
+}
+
+static long sys_truncate(const char *upath, uint64_t size)
+{
+    if ((int64_t)size < 0)
+        return -EINVAL;
+    struct upath up;
+    struct vnode *v;
+    long r = walk_user(AT_FDCWD, upath, &v, &up);
+    if (r < 0)
+        return r;
+    r = vfs_truncate(v, size);
+    vnode_put(v);
+    return r;
 }
 
 static long sys_close(int fd)
@@ -527,16 +633,19 @@ static long sys_rt_sigprocmask(int how, const uint64_t *uset, uint64_t *uold, ui
     return r;
 }
 
-static void fill_stat(const struct vfs_node *n, uint32_t mode, struct user_stat *st)
+static void fill_stat(const struct vnode *v, uint32_t mode, struct user_stat *st)
 {
     memset(st, 0, sizeof(*st));
-    st->st_size = n ? (int64_t)n->size : 0;
-    if (!mode)
-        mode = (n && n->is_dir) ? (S_IFDIR | 0755) : (S_IFREG | 0644);
-    st->st_mode = mode;
-    st->st_nlink = 1;
-    st->st_ino = n ? n->ino : 0;
-    st->st_dev = 1;
+    if (v) {
+        st->st_size = (int64_t)v->size;
+        st->st_mode = v->mode;
+        st->st_ino = v->ino;
+        st->st_dev = v->mnt->id;
+        st->st_nlink = vnode_is_dir(v) ? 2 : 1;
+    } else {
+        st->st_mode = mode ? mode : S_IFIFO | 0600;
+        st->st_nlink = 1;
+    }
     st->st_blksize = 4096;
     st->st_blocks = (st->st_size + 511) / 512;
     int64_t t = (int64_t)rtc_boot_epoch();
@@ -556,9 +665,7 @@ static long sys_fstat(int fd, struct user_stat *ust)
     if (!f)
         return -EBADF;
     struct user_stat st;
-    fill_stat(f->has_node ? &f->node : NULL, f->mode, &st);
-    if (!f->has_node && !f->mode)
-        st.st_mode = S_IFIFO | 0600;
+    fill_stat(f->vn, f->mode, &st);
     return copy_to_user(ust, &st, sizeof(st));
 }
 
@@ -569,18 +676,16 @@ static long sys_newfstatat(int dirfd, const char *upath, struct user_stat *ust, 
         if (copy_from_user(&c, upath, 1) == 0 && c == 0)
             return sys_fstat(dirfd, ust);
     }
-    char full[PROCESS_CWD_MAX];
-    long r = resolve_at(dirfd, upath, full, sizeof(full));
-    if (r < 0)
-        return r;
     if (!user_range_ok((uint64_t)ust, sizeof(*ust)))
         return -EFAULT;
-    struct vfs_node n;
-    uint32_t mode;
-    if (!path_lookup(full, &n, &mode))
-        return -ENOENT;
+    struct upath up;
+    struct vnode *v;
+    long r = walk_user(dirfd, upath, &v, &up);
+    if (r < 0)
+        return r;
     struct user_stat st;
-    fill_stat(&n, mode, &st);
+    fill_stat(v, 0, &st);
+    vnode_put(v);
     return copy_to_user(ust, &st, sizeof(st));
 }
 
@@ -588,11 +693,15 @@ static long sys_faccessat(int dirfd, const char *upath, int mode)
 {
     if (mode & ~7)
         return -EINVAL;
-    char full[PROCESS_CWD_MAX];
-    long r = resolve_at(dirfd, upath, full, sizeof(full));
+    struct upath up;
+    struct vnode *v;
+    long r = walk_user(dirfd, upath, &v, &up);
     if (r < 0)
         return r;
-    return path_lookup(full, NULL, NULL) ? 0 : -ENOENT;
+    if ((mode & 2) && (vnode_is_reg(v) || vnode_is_dir(v)) && vfs_is_rdonly(v))
+        r = -EROFS;
+    vnode_put(v);
+    return r;
 }
 
 static long sys_faccessat2(int dirfd, const char *upath, int mode, int flags)
@@ -618,20 +727,50 @@ static long sys_readlinkat(int dirfd, const char *upath, char *ubuf, uint64_t si
 {
     (void)ubuf;
     (void)size;
-    char full[PROCESS_CWD_MAX];
-    long r = resolve_at(dirfd, upath, full, sizeof(full));
+    struct upath up;
+    struct vnode *v;
+    long r = walk_user(dirfd, upath, &v, &up);
     if (r < 0)
         return r;
-    return path_lookup(full, NULL, NULL) ? -EINVAL : -ENOENT;
+    vnode_put(v);
+    return -EINVAL;
 }
 
-static uint8_t dirent_type(const struct vfs_node *n, bool in_dev)
+static uint8_t dirent_type(uint32_t mode)
 {
-    if (n->is_dir)
-        return DT_DIR;
-    if (!in_dev)
-        return DT_REG;
-    return n->ino >= 100 ? DT_BLK : DT_CHR;
+    switch (mode & S_IFMT) {
+    case S_IFDIR: return DT_DIR;
+    case S_IFCHR: return DT_CHR;
+    case S_IFBLK: return DT_BLK;
+    default:      return DT_REG;
+    }
+}
+
+struct dents_ctx {
+    uint8_t *buf;
+    uint64_t cap;
+    uint64_t used;
+    bool full;
+};
+
+static bool dents_cb(const struct vfs_dirent *e, void *ctx)
+{
+    struct dents_ctx *c = ctx;
+    size_t namelen = strlen(e->name);
+    uint16_t reclen = (uint16_t)ALIGN_UP(sizeof(struct linux_dirent64) + namelen + 1, 8);
+    if (c->used + reclen > c->cap) {
+        c->full = true;
+        return false;
+    }
+    struct linux_dirent64 *d = (struct linux_dirent64 *)(c->buf + c->used);
+    memset(d, 0, reclen);
+    d->d_ino = e->ino ? e->ino : 1;
+    d->d_off = (int64_t)e->next;
+    d->d_reclen = reclen;
+    d->d_type = dirent_type(e->mode);
+    memcpy(d->d_name, e->name, namelen + 1);
+    c->used += reclen;
+    return true;
 }
 
 static long sys_getdents64(int fd, void *ubuf, uint64_t count)
@@ -639,40 +778,27 @@ static long sys_getdents64(int fd, void *ubuf, uint64_t count)
     struct file *f = process_fd_pin(fd);
     if (!f)
         return -EBADF;
-    if (!f->has_node || !f->node.is_dir)
+    if (!f->vn || !vnode_is_dir(f->vn))
         return -ENOTDIR;
     if (!user_range_ok((uint64_t)ubuf, count))
         return -EFAULT;
-    bool in_dev = f->path && devfs_owns(f->path);
-    uint8_t rec[sizeof(struct linux_dirent64) + VFS_NAME_MAX + 8];
-    uint64_t used = 0;
-    for (;;) {
-        struct vfs_node n;
-        int r = file_readdir(f, f->offset, &n);
-        if (r < 0)
-            return used ? (long)used : r;
-        if (r == 0)
-            break;
-        size_t namelen = strlen(n.name);
-        uint16_t reclen = (uint16_t)ALIGN_UP(sizeof(struct linux_dirent64) + namelen + 1, 8);
-        if (used + reclen > count) {
-            if (!used)
-                return -EINVAL;
-            break;
-        }
-        memset(rec, 0, reclen);
-        struct linux_dirent64 *d = (struct linux_dirent64 *)rec;
-        d->d_ino = n.ino ? n.ino : f->offset + 1;
-        d->d_off = (int64_t)(f->offset + 1);
-        d->d_reclen = reclen;
-        d->d_type = dirent_type(&n, in_dev);
-        memcpy(d->d_name, n.name, namelen + 1);
-        if (copy_to_user((uint8_t *)ubuf + used, rec, reclen) < 0)
-            return used ? (long)used : -EFAULT;
-        used += reclen;
-        f->offset++;
-    }
-    return (long)used;
+    struct dents_ctx c = { .cap = count < 32768 ? count : 32768 };
+    c.buf = kmalloc(c.cap ? c.cap : 1);
+    if (!c.buf)
+        return -ENOMEM;
+    uint64_t pos = f->offset;
+    int r = vfs_readdir_vnode(f->vn, &pos, dents_cb, &c);
+    long ret = (long)c.used;
+    if (!c.used && r < 0)
+        ret = r;
+    else if (!c.used && c.full)
+        ret = -EINVAL;
+    if (ret > 0 && copy_to_user(ubuf, c.buf, c.used) < 0)
+        ret = -EFAULT;
+    if (ret >= 0)
+        f->offset = pos;
+    kfree(c.buf);
+    return ret;
 }
 
 static long sys_lseek(int fd, int64_t off, int whence)
@@ -680,13 +806,13 @@ static long sys_lseek(int fd, int64_t off, int whence)
     struct file *f = process_fd_pin(fd);
     if (!f)
         return -EBADF;
-    if (!f->has_node)
+    if (!f->vn)
         return -ESPIPE;
     int64_t base;
     switch (whence) {
     case SEEK_SET: base = 0; break;
     case SEEK_CUR: base = (int64_t)f->offset; break;
-    case SEEK_END: base = (int64_t)f->node.size; break;
+    case SEEK_END: base = (int64_t)f->vn->size; break;
     default: return -EINVAL;
     }
     if (base + off < 0)
@@ -728,7 +854,7 @@ static long do_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, ui
         if (!f)
             return -EBADF;
         if (!f->ops->mmap) {
-            if (!file_is_regular(f) || f->node.is_dir)
+            if (!file_is_regular(f) || vnode_is_dir(f->vn))
                 return -ENODEV;
             if (type == MAP_SHARED && (prot & PROT_WRITE))
                 return -ENODEV;
@@ -764,7 +890,7 @@ static long do_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, ui
             return -ENOMEM;
         return (long)base;
     }
-    if (!vma_add(p, base, base + len, vflags, f, off, f ? f->node.size : 0))
+    if (!vma_add(p, base, base + len, vflags, f, off, f ? f->vn->size : 0))
         return -ENOMEM;
     if (!f && (vflags & VMA_SHARED)) {
         uint64_t pte_flags = vma_pte_flags(vflags);
@@ -886,6 +1012,25 @@ static long sys_getcwd(char *ubuf, size_t size)
         return -EFAULT;
     char cwd[PROCESS_CWD_MAX];
     process_get_cwd(p, cwd, sizeof(cwd));
+    struct vnode *cv = process_cwd_vnode(p);
+    if (!cv)
+        return -ENOENT;
+    if (cv->unlinked) {
+        vnode_put(cv);
+        return -ENOENT;
+    }
+    struct vnode *w = NULL;
+    bool fresh = vfs_walk(NULL, cwd, &w) == 0 && w == cv;
+    vnode_put(w);
+    if (!fresh) {
+        long e = vfs_getpath(cv, cwd, sizeof(cwd));
+        if (e < 0) {
+            vnode_put(cv);
+            return e;
+        }
+        process_update_cwd_path(p, cv, cwd);
+    }
+    vnode_put(cv);
     size_t n = strlen(cwd) + 1;
     if (n > size)
         return -ERANGE;
@@ -896,17 +1041,118 @@ static long sys_getcwd(char *ubuf, size_t size)
 static long sys_chdir(const char *upath)
 {
     struct process *p = process_current();
-    char full[PROCESS_CWD_MAX];
-    long r = resolve_user(upath, full, sizeof(full));
+    struct upath up;
+    long r = upath_get(AT_FDCWD, upath, &up);
+    struct vnode *v = NULL;
+    if (r == 0)
+        r = vfs_walk(up.start, up.path, &v);
+    upath_put(&up);
     if (r < 0)
         return r;
-    struct vfs_node n;
-    if (!vfs_lookup(full, &n))
-        return -ENOENT;
-    if (!n.is_dir)
+    if (!vnode_is_dir(v)) {
+        vnode_put(v);
         return -ENOTDIR;
-    process_set_cwd(p, full);
+    }
+    if (!up.full_ok && vfs_getpath(v, up.full, sizeof(up.full)) < 0)
+        up.full[0] = '\0';
+    process_set_cwd(p, up.full, v);
     return 0;
+}
+
+static long sys_fchdir(int fd)
+{
+    struct file *f = process_fd_pin(fd);
+    if (!f)
+        return -EBADF;
+    if (!f->vn || !vnode_is_dir(f->vn))
+        return -ENOTDIR;
+    char path[PROCESS_CWD_MAX];
+    if (vfs_getpath(f->vn, path, sizeof(path)) < 0)
+        path[0] = '\0';
+    vnode_get(f->vn);
+    process_set_cwd(process_current(), path, f->vn);
+    return 0;
+}
+
+static long copy_type(char *out, size_t size, const char *utype)
+{
+    long r = strncpy_from_user(out, utype, size);
+    if (r < 0)
+        return r;
+    return strlen(out) >= size - 1 ? -ENODEV : 0;
+}
+
+static long sys_mount(const char *usource, const char *utarget, const char *utype, uint64_t flags,
+                      const void *data)
+{
+    (void)data;
+    if ((flags & MS_MGC_MSK) == MS_MGC_VAL)
+        flags &= ~(uint64_t)MS_MGC_MSK;
+    uint64_t known = MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_SYNCHRONOUS | MS_SILENT |
+                     MS_NOATIME | MS_NODIRATIME | MS_RELATIME;
+    if (flags & ~known)
+        return -EINVAL;
+    char type[16];
+    if (!utype)
+        return -EINVAL;
+    long r = copy_type(type, sizeof(type), utype);
+    if (r < 0)
+        return r;
+    const struct fs_type *t = vfs_find_type(type);
+    if (!t)
+        return -ENODEV;
+
+    struct upath *up = kmalloc(sizeof(*up));
+    if (!up)
+        return -ENOMEM;
+    struct blockdev *dev = NULL;
+    char source[VFS_SOURCE_MAX];
+    strlcpy(source, t->name, sizeof(source));
+    if (t->needs_dev) {
+        struct vnode *sv;
+        r = usource ? walk_user(AT_FDCWD, usource, &sv, up) : -EFAULT;
+        if (r == 0) {
+            dev = devfs_vnode_blockdev(sv);
+            vnode_put(sv);
+            if (!dev)
+                r = -ENOTBLK;
+            else if (up->full_ok)
+                strlcpy(source, up->full, sizeof(source));
+        }
+    } else if (usource) {
+        char tmp[VFS_SOURCE_MAX];
+        if (strncpy_from_user(tmp, usource, sizeof(tmp)) >= 0 && tmp[0])
+            strlcpy(source, tmp, sizeof(source));
+    }
+    struct vnode *target = NULL;
+    if (r == 0)
+        r = walk_user(AT_FDCWD, utarget, &target, up);
+    if (r == 0 && !up->full_ok)
+        r = -ENAMETOOLONG;
+    if (r == 0) {
+        r = vfs_mount(t, dev, source, target, up->full, (flags & MS_RDONLY) ? MNT_RDONLY : 0);
+        if (r == 0)
+            log_info("vfs", "%s montado em %s (%s%s)", source, up->full, t->name,
+                     (flags & MS_RDONLY) ? ", somente leitura" : "");
+    }
+    vnode_put(target);
+    kfree(up);
+    return r;
+}
+
+static long sys_umount2(const char *utarget, int flags)
+{
+    if (flags & ~UMOUNT_NOFOLLOW)
+        return -EINVAL;
+    struct upath *up = kmalloc(sizeof(*up));
+    if (!up)
+        return -ENOMEM;
+    struct vnode *v;
+    long r = walk_user(AT_FDCWD, utarget, &v, up);
+    kfree(up);
+    if (r < 0)
+        return r;
+    return vfs_umount(v);
 }
 
 static long sys_arch_prctl(int code, uint64_t addr)
@@ -1043,6 +1289,8 @@ static long sys_execve(const char *upath, char *const *uargv, char *const *uenvp
     long r = strncpy_from_user(path, upath, sizeof(path));
     if (r < 0)
         return r;
+    if (!path[0])
+        return -ENOENT;
     char **argv = NULL, **envp = NULL;
     r = copy_strv(uargv, &argv);
     if (r < 0)
@@ -1074,22 +1322,48 @@ static long sys_wait4(int pid, int *ustatus, int options, struct user_rusage *ur
     return r;
 }
 
+struct index_ctx {
+    uint64_t want;
+    uint64_t seen;
+    struct vfs_dirent *out;
+    bool found;
+};
+
+static bool index_cb(const struct vfs_dirent *e, void *ctx)
+{
+    struct index_ctx *r = ctx;
+    if (r->seen++ != r->want)
+        return true;
+    *r->out = *e;
+    r->found = true;
+    return false;
+}
+
 static long sys_readdir(int fd, struct user_dirent *uout, uint64_t index)
 {
     struct file *f = process_fd_pin(fd);
     if (!f)
         return -EBADF;
+    if (!f->vn || !vnode_is_dir(f->vn))
+        return -ENOTDIR;
     if (!user_range_ok((uint64_t)uout, sizeof(*uout)))
         return -EFAULT;
-    struct vfs_node n;
-    int r = file_readdir(f, index, &n);
-    if (r <= 0)
-        return r;
+    struct vfs_dirent *e = kmalloc(sizeof(*e));
+    if (!e)
+        return -ENOMEM;
+    struct index_ctx ic = { .want = index, .out = e };
+    uint64_t pos = 0;
+    int r = vfs_readdir_vnode(f->vn, &pos, index_cb, &ic);
+    if (r < 0 || !ic.found) {
+        kfree(e);
+        return r < 0 ? r : 0;
+    }
     struct user_dirent d;
     memset(&d, 0, sizeof(d));
-    d.size = n.size;
-    d.is_dir = n.is_dir;
-    strlcpy(d.name, n.name, sizeof(d.name));
+    d.size = e->size;
+    d.is_dir = (e->mode & S_IFMT) == S_IFDIR;
+    strlcpy(d.name, e->name, sizeof(d.name));
+    kfree(e);
     if (copy_to_user(uout, &d, sizeof(d)) < 0)
         return -EFAULT;
     return 1;
@@ -1141,20 +1415,36 @@ static long sys_rwv(int fd, const struct user_iovec *uiov, int cnt, bool write)
 {
     if (cnt < 0 || cnt > IOV_MAX)
         return -EINVAL;
+    struct file *f = NULL;
+    bool locked = false;
+    if (write) {
+        f = process_fd_pin(fd);
+        if (!f)
+            return -EBADF;
+        locked = append_lock(f);
+    }
     long total = 0;
     for (int i = 0; i < cnt; i++) {
         struct user_iovec v;
-        if (copy_from_user(&v, &uiov[i], sizeof(v)) < 0)
-            return total ? total : -EFAULT;
+        if (copy_from_user(&v, &uiov[i], sizeof(v)) < 0) {
+            if (!total)
+                total = -EFAULT;
+            break;
+        }
         if (v.len == 0)
             continue;
-        long n = write ? sys_write(fd, (const void *)v.base, v.len) : sys_read(fd, (void *)v.base, v.len);
-        if (n < 0)
-            return total ? total : n;
+        long n = write ? write_file(f, (const void *)v.base, v.len) : sys_read(fd, (void *)v.base, v.len);
+        if (n < 0) {
+            if (!total)
+                total = n;
+            break;
+        }
         total += n;
         if ((uint64_t)n < v.len)
             break;
     }
+    if (locked)
+        mutex_unlock(&f->vn->io_lock);
     return total;
 }
 
@@ -1295,6 +1585,8 @@ bool syscall_dispatch(struct interrupt_frame *f)
     switch (f->rax) {
     case SYS_READ:        ret = sys_read((int)f->rdi, (void *)f->rsi, (size_t)f->rdx); break;
     case SYS_WRITE:       ret = sys_write((int)f->rdi, (const void *)f->rsi, (size_t)f->rdx); break;
+    case SYS_PREAD64:     ret = sys_pread64((int)f->rdi, (void *)f->rsi, (size_t)f->rdx, (int64_t)f->r10); break;
+    case SYS_PWRITE64:    ret = sys_pwrite64((int)f->rdi, (const void *)f->rsi, (size_t)f->rdx, (int64_t)f->r10); break;
     case SYS_OPEN:        ret = sys_open((const char *)f->rdi, (int)f->rsi); break;
     case SYS_CLOSE:       ret = sys_close((int)f->rdi); break;
     case SYS_STAT:        ret = sys_stat((const char *)f->rdi, (struct user_stat *)f->rsi); break;
@@ -1308,6 +1600,11 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_DUP:         ret = sys_dup((int)f->rdi); break;
     case SYS_GETCWD:      ret = sys_getcwd((char *)f->rdi, (size_t)f->rsi); break;
     case SYS_CHDIR:       ret = sys_chdir((const char *)f->rdi); break;
+    case SYS_FCHDIR:      ret = sys_fchdir((int)f->rdi); break;
+    case SYS_TRUNCATE:    ret = sys_truncate((const char *)f->rdi, f->rsi); break;
+    case SYS_MOUNT:       ret = sys_mount((const char *)f->rdi, (const char *)f->rsi, (const char *)f->rdx,
+                                          f->r10, (const void *)f->r8); break;
+    case SYS_UMOUNT2:     ret = sys_umount2((const char *)f->rdi, (int)f->rsi); break;
     case SYS_GETPPID:     ret = process_getppid(); break;
     case SYS_ARCH_PRCTL:  ret = sys_arch_prctl((int)f->rdi, f->rsi); break;
     case SYS_CLOCK_GETTIME: ret = sys_clock_gettime((int)f->rdi, (struct user_timespec *)f->rsi); break;

@@ -2,8 +2,10 @@
 
 Sistema operacional x86_64 escrito do zero em C (gnu11), bootado pelo Limine.
 Kernel com SMP, memoria virtual com areas (VMAs) e paginas sob demanda, fork
-copy-on-write, threads, futex, sinais no formato do Linux, FAT com leitura e
-escrita, rede IPv4 (UDP/ICMP) e um compositor de janelas em espaco de usuario.
+copy-on-write, threads, futex, sinais no formato do Linux, VFS com vnodes e
+montagens (`mount`/`umount`; FAT com leitura e escrita na raiz e em `/mnt`,
+devfs em `/dev`), rede IPv4 (UDP/ICMP) e um compositor de janelas em espaco de
+usuario.
 
 Desde a versao 2.0 o espaco de usuario e Linux: os programas sao binarios
 estaticos x86_64 ligados contra a musl, e o Orion roda software de terceiros
@@ -83,8 +85,11 @@ QEMU). Para exercitar o FAT de verdade use um disco cru:
 
     .\build.ps1 -Run -Smp 4 -Disk    # cria out\disk.img (64 MiB, zerado)
     mkfs /dev/sdb ORION              # formata em FAT16, dentro do Orion
-    Ctrl+K -> mount -> Ctrl+K        # monta em /mnt
+    mount /dev/sdb /mnt              # monta em /mnt (ou Ctrl+K -> mount -> Ctrl+K)
     fstest -a /mnt                   # bateria completa de escrita
+    vfstest /mnt                     # montagens, .., rename, arquivo apagado e aberto
+    umount /mnt                      # EBUSY se houver arquivo aberto ou cwd dentro
+    mount -r /dev/sdb /mnt           # so leitura
 
 ### Testes
 `test.ps1` roda o QEMU com `-display none`, serial em TCP 4444 e monitor em
@@ -112,8 +117,8 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
 ## Programas proprios em /bin
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
-    ifconfig ping nslookup dhcp mkfs
-    testes: memtest fstest polltest forktest ptytest limtest stress sctest filetest
+    ifconfig ping nslookup dhcp mkfs mount umount
+    testes: memtest fstest vfstest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
 

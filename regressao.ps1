@@ -120,6 +120,7 @@ if ($runAll -or $OnlyA) {
         "cmd:hello um dois", "wait:1",
         "cmd:date", "wait:1",
         "cmd:ls /dev", "wait:1",
+        "cmd:vfstest -n /", "until:60:falha(s))",
         "cmd:polltest", "wait:6",
         "cmd:fbtest 2", "wait:1", "shot:out\shots\reg-fbtest.ppm", "wait:2",
         "cmd:evtest 10", "wait:0.8", "mon:sendkey a", "mon:sendkey ctrl", "mon:sendkey up", "mon:mouse_move 10 5", "until:20:evento(s)",
@@ -276,6 +277,11 @@ if ($runAll -or $OnlyA) {
     Expect $a "argv\[2\] = dois" "argumentos chegaram ao hello"
     Expect $a "UTC 20\d\d" "date imprimiu a data"
     Expect $a "fb0" "ls /dev listou fb0"
+    Expect $a "/dev/\.\. e a raiz\s+ok" "vfstest: .. atravessa a montagem do /dev"
+    Expect $a "openat\(fd de /dev, `"\.\.`"\) e a raiz\s+ok" "vfstest: openat relativo com .. sai da montagem"
+    Expect $a "/dev esta em outro sistema de arquivos\s+ok" "vfstest: st_dev diferente por montagem"
+    Expect $a "umount do que nao e montagem da EINVAL\s+ok" "vfstest: umount fora de montagem"
+    Expect $a "vfstest: TUDO OK" "vfstest -n: montagens, .. e erros de caminho"
     Expect $a "sda" "ls /dev listou o disco"
     Expect $a "polltest: TUDO OK" "polltest TUDO OK"
     Expect $a "fbtest: gradiente \+ retangulo desenhados" "fbtest desenhou"
@@ -410,6 +416,12 @@ if ($runAll -or $OnlyC) {
         "cmd:fstest -a /mnt/p1 > /mnt/f1.txt | fstest -a /mnt/p2", 'cmd:echo FIM$X-PAR', "until:600:FIM-PAR",
         "cmd:grep TUDO /mnt/f1.txt", "wait:1",
         "cmd:sync", "cmd:ls /mnt", "wait:1",
+        "cmd:vfstest /mnt", "until:120:falha(s))",
+        "cmd:cd /mnt", "cmd:umount /mnt", "cmd:cd /", "cmd:umount /mnt", "cmd:ls /mnt", "wait:1",
+        "cmd:mount -r /dev/sdb /mnt", "cmd:cat /mnt/f1.txt | grep TUDO | wc", "cmd:echo x > /mnt/ro.txt",
+        "cmd:umount /mnt", "cmd:mount /dev/sdb /mnt",
+        "cmd:echo rw-ok > /mnt/rw.txt", "cmd:cat /mnt/rw.txt", "cmd:rm /mnt/rw.txt",
+        "cmd:mkdir /mnt/q", "cmd:mount /dev/sdb /mnt/q", "cmd:rm -r /mnt/q", "wait:1",
         "key:0B", "cmd:mem", "cmd:lsblk", "cmd:mutex"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -NoBuild -Disk -LogPath "out\reg-c.log" `
@@ -436,6 +448,26 @@ if ($runAll -or $OnlyC) {
     Expect $c "grep TUDO /mnt/f1\.txt\s*\n\s*fstest: TUDO OK" "fstest em paralelo: a primeira instancia passou"
     Expect $c "(?s)fstest -a /mnt/p2.*?fstest: TUDO OK.*?\nFIM-PAR" "fstest em paralelo: a segunda instancia passou"
     Expect $c "\n\s+(fat-sdb|bcache)\s+\d+\s+[1-9]\d*\s+" "fstest em paralelo disputou FAT/cache e esperou dormindo"
+    Expect $c "devfs montado em /mnt/vt-m \(devfs\)" "vfstest montou devfs num diretorio do disco"
+    Expect $c "devfs desmontado de /mnt/vt-m" "vfstest desmontou o devfs"
+    Expect $c "o buraco le zeros\s+ok" "vfstest: escrita depois do fim deixa zeros"
+    Expect $c "o \.\. do diretorio movido aponta o pai novo\s+ok" "vfstest: rename de diretorio entre pais"
+    Expect $c "leitura continua pelo descritor\s+ok" "vfstest: arquivo apagado continua legivel aberto"
+    Expect $c "fstat do outro descritor ve o tamanho novo\s+ok" "vfstest: dois descritores veem o mesmo vnode"
+    Expect $c "vfstest: TUDO OK" "vfstest no disco: VFS completa"
+    Expect $c "rename por cima com a raiz cheia +ok" "vfstest: rename por cima na raiz FAT cheia"
+    Expect $c "\.\. a partir de cwd apagado da ENOENT\s+ok" "vfstest: .. de diretorio apagado nao ressuscita o pai"
+    Expect $c "getcwd acompanha o rename do cwd\s+ok" "vfstest: getcwd depois de renomear o cwd"
+    Expect $c "rename que so muda maiusculas\s+ok" "vfstest: rename so de maiusculas no FAT"
+    Expect $c "O_APPEND em dois processos nao perde escrita\s+ok" "vfstest: O_APPEND atomico"
+    Expect $c "apagar durante o readdir nao pula entradas\s+ok" "vfstest: getdents64 com posicao estavel"
+    Expect $c "umount: /mnt: Recurso ocupado" "umount com o cwd dentro da EBUSY"
+    Expect $c "/dev/sdb desmontado de /mnt" "umount desmontou o segundo disco"
+    Expect $c "/dev/sdb montado em /mnt \(vfat, somente leitura\)" "mount -r monta so leitura"
+    Expect $c "grep TUDO \| wc\s*\n\s+1\s+3\s+16" "arquivo legivel depois de remontar"
+    Expect $c "/mnt/ro\.txt: Sistema de arquivos somente leitura" "escrita em montagem so de leitura da EROFS"
+    Expect $c "(?s)cat /mnt/rw\.txt\s*\n\s*rw-ok" "remontado com escrita"
+    Expect $c "mount: /dev/sdb em /mnt/q: Recurso ocupado" "o mesmo disco nao monta duas vezes"
     Test-MemDelta $c "memoria estavel na sequencia C" 24
 }
 

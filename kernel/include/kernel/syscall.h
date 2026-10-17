@@ -24,6 +24,12 @@
 #define SYS_FSYNC         74
 #define SYS_FTRUNCATE     77
 #define SYS_SYNC          162
+#define SYS_TRUNCATE      76
+#define SYS_PREAD64       17
+#define SYS_PWRITE64      18
+#define SYS_FCHDIR        81
+#define SYS_MOUNT         165
+#define SYS_UMOUNT2       166
 #define SYS_WRITE         1
 #define SYS_OPEN          2
 #define SYS_CLOSE         3
@@ -163,8 +169,13 @@ struct user_procinfo {
 #define EINTR   4
 #define EIO     5
 #define EEXIST  17
+#define ENOTBLK 15
+#define EBUSY   16
+#define EXDEV   18
+#define EFBIG   27
 #define ENOTEMPTY 39
 #define ENAMETOOLONG 36
+#define ELOOP   40
 #define EROFS   30
 #define ENOSPC  28
 #define EMSGSIZE 90
@@ -296,6 +307,18 @@ struct linux_dirent64 {
 #define AT_FDCWD            (-100)
 #define AT_SYMLINK_NOFOLLOW 0x100
 #define AT_REMOVEDIR        0x200
+#define MS_RDONLY           0x1
+#define MS_NOSUID           0x2
+#define MS_NODEV            0x4
+#define MS_NOEXEC           0x8
+#define MS_SYNCHRONOUS      0x10
+#define MS_SILENT           0x8000
+#define MS_NOATIME          0x400
+#define MS_NODIRATIME       0x800
+#define MS_RELATIME         0x200000
+#define MS_MGC_MSK          0xFFFF0000u
+#define MS_MGC_VAL          0xC0ED0000u
+#define UMOUNT_NOFOLLOW     0x8
 #define AT_EMPTY_PATH       0x1000
 #define AT_EACCESS          0x200
 

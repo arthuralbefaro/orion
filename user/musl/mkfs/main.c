@@ -62,6 +62,11 @@ int main(int argc, char **argv)
     }
     uint32_t data_start = RESERVED + NFATS * fat_sectors + root_sectors;
     uint32_t clusters = (total - data_start) / spc;
+    while ((clusters + 2) * 2 > fat_sectors * SECTOR) {
+        fat_sectors++;
+        data_start = RESERVED + NFATS * fat_sectors + root_sectors;
+        clusters = (total - data_start) / spc;
+    }
 
     printf("mkfs: %s, %u setores, %u setores/cluster, %u clusters, FAT de %u setores\n",
            argv[1], total, spc, clusters, fat_sectors);

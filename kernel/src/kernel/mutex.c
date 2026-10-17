@@ -55,9 +55,8 @@ void mutex_init(struct mutex *m, const char *name)
     spin_unlock_irqrestore(&m->lock, flags);
 }
 
-void mutex_init_private(struct mutex *m, const char *name)
+void mutex_deinit(struct mutex *m)
 {
-    mutex_init(m, name);
     uint64_t flags = spin_lock_irqsave(&registry_lock);
     struct mutex **pp = &registry;
     while (*pp && *pp != m)
@@ -66,6 +65,12 @@ void mutex_init_private(struct mutex *m, const char *name)
         *pp = m->next;
     m->next = NULL;
     spin_unlock_irqrestore(&registry_lock, flags);
+}
+
+void mutex_init_private(struct mutex *m, const char *name)
+{
+    mutex_init(m, name);
+    mutex_deinit(m);
 }
 
 void mutex_lock(struct mutex *m)

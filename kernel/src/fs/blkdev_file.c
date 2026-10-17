@@ -75,10 +75,6 @@ struct file *blkdev_file_open(struct blockdev *dev)
     if (!f)
         return NULL;
     f->mode = S_IFBLK | 0600;
-    f->has_node = true;
-    memset(&f->node, 0, sizeof(f->node));
-    strlcpy(f->node.name, dev->name, sizeof(f->node.name));
-    f->node.size = dev->sector_count * dev->sector_size;
     return f;
 }
 

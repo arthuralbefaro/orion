@@ -386,11 +386,11 @@ static void cmd_lsblk(const char *args)
     blockdev_dump();
 }
 
-static bool ls_cb(const struct vfs_node *e, void *ctx)
+static bool ls_cb(const struct vfs_dirent *e, void *ctx)
 {
     uint32_t *count = ctx;
     (*count)++;
-    if (e->is_dir)
+    if ((e->mode & S_IFMT) == S_IFDIR)
         kprintf("  <DIR>          %s/\n", e->name);
     else
         kprintf("  %10lu     %s\n", e->size, e->name);

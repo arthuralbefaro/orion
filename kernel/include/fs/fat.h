@@ -1,8 +1,6 @@
 #pragma once
 
 #include <kernel/compiler.h>
+#include <fs/vfs.h>
 
-struct blockdev;
-struct filesystem;
-
-struct filesystem *fat_mount(struct blockdev *dev);
+extern const struct fs_type fat_fs_type;

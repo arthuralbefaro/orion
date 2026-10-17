@@ -258,6 +258,7 @@ static void process_free(struct process *p)
     if (!p)
         return;
     vma_release_all(p);
+    vnode_put(p->cwd_vn);
     kfree(p->sig_handlers);
     kfree(p->fds);
     kfree(p->fd_flags);
@@ -310,21 +311,45 @@ void process_get_cwd(struct process *p, char *out, size_t size)
     spin_unlock_irqrestore(&p->tlock, flags);
 }
 
-void process_set_cwd(struct process *p, const char *path)
+void process_set_cwd(struct process *p, const char *path, struct vnode *v)
 {
     uint64_t flags = spin_lock_irqsave(&p->tlock);
+    struct vnode *old = p->cwd_vn;
+    p->cwd_vn = v;
     strlcpy(p->cwd, path, sizeof(p->cwd));
     spin_unlock_irqrestore(&p->tlock, flags);
+    vnode_put(old);
+}
+
+void process_update_cwd_path(struct process *p, struct vnode *v, const char *path)
+{
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    if (p->cwd_vn == v)
+        strlcpy(p->cwd, path, sizeof(p->cwd));
+    spin_unlock_irqrestore(&p->tlock, flags);
+}
+
+struct vnode *process_cwd_vnode(struct process *p)
+{
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    struct vnode *v = p->cwd_vn;
+    if (v)
+        vnode_get(v);
+    spin_unlock_irqrestore(&p->tlock, flags);
+    return v ? v : vfs_root();
 }
 
 bool process_resolve_path(struct process *p, const char *path, char *out, size_t out_size)
 {
     char tmp[PROCESS_CWD_MAX * 2];
     if (path[0] == '/') {
-        strlcpy(tmp, path, sizeof(tmp));
+        if (strlcpy(tmp, path, sizeof(tmp)) >= sizeof(tmp))
+            return false;
     } else {
         char cwd[PROCESS_CWD_MAX];
         process_get_cwd(p, cwd, sizeof(cwd));
+        if (!cwd[0] || strlen(cwd) + 1 + strlen(path) >= sizeof(tmp))
+            return false;
         ksnprintf(tmp, sizeof(tmp), "%s/%s", cwd, path);
     }
 
@@ -466,6 +491,7 @@ struct process *process_create_elf(const char *name, const void *image, size_t s
         return NULL;
     }
     give_std_fds(p);
+    p->cwd_vn = vfs_root();
     p->autofree = true;
     return process_start(p, name);
 }
@@ -494,6 +520,7 @@ struct process *process_spawn_path(const char *path, const char *const *argv)
         return NULL;
     }
     give_std_fds(p);
+    p->cwd_vn = vfs_root();
     p->autofree = true;
     return process_start(p, name);
 }
@@ -748,6 +775,9 @@ int process_fork_stack(struct interrupt_frame *frame, uint64_t newsp)
     memcpy(child->rlimits, parent->rlimits, sizeof(child->rlimits));
     uint64_t tflags = spin_lock_irqsave(&parent->tlock);
     strlcpy(child->cwd, parent->cwd, sizeof(child->cwd));
+    child->cwd_vn = parent->cwd_vn;
+    if (child->cwd_vn)
+        vnode_get(child->cwd_vn);
     if (!fd_table_resize(child, parent->fd_cap)) {
         spin_unlock_irqrestore(&parent->tlock, tflags);
         vmm_destroy_address_space(child->pml4_phys);
@@ -839,13 +869,21 @@ long process_clone(struct interrupt_frame *frame, uint64_t flags, uint64_t newsp
 int process_execve(const char *path, char *const *argv, char *const *envp, struct interrupt_frame *frame)
 {
     struct process *p = process_current();
+    struct vnode *start = path[0] == '/' ? NULL : process_cwd_vnode(p);
+    struct vnode *v;
+    int r = vfs_walk(start, path, &v);
+    vnode_put(start);
+    if (r < 0)
+        return r;
     char full[PROCESS_CWD_MAX];
     if (!process_resolve_path(p, path, full, sizeof(full)))
-        return -ENOENT;
+        strlcpy(full, path, sizeof(full));
     uint64_t size;
-    void *image = vfs_read_all(full, &size);
+    void *image = vnode_is_reg(v) ? vfs_read_vnode(v, &size) : NULL;
+    bool regular = vnode_is_reg(v);
+    vnode_put(v);
     if (!image)
-        return -ENOENT;
+        return regular ? -EIO : -EACCES;
     if (!become_single_thread(p)) {
         kfree(image);
         return -EAGAIN;
@@ -1051,6 +1089,11 @@ static NORETURN void thread_leave(int status)
     vma_release_all(p);
     while (p->free_n)
         pmm_free_page(p->free_batch[--p->free_n]);
+    flags = spin_lock_irqsave(&p->tlock);
+    struct vnode *cwd = p->cwd_vn;
+    p->cwd_vn = NULL;
+    spin_unlock_irqrestore(&p->tlock, flags);
+    vnode_put(cwd);
     thread_cpu_times(self, &self_user, &self_sys);
     flags = spin_lock_irqsave(&p->tlock);
     p->dead_utime += self_user;

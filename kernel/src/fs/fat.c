@@ -35,12 +35,22 @@ struct fat_fs {
     char label[12];
 };
 
+struct fat_node {
+    uint32_t first;
+    uint32_t dir_cluster;
+    uint32_t dir_offset;
+};
+
 #define ATTR_READ_ONLY 0x01
 #define ATTR_HIDDEN    0x02
 #define ATTR_SYSTEM    0x04
 #define ATTR_VOLUME    0x08
 #define ATTR_DIR       0x10
 #define ATTR_LFN       0x0F
+
+#define FAT_ROOT_INO 1
+#define FAT_EOC      0x0FFFFFFF
+#define FAT_DIR_MAX  (65536u * 32u)
 
 struct fat_dirent {
     uint8_t  name[11];
@@ -81,6 +91,19 @@ static uint32_t fat_next(struct fat_fs *fs, uint32_t cluster)
     }
 }
 
+static bool cluster_ok(struct fat_fs *f, uint32_t c)
+{
+    return c >= 2 && c < f->total_clusters + 2;
+}
+
+static uint32_t chain_next(struct fat_fs *f, uint32_t c)
+{
+    if (!cluster_ok(f, c))
+        return 0xFFFFFFFF;
+    uint32_t n = fat_next(f, c);
+    return n == 0xFFFFFFFF || cluster_ok(f, n) ? n : 0xFFFFFFFF;
+}
+
 static uint32_t cluster_lba(struct fat_fs *fs, uint32_t cluster)
 {
     return fs->data_lba + (cluster - 2) * fs->sectors_per_cluster;
@@ -88,9 +111,38 @@ static uint32_t cluster_lba(struct fat_fs *fs, uint32_t cluster)
 
 static bool read_cluster(struct fat_fs *fs, uint32_t cluster, void *buf)
 {
-    if (cluster < 2 || cluster >= fs->total_clusters + 2)
+    if (!cluster_ok(fs, cluster))
         return false;
     return blockdev_read(fs->dev, cluster_lba(fs, cluster), fs->sectors_per_cluster, buf);
+}
+
+static uint32_t ent_cluster(struct fat_fs *f, const struct fat_dirent *d)
+{
+    uint32_t c = d->cluster_lo;
+    if (f->type == FAT32)
+        c |= (uint32_t)d->cluster_hi << 16;
+    return c;
+}
+
+static void set_ent_cluster(struct fat_dirent *d, uint32_t c)
+{
+    d->cluster_lo = (uint16_t)(c & 0xFFFF);
+    d->cluster_hi = (uint16_t)(c >> 16);
+}
+
+static uint32_t norm_dir(struct fat_fs *f, uint32_t c)
+{
+    return (f->type == FAT32 && c == f->root_cluster) ? 0 : c;
+}
+
+static uint64_t dir_key(uint32_t c)
+{
+    return c ? c : FAT_ROOT_INO;
+}
+
+static uint64_t file_key(uint32_t dir, uint32_t off)
+{
+    return (1ull << 62) | ((uint64_t)dir << 21) | (off / 32);
 }
 
 struct lfn_state {
@@ -147,20 +199,10 @@ static void short_name(const struct fat_dirent *d, char *out)
         out[0] = (char)0xE5;
 }
 
-static void fill_node(struct filesystem *fs, const struct fat_dirent *d, const char *name, struct vfs_node *out)
-{
-    memset(out, 0, sizeof(*out));
-    strlcpy(out->name, name, sizeof(out->name));
-    out->is_dir = d->attr & ATTR_DIR;
-    out->size = out->is_dir ? 0 : d->size;
-    out->ino = ((uint32_t)d->cluster_hi << 16) | d->cluster_lo;
-    out->fs = fs;
-}
-
-typedef bool (*dirent_cb)(struct filesystem *fs, const struct fat_dirent *d, const char *name,
+typedef bool (*dirent_cb)(struct fat_fs *f, const struct fat_dirent *d, const char *name,
                           uint32_t dir_offset, void *ctx);
 
-static bool scan_block(struct filesystem *fs, const uint8_t *buf, uint32_t size, struct lfn_state *lfn,
+static bool scan_block(struct fat_fs *f, const uint8_t *buf, uint32_t size, struct lfn_state *lfn,
                        dirent_cb cb, void *ctx, bool *stop, uint32_t base_offset)
 {
     for (uint32_t off = 0; off + 32 <= size; off += 32) {
@@ -186,7 +228,7 @@ static bool scan_block(struct filesystem *fs, const uint8_t *buf, uint32_t size,
         if (lfn->valid && lfn->checksum == short_checksum(d->name) && lfn->name[0])
             name = lfn->name;
         lfn->valid = false;
-        if (cb(fs, d, name, base_offset + off, ctx)) {
+        if (cb(f, d, name, base_offset + off, ctx)) {
             *stop = true;
             return true;
         }
@@ -194,32 +236,29 @@ static bool scan_block(struct filesystem *fs, const uint8_t *buf, uint32_t size,
     return false;
 }
 
-static bool iterate_dir(struct filesystem *fs, const struct vfs_node *dir, dirent_cb cb, void *ctx)
+static bool iterate_dir(struct fat_fs *f, uint32_t dirc, dirent_cb cb, void *ctx)
 {
-    struct fat_fs *f = fs->priv;
     struct lfn_state lfn = { .valid = false };
     bool stop = false, found = false;
 
-    mutex_lock(&f->lock);
-    if (dir->ino == 0 && f->type != FAT32) {
+    if (dirc == 0 && f->type != FAT32) {
         for (uint32_t s = 0; s < f->root_sectors && !stop; s++) {
             if (!blockdev_read(f->dev, f->root_lba + s, 1, f->cluster_buf))
                 break;
-            found = scan_block(fs, f->cluster_buf, f->bytes_per_sector, &lfn, cb, ctx, &stop,
+            found = scan_block(f, f->cluster_buf, f->bytes_per_sector, &lfn, cb, ctx, &stop,
                                s * f->bytes_per_sector);
         }
     } else {
-        uint32_t c = dir->ino == 0 ? f->root_cluster : (uint32_t)dir->ino;
+        uint32_t c = dirc == 0 ? f->root_cluster : dirc;
         uint32_t guard = 0, base = 0;
-        while (c != 0xFFFFFFFF && !stop && guard++ < f->total_clusters) {
+        while (c != 0xFFFFFFFF && !stop && guard++ < f->total_clusters && base < FAT_DIR_MAX) {
             if (!read_cluster(f, c, f->cluster_buf))
                 break;
-            found = scan_block(fs, f->cluster_buf, f->cluster_size, &lfn, cb, ctx, &stop, base);
+            found = scan_block(f, f->cluster_buf, f->cluster_size, &lfn, cb, ctx, &stop, base);
             base += f->cluster_size;
-            c = fat_next(f, c);
+            c = chain_next(f, c);
         }
     }
-    mutex_unlock(&f->lock);
     return found;
 }
 
@@ -237,105 +276,183 @@ static bool str_ieq(const char *a, const char *b)
     return *a == *b;
 }
 
-struct lookup_ctx {
+struct find_ctx {
     const char *name;
-    struct vfs_node *out;
+    struct fat_dirent d;
+    uint32_t off;
+    bool found;
 };
 
-static bool lookup_cb(struct filesystem *fs, const struct fat_dirent *d, const char *name,
-                      uint32_t dir_offset, void *ctx)
+static bool find_cb(struct fat_fs *f, const struct fat_dirent *d, const char *name,
+                    uint32_t dir_offset, void *ctx)
 {
-    struct lookup_ctx *l = ctx;
+    (void)f;
+    struct find_ctx *l = ctx;
     if (!str_ieq(name, l->name))
         return false;
-    fill_node(fs, d, name, l->out);
-    l->out->dir_offset = dir_offset;
-    if (l->out->is_dir && l->out->ino == 0 && ((struct fat_fs *)fs->priv)->type == FAT32)
-        l->out->ino = 0;
+    l->d = *d;
+    l->off = dir_offset;
+    l->found = true;
     return true;
 }
 
-static bool fat_root(struct filesystem *fs, struct vfs_node *out)
+static bool find_entry(struct fat_fs *f, uint32_t dirc, const char *name, struct find_ctx *l)
 {
-    memset(out, 0, sizeof(*out));
-    strlcpy(out->name, "/", sizeof(out->name));
-    out->is_dir = true;
-    out->ino = 0;
-    out->fs = fs;
-    return true;
+    memset(l, 0, sizeof(*l));
+    l->name = name;
+    iterate_dir(f, dirc, find_cb, l);
+    return l->found;
 }
 
-static bool fat_lookup(struct filesystem *fs, const struct vfs_node *dir, const char *name, struct vfs_node *out)
+static int make_vnode(struct mount *m, uint64_t key, uint32_t mode, uint64_t size, uint32_t first,
+                      uint32_t dir_cluster, uint32_t dir_offset, struct vnode **out)
 {
-    if (strcmp(name, ".") == 0) {
-        *out = *dir;
-        return true;
+    struct vnode *v = vcache_find(m, key);
+    if (!v) {
+        struct fat_node *n = kzalloc(sizeof(*n));
+        if (!n)
+            return -ENOMEM;
+        v = vnode_new(m, key, mode);
+        if (!v) {
+            kfree(n);
+            return -ENOMEM;
+        }
+        n->first = first;
+        n->dir_cluster = dir_cluster;
+        n->dir_offset = dir_offset;
+        v->size = size;
+        v->priv = n;
+        v = vcache_insert(v);
     }
-    struct lookup_ctx ctx = { .name = name, .out = out };
-    if (!iterate_dir(fs, dir, lookup_cb, &ctx))
-        return false;
-    out->dir_ino = dir->ino;
-    return true;
+    *out = v;
+    return 0;
+}
+
+static int vnode_for_entry(struct mount *m, struct fat_fs *f, uint32_t dirc, const struct find_ctx *l,
+                           bool dotdot, struct vnode **out)
+{
+    uint32_t c = ent_cluster(f, &l->d);
+    if (l->d.attr & ATTR_DIR) {
+        c = norm_dir(f, c);
+        if ((c == 0 && !dotdot) || (c != 0 && !cluster_ok(f, c)))
+            return -EIO;
+        return make_vnode(m, dir_key(c), S_IFDIR | 0755, 0, c, dotdot ? 0 : dirc,
+                          dotdot ? 0 : l->off, out);
+    }
+    return make_vnode(m, file_key(dirc, l->off), S_IFREG | 0644, l->d.size, c, dirc, l->off, out);
+}
+
+static int fat_lookup(struct vnode *dir, const char *name, struct vnode **out)
+{
+    struct fat_fs *f = dir->mnt->priv;
+    struct fat_node *dn = dir->priv;
+    if (name[0] == '.' && !name[1]) {
+        vnode_get(dir);
+        *out = dir;
+        return 0;
+    }
+    bool dotdot = name[0] == '.' && name[1] == '.' && !name[2];
+    if (dotdot && dir->unlinked)
+        return -ENOENT;
+    if (dotdot && dn->first == 0) {
+        vnode_get(dir);
+        *out = dir;
+        return 0;
+    }
+    mutex_lock(&f->lock);
+    struct find_ctx l;
+    int r = -ENOENT;
+    if (!dir->unlinked && find_entry(f, dn->first, name, &l))
+        r = vnode_for_entry(dir->mnt, f, dn->first, &l, dotdot, out);
+    mutex_unlock(&f->lock);
+    return r;
 }
 
 struct readdir_ctx {
+    struct mount *m;
+    uint32_t dirc;
+    uint64_t *pos;
     vfs_dir_cb cb;
     void *ctx;
 };
 
-static bool readdir_cb(struct filesystem *fs, const struct fat_dirent *d, const char *name,
+static bool readdir_cb(struct fat_fs *f, const struct fat_dirent *d, const char *name,
                        uint32_t dir_offset, void *ctx)
 {
     struct readdir_ctx *r = ctx;
-    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+    if (dir_offset < *r->pos)
         return false;
-    struct vfs_node n;
-    fill_node(fs, d, name, &n);
-    n.dir_offset = dir_offset;
-    return !r->cb(&n, r->ctx);
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+        *r->pos = (uint64_t)dir_offset + 32;
+        return false;
+    }
+    struct vfs_dirent e;
+    strlcpy(e.name, name, sizeof(e.name));
+    e.next = (uint64_t)dir_offset + 32;
+    if (d->attr & ATTR_DIR) {
+        e.ino = vcache_ino(r->m, dir_key(norm_dir(f, ent_cluster(f, d))));
+        e.mode = S_IFDIR | 0755;
+        e.size = 0;
+    } else {
+        e.ino = vcache_ino(r->m, file_key(r->dirc, dir_offset));
+        e.mode = S_IFREG | 0644;
+        e.size = d->size;
+    }
+    if (!r->cb(&e, r->ctx))
+        return true;
+    *r->pos = e.next;
+    return false;
 }
 
-static bool fat_readdir(struct filesystem *fs, const struct vfs_node *dir, vfs_dir_cb cb, void *ctx)
+static int fat_readdir(struct vnode *dir, uint64_t *pos, vfs_dir_cb cb, void *ctx)
 {
-    struct readdir_ctx r = { .cb = cb, .ctx = ctx };
-    iterate_dir(fs, dir, readdir_cb, &r);
-    return true;
+    struct fat_fs *f = dir->mnt->priv;
+    struct fat_node *dn = dir->priv;
+    struct readdir_ctx r = { .m = dir->mnt, .dirc = dn->first, .pos = pos, .cb = cb, .ctx = ctx };
+    mutex_lock(&f->lock);
+    iterate_dir(f, dn->first, readdir_cb, &r);
+    mutex_unlock(&f->lock);
+    return 0;
 }
 
-static int64_t fat_read(struct filesystem *fs, const struct vfs_node *node, uint64_t offset, void *buf, uint64_t len)
+static int64_t fat_read(struct vnode *v, uint64_t offset, void *buf, uint64_t len)
 {
-    struct fat_fs *f = fs->priv;
-    if (offset >= node->size)
+    struct fat_fs *f = v->mnt->priv;
+    struct fat_node *n = v->priv;
+    mutex_lock(&f->lock);
+    uint64_t size = v->size;
+    if (offset >= size) {
+        mutex_unlock(&f->lock);
         return 0;
-    if (offset + len > node->size)
-        len = node->size - offset;
+    }
+    if (len > size - offset)
+        len = size - offset;
 
     uint8_t *out = buf;
     uint64_t done = 0;
-    mutex_lock(&f->lock);
-
-    uint32_t c = (uint32_t)node->ino;
+    uint32_t c = cluster_ok(f, n->first) ? n->first : 0xFFFFFFFF;
     uint64_t skip = offset / f->cluster_size;
     while (skip-- && c != 0xFFFFFFFF)
-        c = fat_next(f, c);
+        c = chain_next(f, c);
     uint64_t in_cluster = offset % f->cluster_size;
 
+    int64_t err = 0;
     while (done < len && c != 0xFFFFFFFF) {
-        if (!read_cluster(f, c, f->cluster_buf))
+        if (!read_cluster(f, c, f->cluster_buf)) {
+            err = -EIO;
             break;
+        }
         uint64_t chunk = f->cluster_size - in_cluster;
         if (chunk > len - done)
             chunk = len - done;
         memcpy(out + done, f->cluster_buf + in_cluster, chunk);
         done += chunk;
         in_cluster = 0;
-        c = fat_next(f, c);
+        c = chain_next(f, c);
     }
     mutex_unlock(&f->lock);
-    return (int64_t)done;
+    return done ? (int64_t)done : err;
 }
-
-#define FAT_EOC 0x0FFFFFFF
 
 static void fat_mark_dirty(struct fat_fs *f, uint32_t byte_off)
 {
@@ -452,12 +569,12 @@ static bool zero_cluster(struct fat_fs *f, uint32_t cluster)
 static void fat_free_chain(struct fat_fs *f, uint32_t cluster)
 {
     uint32_t guard = 0;
-    while (cluster >= 2 && cluster < f->total_clusters + 2 && guard++ < f->total_clusters) {
+    while (cluster_ok(f, cluster) && guard++ < f->total_clusters) {
         uint32_t next = fat_get_raw(f, cluster);
         fat_set(f, cluster, 0);
         if (cluster < f->next_free)
             f->next_free = cluster;
-        if (next < 2 || next >= f->total_clusters + 2)
+        if (!cluster_ok(f, next))
             break;
         cluster = next;
     }
@@ -468,32 +585,26 @@ static uint32_t chain_extend(struct fat_fs *f, uint32_t last)
     uint32_t c = fat_alloc(f);
     if (!c)
         return 0;
-    if (last)
-        fat_set(f, last, c);
     if (!zero_cluster(f, c)) {
         fat_set(f, c, 0);
         return 0;
     }
+    if (last)
+        fat_set(f, last, c);
     return c;
 }
 
 static uint32_t chain_nth(struct fat_fs *f, uint32_t first, uint32_t index, bool grow)
 {
-    if (first < 2) {
-        if (!grow)
-            return 0;
-        first = chain_extend(f, 0);
-        if (!first)
-            return 0;
-    }
-    uint32_t c = first, prev = 0;
+    if (!cluster_ok(f, first))
+        return 0;
+    uint32_t c = first;
     for (uint32_t i = 0; i < index; i++) {
-        uint32_t next = fat_next(f, c);
+        uint32_t next = chain_next(f, c);
         if (next == 0xFFFFFFFF) {
             if (!grow)
                 return 0;
-            prev = c;
-            next = chain_extend(f, prev);
+            next = chain_extend(f, c);
             if (!next)
                 return 0;
         }
@@ -502,18 +613,18 @@ static uint32_t chain_nth(struct fat_fs *f, uint32_t first, uint32_t index, bool
     return c;
 }
 
-static bool dir_locate(struct fat_fs *f, uint32_t dir_ino, uint32_t offset, uint64_t *lba,
+static bool dir_locate(struct fat_fs *f, uint32_t dirc, uint32_t offset, uint64_t *lba,
                        uint32_t *within, bool grow)
 {
     *within = offset % f->bytes_per_sector;
-    if (dir_ino == 0 && f->type != FAT32) {
+    if (dirc == 0 && f->type != FAT32) {
         uint32_t sector = offset / f->bytes_per_sector;
         if (sector >= f->root_sectors)
             return false;
         *lba = f->root_lba + sector;
         return true;
     }
-    uint32_t first = dir_ino ? dir_ino : f->root_cluster;
+    uint32_t first = dirc ? dirc : f->root_cluster;
     uint32_t c = chain_nth(f, first, offset / f->cluster_size, grow);
     if (!c)
         return false;
@@ -522,11 +633,11 @@ static bool dir_locate(struct fat_fs *f, uint32_t dir_ino, uint32_t offset, uint
     return true;
 }
 
-static bool dir_read_entry(struct fat_fs *f, uint32_t dir_ino, uint32_t offset, uint8_t *out)
+static bool dir_read_entry(struct fat_fs *f, uint32_t dirc, uint32_t offset, uint8_t *out)
 {
     uint64_t lba;
     uint32_t within;
-    if (!dir_locate(f, dir_ino, offset, &lba, &within, false))
+    if (!dir_locate(f, dirc, offset, &lba, &within, false))
         return false;
     if (!blockdev_read(f->dev, lba, 1, f->sector_buf))
         return false;
@@ -534,12 +645,12 @@ static bool dir_read_entry(struct fat_fs *f, uint32_t dir_ino, uint32_t offset, 
     return true;
 }
 
-static bool dir_write_entry(struct fat_fs *f, uint32_t dir_ino, uint32_t offset, const uint8_t *in,
+static bool dir_write_entry(struct fat_fs *f, uint32_t dirc, uint32_t offset, const uint8_t *in,
                             bool grow)
 {
     uint64_t lba;
     uint32_t within;
-    if (!dir_locate(f, dir_ino, offset, &lba, &within, grow))
+    if (!dir_locate(f, dirc, offset, &lba, &within, grow))
         return false;
     if (!blockdev_read(f->dev, lba, 1, f->sector_buf))
         return false;
@@ -547,27 +658,27 @@ static bool dir_write_entry(struct fat_fs *f, uint32_t dir_ino, uint32_t offset,
     return blockdev_write(f->dev, lba, 1, f->sector_buf);
 }
 
-static uint32_t dir_capacity(struct fat_fs *f, uint32_t dir_ino)
+static uint32_t dir_capacity(struct fat_fs *f, uint32_t dirc)
 {
-    if (dir_ino == 0 && f->type != FAT32)
+    if (dirc == 0 && f->type != FAT32)
         return f->root_sectors * f->bytes_per_sector;
-    uint32_t first = dir_ino ? dir_ino : f->root_cluster;
+    uint32_t first = dirc ? dirc : f->root_cluster;
     uint32_t n = 0, c = first, guard = 0;
     while (c != 0xFFFFFFFF && guard++ < f->total_clusters) {
         n += f->cluster_size;
-        c = fat_next(f, c);
+        c = chain_next(f, c);
     }
     return n;
 }
 
-static bool dir_find_free(struct fat_fs *f, uint32_t dir_ino, uint32_t need, uint32_t *out)
+static bool dir_find_free(struct fat_fs *f, uint32_t dirc, uint32_t need, uint32_t *out)
 {
-    uint32_t capacity = dir_capacity(f, dir_ino);
+    uint32_t capacity = dir_capacity(f, dirc);
     uint32_t run = 0, start = 0;
     uint8_t e[32];
 
     for (uint32_t off = 0; off < capacity; off += 32) {
-        if (!dir_read_entry(f, dir_ino, off, e))
+        if (!dir_read_entry(f, dirc, off, e))
             return false;
         if (e[0] == 0x00 || e[0] == 0xE5) {
             if (run == 0)
@@ -581,12 +692,17 @@ static bool dir_find_free(struct fat_fs *f, uint32_t dir_ino, uint32_t need, uin
         }
     }
 
-    if (dir_ino == 0 && f->type != FAT32)
+    if (dirc == 0 && f->type != FAT32)
+        return false;
+    uint32_t at = run == 0 ? capacity : start;
+    if ((uint64_t)at + (uint64_t)need * 32 > FAT_DIR_MAX)
         return false;
 
-    uint32_t first = dir_ino ? dir_ino : f->root_cluster;
+    uint32_t first = dirc ? dirc : f->root_cluster;
     uint32_t clusters = capacity / f->cluster_size;
-    if (!chain_nth(f, first, clusters, true))
+    uint32_t extra = (need - run) * 32;
+    uint32_t more = (extra + f->cluster_size - 1) / f->cluster_size;
+    if (!chain_nth(f, first, clusters + more - 1, true))
         return false;
     if (run == 0)
         start = capacity;
@@ -619,10 +735,10 @@ struct short_probe {
     bool found;
 };
 
-static bool short_probe_cb(struct filesystem *fs, const struct fat_dirent *d, const char *name,
+static bool short_probe_cb(struct fat_fs *f, const struct fat_dirent *d, const char *name,
                            uint32_t dir_offset, void *ctx)
 {
-    (void)fs;
+    (void)f;
     (void)name;
     (void)dir_offset;
     struct short_probe *p = ctx;
@@ -694,13 +810,12 @@ static void build_short(const char *name, uint32_t tail, uint8_t out[11])
         out[8 + i] = (uint8_t)ext[i];
 }
 
-static void make_short_name(struct filesystem *fs, const struct vfs_node *dir, const char *name,
-                            uint8_t out[11])
+static void make_short_name(struct fat_fs *f, uint32_t dirc, const char *name, uint8_t out[11])
 {
     for (uint32_t tail = 0; tail < 1000; tail++) {
         build_short(name, tail, out);
         struct short_probe probe = { .want = out, .found = false };
-        iterate_dir(fs, dir, short_probe_cb, &probe);
+        iterate_dir(f, dirc, short_probe_cb, &probe);
         if (!probe.found)
             return;
     }
@@ -744,346 +859,537 @@ static void lfn_fill(uint8_t *e, const char *name, uint32_t seq, uint32_t total,
     }
 }
 
-static bool dir_add_entry(struct filesystem *fs, const struct vfs_node *dir, const char *name,
-                          uint8_t attr, uint32_t cluster, uint32_t size, uint32_t *entry_off)
+static bool name_ok(const char *name)
 {
-    struct fat_fs *f = fs->priv;
+    size_t n = strlen(name);
+    if (n == 0 || n > 255)
+        return false;
+    for (const char *s = name; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c < 0x20 || c >= 0x7F || strchr("\"*/:<>?\\|", c))
+            return false;
+    }
+    return true;
+}
+
+static bool dir_add_entry(struct fat_fs *f, uint32_t dirc, const char *name,
+                          const struct fat_dirent *tmpl, uint32_t *entry_off)
+{
     uint8_t sfn[11];
-    make_short_name(fs, dir, name, sfn);
+    make_short_name(f, dirc, name, sfn);
     uint32_t lfns = lfn_entries_needed(name, sfn);
 
     uint32_t start;
-    mutex_lock(&f->lock);
-    if (!dir_find_free(f, (uint32_t)dir->ino, lfns + 1, &start)) {
-        mutex_unlock(&f->lock);
+    if (!dir_find_free(f, dirc, lfns + 1, &start))
         return false;
-    }
 
     uint8_t checksum = short_checksum(sfn);
     bool ok = true;
     for (uint32_t i = 0; i < lfns && ok; i++) {
         uint8_t e[32];
         lfn_fill(e, name, lfns - i, lfns, checksum);
-        ok = dir_write_entry(f, (uint32_t)dir->ino, start + i * 32, e, true);
+        ok = dir_write_entry(f, dirc, start + i * 32, e, true);
     }
 
-    struct fat_dirent d;
-    memset(&d, 0, sizeof(d));
+    struct fat_dirent d = *tmpl;
     memcpy(d.name, sfn, 11);
-    d.attr = attr;
-    d.cluster_lo = (uint16_t)(cluster & 0xFFFF);
-    d.cluster_hi = (uint16_t)(cluster >> 16);
-    d.size = size;
-    uint16_t now_date, now_time;
-    fat_now(&now_date, &now_time);
-    d.cdate = d.mdate = d.adate = now_date;
-    d.ctime = d.mtime = now_time;
-
     uint32_t short_off = start + lfns * 32;
     if (ok)
-        ok = dir_write_entry(f, (uint32_t)dir->ino, short_off, (const uint8_t *)&d, true);
-    if (ok)
-        ok = fat_flush(f);
-    mutex_unlock(&f->lock);
+        ok = dir_write_entry(f, dirc, short_off, (const uint8_t *)&d, true);
     if (ok && entry_off)
         *entry_off = short_off;
     return ok;
 }
 
-static bool dir_remove_entry(struct fat_fs *f, uint32_t dir_ino, uint32_t short_off)
+static bool dir_remove_entry(struct fat_fs *f, uint32_t dirc, uint32_t short_off)
 {
     uint8_t e[32];
     uint32_t off = short_off;
-    if (!dir_read_entry(f, dir_ino, off, e))
+    if (!dir_read_entry(f, dirc, off, e))
         return false;
     e[0] = 0xE5;
-    if (!dir_write_entry(f, dir_ino, off, e, false))
+    if (!dir_write_entry(f, dirc, off, e, false))
         return false;
 
     while (off >= 32) {
         off -= 32;
-        if (!dir_read_entry(f, dir_ino, off, e))
+        if (!dir_read_entry(f, dirc, off, e))
             break;
         if (e[11] != ATTR_LFN || e[0] == 0xE5)
             break;
         e[0] = 0xE5;
-        if (!dir_write_entry(f, dir_ino, off, e, false))
+        if (!dir_write_entry(f, dirc, off, e, false))
             break;
     }
     return true;
 }
 
-static bool update_entry_size(struct fat_fs *f, struct vfs_node *node)
+#define FAT_SAVED_SLOTS 21
+
+struct saved_entry {
+    uint32_t first;
+    uint32_t count;
+    uint8_t slots[FAT_SAVED_SLOTS][32];
+};
+
+static bool dir_save_entry(struct fat_fs *f, uint32_t dirc, uint32_t short_off, struct saved_entry *s)
 {
+    if (!dir_read_entry(f, dirc, short_off, s->slots[FAT_SAVED_SLOTS - 1]))
+        return false;
+    uint32_t n = 1, off = short_off;
+    while (off >= 32 && n < FAT_SAVED_SLOTS) {
+        uint8_t e[32];
+        if (!dir_read_entry(f, dirc, off - 32, e) || e[11] != ATTR_LFN || e[0] == 0xE5)
+            break;
+        off -= 32;
+        memcpy(s->slots[FAT_SAVED_SLOTS - 1 - n], e, 32);
+        n++;
+    }
+    s->first = off;
+    s->count = n;
+    return true;
+}
+
+static void dir_restore_entry(struct fat_fs *f, uint32_t dirc, const struct saved_entry *s)
+{
+    for (uint32_t i = 0; i < s->count; i++)
+        dir_write_entry(f, dirc, s->first + i * 32, s->slots[FAT_SAVED_SLOTS - s->count + i], false);
+}
+
+static bool update_entry_size(struct fat_fs *f, struct vnode *v)
+{
+    struct fat_node *n = v->priv;
+    if (v->unlinked)
+        return true;
     uint8_t e[32];
-    if (!dir_read_entry(f, (uint32_t)node->dir_ino, node->dir_offset, e))
+    if (!dir_read_entry(f, n->dir_cluster, n->dir_offset, e))
         return false;
     struct fat_dirent *d = (struct fat_dirent *)e;
-    d->size = (uint32_t)node->size;
-    d->cluster_lo = (uint16_t)(node->ino & 0xFFFF);
-    d->cluster_hi = (uint16_t)(node->ino >> 16);
+    d->size = (uint32_t)v->size;
+    set_ent_cluster(d, n->first);
     uint16_t now_date, now_time;
     fat_now(&now_date, &now_time);
     d->mdate = now_date;
     d->mtime = now_time;
-    return dir_write_entry(f, (uint32_t)node->dir_ino, node->dir_offset, e, false);
+    return dir_write_entry(f, n->dir_cluster, n->dir_offset, e, false);
 }
 
-static int64_t fat_write(struct filesystem *fs, struct vfs_node *node, uint64_t offset,
-                         const void *buf, uint64_t len)
+static int64_t write_locked(struct fat_fs *f, struct vnode *v, uint64_t offset, const uint8_t *in,
+                            uint64_t len)
 {
-    struct fat_fs *f = fs->priv;
-    if (!f->writable || node->is_dir)
-        return -1;
-    if (offset + len > 0xFFFFFFFFull)
-        return -1;
-
-    const uint8_t *in = buf;
+    struct fat_node *n = v->priv;
     uint64_t done = 0;
-    mutex_lock(&f->lock);
+    int64_t err = 0;
+    uint32_t cur = 0, cur_index = 0;
 
     while (done < len) {
         uint64_t pos = offset + done;
         uint32_t index = (uint32_t)(pos / f->cluster_size);
         uint32_t within = (uint32_t)(pos % f->cluster_size);
-        uint32_t first = (uint32_t)node->ino;
-        uint32_t c = chain_nth(f, first, index, true);
-        if (!c)
-            break;
-        if (first < 2) {
-            uint32_t head = c;
-            uint32_t walk = c;
-            for (uint32_t i = 0; i < index; i++)
-                walk = fat_next(f, walk);
-            (void)walk;
-            node->ino = head;
+        if (!cluster_ok(f, n->first)) {
+            uint32_t head = chain_extend(f, 0);
+            if (!head) {
+                err = -ENOSPC;
+                break;
+            }
+            n->first = head;
+            cur = head;
+            cur_index = 0;
         }
+        uint32_t c;
+        if (cur && index == cur_index) {
+            c = cur;
+        } else if (cur && index == cur_index + 1) {
+            c = chain_next(f, cur);
+            if (c == 0xFFFFFFFF)
+                c = chain_extend(f, cur);
+        } else {
+            c = chain_nth(f, n->first, index, true);
+        }
+        if (!c) {
+            err = -ENOSPC;
+            break;
+        }
+        cur = c;
+        cur_index = index;
 
         uint32_t chunk = f->cluster_size - within;
         if (chunk > len - done)
             chunk = (uint32_t)(len - done);
 
         uint64_t lba = cluster_lba(f, c);
+        bool ok;
         if (within == 0 && chunk == f->cluster_size) {
-            if (!blockdev_write(f->dev, lba, f->sectors_per_cluster, in + done))
-                break;
+            if (in) {
+                ok = blockdev_write(f->dev, lba, f->sectors_per_cluster, in + done);
+            } else {
+                memset(f->cluster_buf, 0, f->cluster_size);
+                ok = blockdev_write(f->dev, lba, f->sectors_per_cluster, f->cluster_buf);
+            }
         } else {
-            if (!blockdev_read(f->dev, lba, f->sectors_per_cluster, f->cluster_buf))
-                break;
-            memcpy(f->cluster_buf + within, in + done, chunk);
-            if (!blockdev_write(f->dev, lba, f->sectors_per_cluster, f->cluster_buf))
-                break;
+            ok = blockdev_read(f->dev, lba, f->sectors_per_cluster, f->cluster_buf);
+            if (ok) {
+                if (in)
+                    memcpy(f->cluster_buf + within, in + done, chunk);
+                else
+                    memset(f->cluster_buf + within, 0, chunk);
+                ok = blockdev_write(f->dev, lba, f->sectors_per_cluster, f->cluster_buf);
+            }
+        }
+        if (!ok) {
+            err = -EIO;
+            break;
         }
         done += chunk;
     }
 
-    if (offset + done > node->size)
-        node->size = offset + done;
-    bool ok = update_entry_size(f, node);
-    mutex_unlock(&f->lock);
-    if (!ok && done == 0)
-        return -1;
-    return (int64_t)done;
+    if (offset + done > v->size)
+        v->size = offset + done;
+    return done ? (int64_t)done : err;
 }
 
-static bool fat_truncate(struct filesystem *fs, struct vfs_node *node, uint64_t size)
+static int64_t fat_write(struct vnode *v, uint64_t *offp, const void *buf, uint64_t len, bool append)
 {
-    struct fat_fs *f = fs->priv;
-    if (!f->writable || node->is_dir || size > 0xFFFFFFFFull)
-        return false;
+    struct fat_fs *f = v->mnt->priv;
+    if (!f->writable)
+        return -EROFS;
 
     mutex_lock(&f->lock);
-    uint32_t first = (uint32_t)node->ino;
-    if (size == 0) {
-        if (first >= 2)
-            fat_free_chain(f, first);
-        node->ino = 0;
-    } else if (size < node->size) {
+    uint64_t offset = append ? v->size : *offp;
+    if (offset > 0xFFFFFFFFull || len > 0xFFFFFFFFull - offset) {
+        mutex_unlock(&f->lock);
+        return -EFBIG;
+    }
+    if (len == 0) {
+        *offp = offset;
+        mutex_unlock(&f->lock);
+        return 0;
+    }
+    int64_t r = 0;
+    if (offset > v->size) {
+        uint64_t gap = offset - v->size;
+        int64_t z = write_locked(f, v, v->size, NULL, gap);
+        if (z < (int64_t)gap)
+            r = z < 0 ? z : -ENOSPC;
+    }
+    if (r == 0)
+        r = write_locked(f, v, offset, buf, len);
+    *offp = offset + (r > 0 ? (uint64_t)r : 0);
+    bool ok = update_entry_size(f, v);
+    mutex_unlock(&f->lock);
+    if (!ok && r >= 0)
+        return -EIO;
+    return r;
+}
+
+static int fat_truncate(struct vnode *v, uint64_t size)
+{
+    struct fat_fs *f = v->mnt->priv;
+    struct fat_node *n = v->priv;
+    if (!f->writable)
+        return -EROFS;
+    if (size > 0xFFFFFFFFull)
+        return -EFBIG;
+
+    mutex_lock(&f->lock);
+    int r = 0;
+    if (size > v->size) {
+        uint64_t gap = size - v->size;
+        int64_t w = write_locked(f, v, v->size, NULL, gap);
+        if (w < (int64_t)gap)
+            r = w < 0 ? (int)w : -ENOSPC;
+    } else if (size == 0) {
+        if (cluster_ok(f, n->first))
+            fat_free_chain(f, n->first);
+        n->first = 0;
+        v->size = 0;
+    } else if (size < v->size) {
         uint32_t keep = (uint32_t)((size + f->cluster_size - 1) / f->cluster_size);
-        uint32_t c = chain_nth(f, first, keep - 1, false);
+        uint32_t c = chain_nth(f, n->first, keep - 1, false);
         if (c) {
-            uint32_t rest = fat_next(f, c);
+            uint32_t rest = chain_next(f, c);
             fat_set(f, c, FAT_EOC);
             if (rest != 0xFFFFFFFF)
                 fat_free_chain(f, rest);
         }
+        v->size = size;
     }
-    node->size = size;
-    bool ok = update_entry_size(f, node) && fat_flush(f);
+    if (!update_entry_size(f, v) && r == 0)
+        r = -EIO;
+    if (!fat_flush(f) && r == 0)
+        r = -EIO;
     mutex_unlock(&f->lock);
-    return ok;
+    return r;
 }
 
-static bool fat_create(struct filesystem *fs, const struct vfs_node *dir, const char *name,
-                       bool is_dir, struct vfs_node *out)
+static void dirent_now(struct fat_dirent *d, uint8_t attr, uint32_t cluster)
 {
-    struct fat_fs *f = fs->priv;
-    if (!f->writable)
-        return false;
+    memset(d, 0, sizeof(*d));
+    memset(d->name, ' ', 11);
+    d->attr = attr;
+    set_ent_cluster(d, cluster);
+    uint16_t now_date, now_time;
+    fat_now(&now_date, &now_time);
+    d->cdate = d->mdate = d->adate = now_date;
+    d->ctime = d->mtime = now_time;
+}
 
-    struct vfs_node existing;
-    if (fat_lookup(fs, dir, name, &existing))
-        return false;
+static bool nonempty_cb(struct fat_fs *f, const struct fat_dirent *d, const char *name,
+                        uint32_t dir_offset, void *ctx)
+{
+    (void)f;
+    (void)d;
+    (void)dir_offset;
+    (void)ctx;
+    return strcmp(name, ".") != 0 && strcmp(name, "..") != 0;
+}
+
+static int fat_create(struct vnode *dir, const char *name, uint32_t mode, struct vnode **out)
+{
+    struct fat_fs *f = dir->mnt->priv;
+    struct fat_node *dn = dir->priv;
+    if (!f->writable)
+        return -EROFS;
+    if (!name_ok(name))
+        return -EINVAL;
+    bool is_dir = (mode & S_IFMT) == S_IFDIR;
+
+    mutex_lock(&f->lock);
+    struct find_ctx l;
+    if (find_entry(f, dn->first, name, &l)) {
+        mutex_unlock(&f->lock);
+        return -EEXIST;
+    }
 
     uint32_t cluster = 0;
     if (is_dir) {
-        mutex_lock(&f->lock);
         cluster = chain_extend(f, 0);
-        mutex_unlock(&f->lock);
-        if (!cluster)
-            return false;
-    }
-
-    uint32_t entry_off = 0;
-    if (!dir_add_entry(fs, dir, name, is_dir ? ATTR_DIR : 0, cluster, 0, &entry_off)) {
-        if (cluster) {
-            mutex_lock(&f->lock);
+        if (!cluster) {
+            mutex_unlock(&f->lock);
+            return -ENOSPC;
+        }
+        struct fat_dirent dot;
+        dirent_now(&dot, ATTR_DIR, cluster);
+        dot.name[0] = '.';
+        bool ok = dir_write_entry(f, cluster, 0, (const uint8_t *)&dot, false);
+        dot.name[1] = '.';
+        set_ent_cluster(&dot, dn->first);
+        ok = ok && dir_write_entry(f, cluster, 32, (const uint8_t *)&dot, false);
+        if (!ok) {
             fat_free_chain(f, cluster);
             fat_flush(f);
             mutex_unlock(&f->lock);
+            return -EIO;
         }
-        return false;
     }
 
-    if (is_dir) {
-        struct vfs_node self;
-        memset(&self, 0, sizeof(self));
-        self.is_dir = true;
-        self.ino = cluster;
-        self.fs = fs;
-        struct fat_dirent dot;
-        uint16_t d, t;
-        fat_now(&d, &t);
+    struct fat_dirent d;
+    dirent_now(&d, is_dir ? ATTR_DIR : 0, cluster);
+    uint32_t off = 0;
+    if (!dir_add_entry(f, dn->first, name, &d, &off)) {
+        if (cluster)
+            fat_free_chain(f, cluster);
+        fat_flush(f);
+        mutex_unlock(&f->lock);
+        return -ENOSPC;
+    }
+    bool flushed = fat_flush(f);
+    int r = is_dir ? make_vnode(dir->mnt, dir_key(cluster), S_IFDIR | 0755, 0, cluster, dn->first, off, out)
+                   : make_vnode(dir->mnt, file_key(dn->first, off), S_IFREG | 0644, 0, 0, dn->first, off, out);
+    mutex_unlock(&f->lock);
+    if (r == 0 && !flushed)
+        log_warn("fat", "create: falha ao gravar a FAT de %s", f->dev->name);
+    return r;
+}
+
+static int fat_unlink(struct vnode *dir, const char *name, struct vnode *victim)
+{
+    struct fat_fs *f = dir->mnt->priv;
+    struct fat_node *dn = dir->priv;
+    struct fat_node *vn = victim->priv;
+    if (!f->writable)
+        return -EROFS;
+
+    mutex_lock(&f->lock);
+    struct find_ctx l;
+    int r = 0;
+    if (!find_entry(f, dn->first, name, &l))
+        r = -ENOENT;
+    else if (vnode_is_dir(victim) && iterate_dir(f, vn->first, nonempty_cb, NULL))
+        r = -ENOTEMPTY;
+    else if (!dir_remove_entry(f, dn->first, l.off))
+        r = -EIO;
+    if (r == 0) {
+        victim->unlinked = true;
+        vcache_unhash(victim);
+        if (!fat_flush(f))
+            r = -EIO;
+    }
+    mutex_unlock(&f->lock);
+    return r;
+}
+
+static int fat_rename(struct vnode *odir, const char *oname, struct vnode *ndir, const char *nname,
+                      struct vnode *v, struct vnode *victim)
+{
+    struct fat_fs *f = odir->mnt->priv;
+    struct fat_node *odn = odir->priv;
+    struct fat_node *ndn = ndir->priv;
+    struct fat_node *n = v->priv;
+    if (!f->writable)
+        return -EROFS;
+    if (!name_ok(nname))
+        return -EINVAL;
+
+    mutex_lock(&f->lock);
+    struct find_ctx a, b;
+    int r = 0;
+    bool replace = false, self_rename = false;
+    if (!find_entry(f, odn->first, oname, &a)) {
+        r = -ENOENT;
+    } else if (find_entry(f, ndn->first, nname, &b)) {
+        self_rename = odn->first == ndn->first && b.off == a.off;
+        if (!self_rename && !victim)
+            r = -EEXIST;
+        else if (!self_rename && vnode_is_dir(victim) &&
+                 iterate_dir(f, ((struct fat_node *)victim->priv)->first, nonempty_cb, NULL))
+            r = -ENOTEMPTY;
+        else if (!self_rename)
+            replace = true;
+    }
+    struct fat_dirent d = a.d;
+    if (r == 0 && !vnode_is_dir(v)) {
+        d.size = (uint32_t)v->size;
+        set_ent_cluster(&d, n->first);
+    }
+    bool moved_dir = vnode_is_dir(v) && odn->first != ndn->first;
+    uint8_t dotdot[32], dotdot_old[32];
+    if (r == 0 && moved_dir &&
+        (!dir_read_entry(f, n->first, 32, dotdot) || dotdot[0] != '.' || dotdot[1] != '.'))
+        r = -EIO;
+    struct saved_entry *src = r == 0 ? kmalloc(sizeof(*src) * 2) : NULL;
+    struct saved_entry *vic = src ? src + 1 : NULL;
+    if (r == 0 && (!src || !dir_save_entry(f, odn->first, a.off, src)))
+        r = src ? -EIO : -ENOMEM;
+    if (r == 0 && replace && !dir_save_entry(f, ndn->first, b.off, vic))
+        r = -EIO;
+    bool dotdot_written = false;
+    if (r == 0 && moved_dir) {
+        memcpy(dotdot_old, dotdot, 32);
+        set_ent_cluster((struct fat_dirent *)dotdot, ndn->first);
+        if (dir_write_entry(f, n->first, 32, dotdot, false))
+            dotdot_written = true;
+        else
+            r = -EIO;
+    }
+    uint32_t noff = 0;
+    bool added = false, src_gone = false, victim_gone = false;
+    if (r == 0) {
+        added = dir_add_entry(f, ndn->first, nname, &d, &noff);
+        if (!added && replace)
+            victim_gone = dir_remove_entry(f, ndn->first, b.off);
+        else if (!added && self_rename)
+            src_gone = dir_remove_entry(f, odn->first, a.off);
+        if (!added && (victim_gone || src_gone))
+            added = dir_add_entry(f, ndn->first, nname, &d, &noff);
+        if (!added)
+            r = -ENOSPC;
+    }
+    if (r == 0 && !src_gone) {
+        src_gone = dir_remove_entry(f, odn->first, a.off);
+        if (!src_gone)
+            r = -EIO;
+    }
+    if (r == 0 && replace && !victim_gone) {
+        victim_gone = dir_remove_entry(f, ndn->first, b.off);
+        if (!victim_gone)
+            r = -EIO;
+    }
+    if (r == 0 && replace) {
+        victim->unlinked = true;
+        vcache_unhash(victim);
+    }
+    if (r < 0) {
+        if (added)
+            dir_remove_entry(f, ndn->first, noff);
+        if (src_gone)
+            dir_restore_entry(f, odn->first, src);
+        if (victim_gone)
+            dir_restore_entry(f, ndn->first, vic);
+        if (dotdot_written)
+            dir_write_entry(f, n->first, 32, dotdot_old, false);
+    }
+    kfree(src);
+    if (r == 0) {
+        n->dir_cluster = ndn->first;
+        n->dir_offset = noff;
+        if (!vnode_is_dir(v))
+            vcache_rekey(v, file_key(ndn->first, noff));
+        if (!fat_flush(f))
+            r = -EIO;
+    }
+    mutex_unlock(&f->lock);
+    return r;
+}
+
+static void fat_release(struct vnode *v)
+{
+    struct fat_node *n = v->priv;
+    if (!n)
+        return;
+    if (v->unlinked) {
+        struct fat_fs *f = v->mnt->priv;
         mutex_lock(&f->lock);
-        memset(&dot, 0, sizeof(dot));
-        memset(dot.name, ' ', 11);
-        dot.name[0] = '.';
-        dot.attr = ATTR_DIR;
-        dot.cluster_lo = (uint16_t)(cluster & 0xFFFF);
-        dot.cluster_hi = (uint16_t)(cluster >> 16);
-        dot.cdate = dot.mdate = dot.adate = d;
-        dot.ctime = dot.mtime = t;
-        dir_write_entry(f, cluster, 0, (const uint8_t *)&dot, false);
-        dot.name[1] = '.';
-        uint32_t parent = (uint32_t)dir->ino;
-        dot.cluster_lo = (uint16_t)(parent & 0xFFFF);
-        dot.cluster_hi = (uint16_t)(parent >> 16);
-        dir_write_entry(f, cluster, 32, (const uint8_t *)&dot, false);
+        if (cluster_ok(f, n->first))
+            fat_free_chain(f, n->first);
         fat_flush(f);
         mutex_unlock(&f->lock);
     }
-
-    if (out) {
-        memset(out, 0, sizeof(*out));
-        strlcpy(out->name, name, sizeof(out->name));
-        out->is_dir = is_dir;
-        out->size = 0;
-        out->ino = cluster;
-        out->dir_ino = dir->ino;
-        out->dir_offset = entry_off;
-        out->fs = fs;
-    }
-    return true;
+    kfree(n);
 }
 
-struct empty_ctx {
-    bool empty;
-};
-
-static bool empty_cb(const struct vfs_node *e, void *ctx)
+static int fat_sync(struct mount *m)
 {
-    (void)e;
-    ((struct empty_ctx *)ctx)->empty = false;
-    return false;
-}
-
-static bool fat_unlink(struct filesystem *fs, const struct vfs_node *dir, const char *name,
-                       bool is_dir)
-{
-    struct fat_fs *f = fs->priv;
-    if (!f->writable)
-        return false;
-
-    struct vfs_node node;
-    if (!fat_lookup(fs, dir, name, &node))
-        return false;
-    if (node.is_dir != is_dir)
-        return false;
-
-    if (is_dir) {
-        struct empty_ctx e = { .empty = true };
-        fat_readdir(fs, &node, empty_cb, &e);
-        if (!e.empty)
-            return false;
-    }
-
-    mutex_lock(&f->lock);
-    if (node.ino >= 2)
-        fat_free_chain(f, (uint32_t)node.ino);
-    bool ok = dir_remove_entry(f, (uint32_t)dir->ino, node.dir_offset) && fat_flush(f);
-    mutex_unlock(&f->lock);
-    return ok;
-}
-
-static bool fat_rename(struct filesystem *fs, const struct vfs_node *dir, const char *from,
-                       const char *to)
-{
-    struct fat_fs *f = fs->priv;
-    if (!f->writable)
-        return false;
-
-    struct vfs_node node, clash;
-    if (!fat_lookup(fs, dir, from, &node))
-        return false;
-    if (fat_lookup(fs, dir, to, &clash))
-        return false;
-
-    uint32_t entry_off = 0;
-    if (!dir_add_entry(fs, dir, to, node.is_dir ? ATTR_DIR : 0, (uint32_t)node.ino,
-                       (uint32_t)node.size, &entry_off))
-        return false;
-
-    mutex_lock(&f->lock);
-    bool ok = dir_remove_entry(f, (uint32_t)dir->ino, node.dir_offset) && fat_flush(f);
-    mutex_unlock(&f->lock);
-    return ok;
-}
-
-static bool fat_sync(struct filesystem *fs)
-{
-    struct fat_fs *f = fs->priv;
+    struct fat_fs *f = m->priv;
     mutex_lock(&f->lock);
     bool ok = fat_flush(f);
     mutex_unlock(&f->lock);
-    return blockdev_sync() && ok;
+    return blockdev_sync() && ok ? 0 : -EIO;
 }
 
-static const struct fs_ops fat_ops = {
-    .root = fat_root,
-    .lookup = fat_lookup,
-    .read = fat_read,
-    .readdir = fat_readdir,
-    .write = fat_write,
-    .create = fat_create,
-    .unlink = fat_unlink,
-    .truncate = fat_truncate,
-    .rename = fat_rename,
-    .sync = fat_sync,
-};
+static void fat_free(struct fat_fs *f)
+{
+    kfree(f->fat);
+    kfree(f->cluster_buf);
+    kfree(f->sector_buf);
+    kfree(f);
+}
 
-struct filesystem *fat_mount(struct blockdev *dev)
+static void fat_unmount(struct mount *m)
+{
+    struct fat_fs *f = m->priv;
+    if (!f)
+        return;
+    mutex_deinit(&f->lock);
+    fat_free(f);
+    m->priv = NULL;
+}
+
+static int fat_mount(struct mount *m, struct blockdev *dev)
 {
     uint8_t *bpb = kmalloc(512);
-    if (!bpb || !blockdev_read(dev, 0, 1, bpb)) {
+    if (!bpb)
+        return -ENOMEM;
+    if (!blockdev_read(dev, 0, 1, bpb)) {
         kfree(bpb);
-        return NULL;
+        return -EIO;
     }
     if (bpb[510] != 0x55 || bpb[511] != 0xAA) {
         kfree(bpb);
-        return NULL;
+        return -EINVAL;
     }
 
-    uint16_t bps, rsvd, root_entries, total16, fat16, spf16;
+    uint16_t bps, rsvd, root_entries, total16, spf16;
     uint32_t total32, spf32, root_cluster;
     uint8_t spc, nfats;
     memcpy(&bps, bpb + 11, 2);
@@ -1096,20 +1402,19 @@ struct filesystem *fat_mount(struct blockdev *dev)
     memcpy(&total32, bpb + 32, 4);
     memcpy(&spf32, bpb + 36, 4);
     memcpy(&root_cluster, bpb + 44, 4);
-    (void)fat16;
 
-    if (bps < 512 || bps > 4096 || (bps & (bps - 1)) || spc == 0 || (spc & (spc - 1)) || nfats == 0) {
+    uint32_t fat_sectors = spf16 ? spf16 : spf32;
+    uint32_t total = total16 ? total16 : total32;
+    if (bps != dev->sector_size || spc == 0 || (spc & (spc - 1)) || nfats == 0 || nfats > 4 ||
+        rsvd == 0 || fat_sectors == 0) {
         kfree(bpb);
-        return NULL;
+        return -EINVAL;
     }
 
     struct fat_fs *f = kzalloc(sizeof(*f));
-    struct filesystem *fs = kzalloc(sizeof(*fs));
-    if (!f || !fs) {
-        kfree(f);
-        kfree(fs);
+    if (!f) {
         kfree(bpb);
-        return NULL;
+        return -ENOMEM;
     }
 
     f->dev = dev;
@@ -1117,13 +1422,17 @@ struct filesystem *fat_mount(struct blockdev *dev)
     f->sectors_per_cluster = spc;
     f->cluster_size = bps * spc;
     f->fat_lba = rsvd;
-    f->fat_sectors = spf16 ? spf16 : spf32;
+    f->fat_sectors = fat_sectors;
     f->root_sectors = ((uint32_t)root_entries * 32 + bps - 1) / bps;
     f->root_lba = rsvd + nfats * f->fat_sectors;
     f->data_lba = f->root_lba + f->root_sectors;
-    uint32_t total = total16 ? total16 : total32;
-    f->total_clusters = (total - f->data_lba) / spc;
     f->root_cluster = root_cluster;
+    if (total <= f->data_lba + spc) {
+        kfree(f);
+        kfree(bpb);
+        return -EINVAL;
+    }
+    f->total_clusters = (total - f->data_lba) / spc;
 
     if (f->total_clusters < 4085)
         f->type = FAT12;
@@ -1131,6 +1440,15 @@ struct filesystem *fat_mount(struct blockdev *dev)
         f->type = FAT16;
     else
         f->type = FAT32;
+
+    uint64_t tc = (uint64_t)f->total_clusters + 2;
+    uint64_t need = f->type == FAT12 ? (tc - 1) + (tc - 1) / 2 + 2 : f->type == FAT16 ? tc * 2 : tc * 4;
+    if ((f->type == FAT32 && (!cluster_ok(f, root_cluster) || f->total_clusters > 0x0FFFFFF5)) ||
+        need > (uint64_t)fat_sectors * bps || (uint64_t)total > dev->sector_count) {
+        kfree(f);
+        kfree(bpb);
+        return -EINVAL;
+    }
 
     const uint8_t *label = f->type == FAT32 ? bpb + 71 : bpb + 43;
     memcpy(f->label, label, 11);
@@ -1144,12 +1462,8 @@ struct filesystem *fat_mount(struct blockdev *dev)
     f->sector_buf = kmalloc(bps);
     if (!f->fat || !f->cluster_buf || !f->sector_buf ||
         !blockdev_read(dev, f->fat_lba, f->fat_sectors, f->fat)) {
-        kfree(f->fat);
-        kfree(f->cluster_buf);
-        kfree(f->sector_buf);
-        kfree(f);
-        kfree(fs);
-        return NULL;
+        fat_free(f);
+        return -EIO;
     }
     ksnprintf(f->lock_name, sizeof(f->lock_name), "fat-%s", dev->name);
     mutex_init(&f->lock, f->lock_name);
@@ -1159,11 +1473,39 @@ struct filesystem *fat_mount(struct blockdev *dev)
     f->next_free = 2;
     f->writable = dev->write != NULL || (dev->parent && dev->parent->write != NULL);
 
-    fs->type = f->type == FAT12 ? "FAT12" : f->type == FAT16 ? "FAT16" : "FAT32";
-    fs->ops = &fat_ops;
-    fs->priv = f;
+    struct fat_node *rn = kzalloc(sizeof(*rn));
+    struct vnode *root = rn ? vnode_new(m, FAT_ROOT_INO, S_IFDIR | 0755) : NULL;
+    if (!root) {
+        kfree(rn);
+        mutex_deinit(&f->lock);
+        fat_free(f);
+        return -ENOMEM;
+    }
+    root->priv = rn;
+    m->priv = f;
+    m->root = vcache_insert(root);
+    m->subtype = f->type == FAT12 ? "FAT12" : f->type == FAT16 ? "FAT16" : "FAT32";
+    if (!f->writable)
+        m->flags |= MNT_RDONLY;
     log_info("fat", "%s em %s: %u bytes/setor, %u setores/cluster, %u clusters, label '%s' (%s)",
-             fs->type, dev->name, bps, spc, f->total_clusters, f->label,
+             m->subtype, dev->name, bps, spc, f->total_clusters, f->label,
              f->writable ? "leitura e escrita" : "somente leitura");
-    return fs;
+    return 0;
 }
+
+const struct fs_type fat_fs_type = {
+    .name = "vfat",
+    .needs_dev = true,
+    .mount = fat_mount,
+    .unmount = fat_unmount,
+    .sync = fat_sync,
+    .lookup = fat_lookup,
+    .readdir = fat_readdir,
+    .read = fat_read,
+    .write = fat_write,
+    .truncate = fat_truncate,
+    .create = fat_create,
+    .unlink = fat_unlink,
+    .rename = fat_rename,
+    .release = fat_release,
+};
