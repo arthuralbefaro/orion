@@ -19,7 +19,8 @@ if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
 $packages = @(
     @{ Id = "LLVM.LLVM";                       Nome = "LLVM (clang + ld.lld)" },
     @{ Id = "SoftwareFreedomConservancy.QEMU"; Nome = "QEMU" },
-    @{ Id = "Git.Git";                         Nome = "Git" }
+    @{ Id = "Git.Git";                         Nome = "Git" },
+    @{ Id = "Python.Python.3.13";              Nome = "Python 3" }
 )
 foreach ($p in $packages) {
     Write-Host ">> $($p.Nome)  [$($p.Id)]" -ForegroundColor Cyan
@@ -86,6 +87,12 @@ foreach ($t in "clang", "ld.lld", "qemu-system-x86_64") {
     $c = Get-Command $t -ErrorAction SilentlyContinue
     if ($c) { Write-Host ("ok    {0,-22} {1}" -f $t, $c.Source) -ForegroundColor Green }
     else    { Write-Host ("FALTA {0}" -f $t) -ForegroundColor Red }
+}
+try {
+    $pyc = & (Join-Path $Root "tools\python.ps1")
+    Write-Host ("ok    {0,-22} {1}" -f "python 3", ($pyc -join " ")) -ForegroundColor Green
+} catch {
+    Write-Host "FALTA python 3" -ForegroundColor Red
 }
 foreach ($f in "BOOTX64.EFI", "limine.h") {
     if (Test-Path (Join-Path $LimineDir $f)) { Write-Host ("ok    {0}" -f $f) -ForegroundColor Green }

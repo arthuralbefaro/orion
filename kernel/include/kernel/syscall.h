@@ -61,6 +61,7 @@
 #define SYS_RENAMEAT      264
 #define SYS_READLINKAT    267
 #define SYS_FACCESSAT     269
+#define SYS_FACCESSAT2    439
 #define SYS_DUP3          292
 #define SYS_PIPE2         293
 #define SYS_READV         19
@@ -293,6 +294,7 @@ struct linux_dirent64 {
 #define AT_SYMLINK_NOFOLLOW 0x100
 #define AT_REMOVEDIR        0x200
 #define AT_EMPTY_PATH       0x1000
+#define AT_EACCESS          0x200
 
 struct user_timespec {
     int64_t tv_sec;

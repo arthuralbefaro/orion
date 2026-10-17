@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+import hashlib
+import os
+import platform
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+DASH = ROOT / "third_party" / "dash"
+SRC = DASH / "src"
+VERSION = "0.5.13.5"
+
+CFILES = [
+    "alias.c", "arith_yacc.c", "arith_yylex.c", "cd.c", "error.c", "eval.c", "exec.c", "expand.c",
+    "histedit.c", "input.c", "jobs.c", "mail.c", "main.c", "memalloc.c", "miscbltin.c", "mystring.c",
+    "options.c", "parser.c", "redir.c", "show.c", "trap.c", "output.c", "bltin/printf.c", "system.c",
+    "bltin/test.c", "bltin/times.c", "var.c",
+]
+
+CONFIG = """#define _GNU_SOURCE 1
+#define HAVE_ALIAS_ATTRIBUTE 1
+#define HAVE_ALLOCA_H 1
+#define HAVE_PATHS_H 1
+#define HAVE_SYS_WAIT_H 1
+#define HAVE_DECL_ISBLANK 1
+#define HAVE_BSEARCH 1
+#define HAVE_FACCESSAT 1
+#define HAVE_GETPWNAM 1
+#define HAVE_GETRLIMIT 1
+#define HAVE_ISALPHA 1
+#define HAVE_KILLPG 1
+#define HAVE_MEMRCHR 1
+#define HAVE_MEMPCPY 1
+#define HAVE_STPCPY 1
+#define HAVE_STRCHRNUL 1
+#define HAVE_STRSIGNAL 1
+#define HAVE_STRTOD 1
+#define HAVE_STRTOIMAX 1
+#define HAVE_STRTOUMAX 1
+#define HAVE_SYSCONF 1
+#define HAVE_WAIT3 1
+#define HAVE_ST_MTIM 1
+#define HAVE_F_DUPFD_CLOEXEC 1
+#define HAVE_MEMFD_CREATE 1
+#define HAVE_TEE 1
+#define USE_MEMFD_CREATE 0
+#define USE_TEE 0
+#define SIZEOF_INTMAX_T 8
+#define SIZEOF_LONG_LONG_INT 8
+#define SMALL 1
+#define WITH_LINENO 1
+#define PACKAGE "dash"
+#define PACKAGE_NAME "dash"
+#define PACKAGE_STRING "dash VERSION_X"
+#define PACKAGE_TARNAME "dash"
+#define PACKAGE_VERSION "VERSION_X"
+#define VERSION "VERSION_X"
+#define stat64 stat
+#define fstat64 fstat
+#define lstat64 lstat
+#define open64 open
+#define readdir64 readdir
+#define dirent64 dirent
+#define glob64 glob
+#define glob64_t glob_t
+#define globfree64 globfree
+""".replace("VERSION_X", VERSION)
+
+TOKENS = [
+    ("TEOF", 1, "end of file"), ("TBLANK", 0, "blank"), ("TNL", 0, "newline"), ("TSEMI", 0, '";"'),
+    ("TBACKGND", 0, '"&"'), ("TAND", 0, '"&&"'), ("TOR", 0, '"||"'), ("TPIPE", 0, '"|"'), ("TLP", 0, '"("'),
+    ("TRP", 1, '")"'), ("TENDCASE", 1, '";;"'), ("TENDBQUOTE", 1, '"`"'), ("TREDIR", 0, "redirection"),
+    ("TWORD", 0, "word"), ("TNOT", 0, '"!"'), ("TCASE", 0, '"case"'), ("TDO", 1, '"do"'), ("TDONE", 1, '"done"'),
+    ("TELIF", 1, '"elif"'), ("TELSE", 1, '"else"'), ("TESAC", 1, '"esac"'), ("TFI", 1, '"fi"'),
+    ("TFOR", 0, '"for"'), ("TIF", 0, '"if"'), ("TIN", 0, '"in"'), ("TTHEN", 1, '"then"'),
+    ("TUNTIL", 0, '"until"'), ("TWHILE", 0, '"while"'), ("TBEGIN", 0, '"{"'), ("TEND", 1, '"}"'),
+]
+
+SIGNALS = {
+    1: "HUP", 2: "INT", 3: "QUIT", 4: "ILL", 5: "TRAP", 6: "ABRT", 7: "BUS", 8: "FPE", 9: "KILL", 10: "USR1",
+    11: "SEGV", 12: "USR2", 13: "PIPE", 14: "ALRM", 15: "TERM", 17: "CHLD", 18: "CONT", 19: "STOP", 20: "TSTP",
+    21: "TTIN", 22: "TTOU", 23: "URG", 24: "XCPU", 25: "XFSZ", 26: "VTALRM", 27: "PROF", 28: "WINCH", 29: "IO",
+    30: "PWR", 31: "SYS",
+}
+NSIG = 65
+SIGRTMIN = 35
+SIGRTMAX = 64
+
+
+def write_if_changed(path, text):
+    path = Path(path)
+    data = text.encode("utf-8")
+    if path.exists() and path.read_bytes() == data:
+        return
+    path.write_bytes(data)
+
+
+def gen_tokens(gen):
+    lines = [f"#define {name} {i}" for i, (name, _, _) in enumerate(TOKENS)]
+    write_if_changed(gen / "token.h", "\n".join(lines) + "\n")
+    out = ["", "static const char tokendlist[] = {"]
+    out += [f"\t{end}," for _, end, _ in TOKENS]
+    out += ["};", "", "static const char *const tokname[] = {"]
+    for _, _, text in TOKENS:
+        out.append('\t"' + text.replace('"', '\\"') + '",')
+    out += ["};", ""]
+    kwd = [i for i, t in enumerate(TOKENS) if t[0] == "TNOT"][0]
+    out.append(f"#define KWDOFFSET {kwd}")
+    out += ["", "static const char *const parsekwd[] = {"]
+    out += ['\t"' + text.replace('"', "") + '",' for _, _, text in TOKENS[kwd:]]
+    out += ["};"]
+    write_if_changed(gen / "token_vars.h", "\n".join(out) + "\n")
+
+
+def gen_builtins(gen, zig):
+    r = subprocess.run([zig, "cc", "-E", "-P", "-x", "c", "-target", "x86_64-linux-musl",
+                        "-include", str(gen / "config.h"), str(SRC / "builtins.def.in")],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit("dash_gen: falha no pre-processador:\n" + r.stderr)
+    defs = []
+    for line in r.stdout.splitlines():
+        t = line.strip()
+        if not t or t.startswith("#"):
+            continue
+        defs.append(t.split())
+    entries = []
+    for fields in defs:
+        func = fields[0]
+        i = 1
+        while i < len(fields):
+            if fields[i].startswith("-"):
+                entries.append((fields[i + 1], fields[i], func))
+                i += 2
+            else:
+                entries.append((fields[i], None, func))
+                i += 1
+    entries.sort(key=lambda e: (e[0].encode(), "\t".join(x for x in e if x).encode()))
+    c = ["/*", " * This file was generated by the mkbuiltins program.", " */", "",
+         '#include "shell.h"', '#include "builtins.h"', "", ""]
+    c += [f"int {fields[0]}(int, char **);" for fields in defs]
+    c += ["", "const struct builtincmd builtincmd[] = {"]
+    for name, opt, func in entries:
+        o = opt[1:] if opt else ""
+        cmd = "NULL" if "n" in o else func
+        mask = (1 if "s" in o else 0) + (2 if ("s" in o or "u" in o) else 0) + (4 if "a" in o else 0)
+        c.append(f'\t{{ "{name}", {cmd}, {mask} }},')
+    c.append("};")
+    write_if_changed(gen / "builtins.c", "\n".join(c) + "\n")
+    h = ["/*", " * This file was generated by the mkbuiltins program.", " */", ""]
+    seen = set()
+    first = []
+    for idx, (name, _, func) in enumerate(entries):
+        if func not in seen:
+            seen.add(func)
+            first.append((func, idx))
+    first.sort(key=lambda x: x[0].encode())
+    h += [f"#define {func.upper()} (builtincmd + {idx})" for func, idx in first]
+    h += ["", f"#define NUMBUILTINS {len(entries)}", "",
+          "#define BUILTIN_SPECIAL 0x1", "#define BUILTIN_REGULAR 0x2", "#define BUILTIN_ASSIGN 0x4", "",
+          "struct builtincmd {", "\tconst char *name;", "\tint (*builtin)(int, char **);", "\tunsigned flags;", "};",
+          "", "extern const struct builtincmd builtincmd[];"]
+    write_if_changed(gen / "builtins.h", "\n".join(h) + "\n")
+
+
+def gen_signames(gen):
+    names = ["EXIT"]
+    for s in range(1, NSIG):
+        if s in SIGNALS:
+            names.append(SIGNALS[s])
+        elif s == SIGRTMIN:
+            names.append("RTMIN")
+        elif s == SIGRTMAX:
+            names.append("RTMAX")
+        elif SIGRTMIN < s < SIGRTMAX:
+            mid = (SIGRTMIN + SIGRTMAX) // 2
+            names.append(f"RTMIN+{s - SIGRTMIN}" if s <= mid else f"RTMAX-{SIGRTMAX - s}")
+        else:
+            names.append(str(s))
+    out = ["#include <signal.h>", "", f"const char *const signal_names[{NSIG} + 1] = {{"]
+    out += [f'    "{n}",' for n in names]
+    out += ["    (char *)0x0,", "};"]
+    write_if_changed(gen / "signames.c", "\n".join(out) + "\n")
+
+
+def host_tool(zig, gen, name, extra=()):
+    exe = gen / (name + (".exe" if platform.system() == "Windows" else ""))
+    src = SRC / f"{name}.c"
+    if exe.exists():
+        exe.unlink()
+    r = subprocess.run([zig, "cc", "-O1", "-w", "-I", str(gen), "-I", str(SRC), *extra, "-o", str(exe), str(src)],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(f"dash_gen: falha compilando {name}:\n" + r.stderr)
+    return exe
+
+
+def run_tool(exe, args, gen, outputs):
+    for o in outputs:
+        if (gen / o).exists():
+            (gen / o).unlink()
+    r = subprocess.run([str(exe), *args], cwd=gen, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(f"dash_gen: {exe.name} falhou:\n" + r.stdout + r.stderr)
+    for o in outputs:
+        if o.endswith(".new"):
+            continue
+        if not (gen / o).exists():
+            raise SystemExit(f"dash_gen: {exe.name} nao gerou {o}")
+
+
+OUTPUTS = ["config.h", "token.h", "token_vars.h", "builtins.c", "builtins.h", "signames.c", "nodes.c", "nodes.h",
+           "syntax.c", "syntax.h", "init.c"]
+
+
+def digest(inputs):
+    h = hashlib.sha256()
+    h.update(VERSION.encode())
+    for p in inputs:
+        h.update(str(p.relative_to(ROOT)).encode())
+        h.update(p.read_bytes())
+    return h.hexdigest()
+
+
+def stamp_ok(gen, want):
+    stamp = gen / "stamp"
+    if not stamp.exists() or stamp.read_text().strip() != want:
+        return False
+    return all((gen / o).exists() for o in OUTPUTS)
+
+
+def main():
+    gen = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "out" / "gen" / "dash"
+    zig = sys.argv[2] if len(sys.argv) > 2 else str(ROOT / "third_party" / "zig" /
+                                                      ("zig.exe" if platform.system() == "Windows" else "zig"))
+    gen = gen.resolve()
+    zig = str(Path(zig).resolve()) if Path(zig).exists() else zig
+    gen.mkdir(parents=True, exist_ok=True)
+    inputs = [Path(__file__).resolve(), SRC / "builtins.def.in", SRC / "nodetypes", SRC / "nodes.c.pat",
+              SRC / "mkinit.c", SRC / "mknodes.c", SRC / "mksyntax.c"] + [SRC / f for f in CFILES]
+    inputs += sorted(SRC.glob("*.h")) + sorted((SRC / "bltin").glob("*.h"))
+    want = digest(inputs)
+    if stamp_ok(gen, want):
+        return
+    stamp = gen / "stamp"
+    if stamp.exists():
+        stamp.unlink()
+    write_if_changed(gen / "config.h", CONFIG)
+    gen_tokens(gen)
+    gen_builtins(gen, zig)
+    gen_signames(gen)
+    mknodes = host_tool(zig, gen, "mknodes")
+    run_tool(mknodes, [str(SRC / "nodetypes"), str(SRC / "nodes.c.pat")], gen, ["nodes.c", "nodes.h"])
+    mksyntax = host_tool(zig, gen, "mksyntax")
+    run_tool(mksyntax, [], gen, ["syntax.c", "syntax.h"])
+    mkinit = host_tool(zig, gen, "mkinit")
+    run_tool(mkinit, [str(SRC / f) for f in CFILES], gen, ["init.c", "init.c.new"])
+    missing = [o for o in OUTPUTS if not (gen / o).exists()]
+    if missing:
+        raise SystemExit("dash_gen: faltaram " + ", ".join(missing))
+    stamp.write_text(want)
+
+
+if __name__ == "__main__":
+    main()

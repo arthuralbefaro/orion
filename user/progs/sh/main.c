@@ -50,6 +50,7 @@ struct segment {
 
 static volatile int interrupted;
 static pid_t shell_pgid;
+static int interactive = 1;
 static int last_status;
 static struct job jobs[MAX_JOBS];
 static int next_job_id = 1;
@@ -62,6 +63,8 @@ static void on_sigint(int sig)
 
 static void set_foreground(pid_t pgid)
 {
+    if (!interactive)
+        return;
     int32_t g = (int32_t)pgid;
     ioctl(STDIN_FILENO, TIOCSPGRP, &g);
 }
@@ -562,8 +565,14 @@ static int run_pipeline(struct cmd *cmds, int n, int background, const char *tex
             break;
         }
         if (pid == 0) {
-            setpgid(0, pgid);
-            signal(SIGINT, SIG_DFL);
+            if (interactive)
+                setpgid(0, pgid);
+            if (!interactive && background) {
+                signal(SIGINT, SIG_IGN);
+                signal(SIGQUIT, SIG_IGN);
+            } else {
+                signal(SIGINT, SIG_DFL);
+            }
             if (prev_read >= 0)
                 move_fd(prev_read, STDIN_FILENO);
             else if (background && !cmds[i].in_file) {
@@ -586,7 +595,8 @@ static int run_pipeline(struct cmd *cmds, int n, int background, const char *tex
         }
         if (!pgid)
             pgid = pid;
-        setpgid(pid, pgid);
+        if (interactive)
+            setpgid(pid, pgid);
         pids[started++] = pid;
         if (prev_read >= 0)
             close(prev_read);
@@ -624,11 +634,13 @@ static int run_pipeline(struct cmd *cmds, int n, int background, const char *tex
 
     if (background) {
         j->id = next_job_id++;
-        printf("[%d] %d\n", j->id, pgid);
+        if (interactive)
+            printf("[%d] %d\n", j->id, pgid);
         return 0;
     }
     int st = job_wait(j, 1);
-    report(st);
+    if (interactive)
+        report(st);
     return exit_code(st);
 }
 
@@ -756,12 +768,24 @@ static void run_line(char *line)
 
 int main(int argc, char **argv)
 {
-    (void)argc;
-    (void)argv;
     setenv("PATH", "/bin", 0);
     setenv("HOME", "/", 0);
     setenv("SHELL", "/bin/sh", 0);
     char line[LINE_SIZE], cwd[256], prompt[300];
+
+    if (argc > 2 && strcmp(argv[1], "-c") == 0) {
+        interactive = 0;
+        if (strlen(argv[2]) >= sizeof(line)) {
+            fputs("sh: comando longo demais para -c\n", stderr);
+            return 2;
+        }
+        snprintf(line, sizeof(line), "%s", argv[2]);
+        for (char *q = line; *q; q++)
+            if (*q == '\n' || *q == '\r')
+                *q = ';';
+        run_line(line);
+        return last_status;
+    }
 
     setpgid(0, 0);
     shell_pgid = getpgrp();

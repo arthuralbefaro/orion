@@ -108,6 +108,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 292 | dup3 | completa | `O_CLOEXEC` |
 | 293 | pipe2 | completa | `O_CLOEXEC`, `O_NONBLOCK` |
 | 302 | prlimit64 | parcial | so para o proprio processo |
+| 439 | faccessat2 | parcial | `AT_EACCESS`, `AT_SYMLINK_NOFOLLOW`, `AT_EMPTY_PATH`; como o `faccessat`, so confere a existencia (permissoes na 4.1) |
 | 1000 | readdir | propria | uma entrada por chamada; a libc usa o `getdents64` |
 | 1001 | openpty | propria | |
 | 1002 | sysinfo | propria | sai na 2.3 (`/proc`) |

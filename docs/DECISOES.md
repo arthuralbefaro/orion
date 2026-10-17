@@ -982,3 +982,72 @@ Uma linha por decisao, na ordem em que foram tomadas.
     CPUs diferentes podiam dar um total menor que o anterior).
   - `SEGV_ACCERR` quando o endereco esta numa area mapeada (mesmo sem pagina
     ainda), `SEGV_MAPERR` so fora de qualquer area.
+
+## v2.0.0-a9 (dash, lua e sbase)
+
+- As fontes vem como estao (`third_party/dash` 0.5.13.5, `third_party/lua`
+  5.4.9, `third_party/sbase` no commit `c546c3a`), com versao e SHA-256 em
+  `third_party/LICENSES.md`. Nenhuma linha delas mudou.
+- O `build.txt` dos programas da musl ganhou quatro diretivas: `gen
+  <script>` (roda um gerador em Python antes de compilar, com a pasta
+  `out/gen/<programa>` e o caminho do Zig), `gensrc <padrao>` (fontes que o
+  gerador escreveu), `@gen`/`@root` dentro de `flag` (que agora aceita varias
+  opcoes por linha) e `link <nomes>` (copia o binario tambem com esses nomes
+  em `/bin`, se nenhum programa ja usa o nome). O `tools/musl_build.py` faz o
+  mesmo no Linux e no CI.
+- O `dash` precisa do que o `configure` e o `make` dele geram. O
+  `tools/dash_gen.py` escreve o `config.h` (para a musl estatica: `SMALL`,
+  sem libedit; `HAVE_WAIT3`, sem o qual o `jobs.c` nao compila; os nomes
+  `*64` como sinonimos, porque a musl 1.2.4+ so os expoe com
+  `_LARGEFILE64_SOURCE`), refaz em Python o que os scripts `mktokens` e
+  `mkbuiltins` fazem (o `builtins.def` passa pelo pre-processador do Zig, para
+  `JOBS` e `SMALL` valerem), escreve o `signames.c` com os sinais da musl
+  (o `mksignames` leria os sinais do Windows), e compila e roda no proprio
+  host os geradores em C do dash (`mknodes`, `mksyntax`, `mkinit`), que nao
+  dependem do sistema. Um carimbo em `out/gen/dash` evita refazer tudo a cada
+  build.
+- O `sbase` vira um multicall (`sbase-box`), como o `make sbase-box` faria:
+  o `tools/sbase_box.py` faz o que o script `mkbox` faz (renomeia o `main` de
+  cada utilitario e gera a tabela). Sao 97 utilitarios em 476 KB; FAT nao tem
+  links, entao os 29 mais uteis que nao colidem com programas da libc propria
+  sao copias do binario em `/bin` (`basename`, `cut`, `expr`, `find`, `od`,
+  `printf`, `seq`, `test`, `tr`, `xargs`...). Os que colidem (`cat`, `ls`,
+  `sort`...) ficam acessiveis por `sbase-box <nome>` ate a 1.12 aposentar os
+  proprios.
+- `/bin/sh` continua sendo o shell proprio (historico, edicao de linha e
+  jobs, que o dash sem libedit nao tem), mas ganhou `-c`: e o que o `system()`
+  e o `popen()` da musl chamam (o `os.execute` do lua). No modo `-c` ele nao
+  mexe em grupo de processos nem no terminal. O shell proprio nao trata aspas
+  simples, entao a regressao testa o dash entrando nele (`dash`, os comandos,
+  `exit 7`).
+- O `rev` do sbase nesse commit esta quebrado no proprio upstream: o commit
+  `3de61ef` ("rev, tail: replace hardcoded code by UTF8_POINT macro") inverteu
+  a condicao, e o `rev` devolve a linha sem inverter. Como `third_party` fica
+  como veio, o `rev` nao vai para `/bin` (continua em `sbase-box rev`); vale
+  avisar o upstream ou subir o commit quando houver correcao.
+- `faccessat2` (439) virou syscall de verdade: a musl a tenta antes do
+  `faccessat` em `access`/`test -x`.
+- Observado e deixado para o escalonador (fase 2/8): uma CPU ociosa so acorda
+  no proximo tick quando entra trabalho na fila (nao ha IPI de "acorde"). No
+  QEMU TCG isso atrasa a primeira execucao de um filho em uns 15 ms, e um
+  `sleep 30 & kill $!` digitado na mesma linha do dash interativo perde a
+  corrida (o filho ainda ignora `SIGTERM`, herdado do shell interativo, e o
+  sinal ignorado e descartado, como no Linux). No Linux o filho quase sempre
+  ganha porque comeca na hora em outra CPU.
+- Depois de uma revisao, antes do commit:
+  - O carimbo do `dash_gen.py` e um SHA-256 do conteudo de todas as
+    entradas (fontes, cabecalhos e o proprio script), nao das datas: um
+    tarball novo vem com datas antigas e passaria despercebido. Com o carimbo
+    invalido, os geradores em C sao recompilados e todas as saidas conferidas.
+  - O `sbase_box.py` apaga fontes geradas que nao pertencem mais a lista.
+  - O `musl_build.py` sempre recopia os nomes de `link` (antes so se faltassem,
+    e ficavam com o binario velho).
+  - O Python e procurado por `tools/python.ps1`: `py -3`, depois `python3` e
+    `python`, ignorando o atalho da Microsoft Store e conferindo a versao; o
+    `setup.ps1` instala e confere o Python 3.
+  - `sh -c`: comando longo demais da erro em vez de ser cortado; quebras de
+    linha separam comandos; em modo `-c` nao imprime `[1] pid` nem "saiu com"
+    e os comandos em segundo plano ignoram `SIGINT`/`SIGQUIT`, como o POSIX
+    pede sem controle de jobs.
+  - `faccessat2` com `AT_EMPTY_PATH` e `AT_FDCWD` confere o diretorio atual em
+    vez de dar `EBADF`.

@@ -136,9 +136,12 @@ if (Test-Path $MuslDir) {
     $Zig = & (Join-Path $Root "tools\zig.ps1")
     $MuslFlags = @("cc", "-target", "x86_64-linux-musl", "-static", "-O2", "-s", "-Wall", "-Wextra",
                    "-Wno-unused-parameter")
+    $muslLinks = @{}
+    $PyCmd = $null
     foreach ($prog in Get-ChildItem $MuslDir -Directory) {
         $mout = Join-Path $OutDir "$($prog.Name).elf"
         $spec = Join-Path $prog.FullName "build.txt"
+        $genDir = Join-Path $OutDir "gen\$($prog.Name)"
         $msrcs = @()
         $mextra = @()
         $mdeps = @()
@@ -146,22 +149,42 @@ if (Test-Path $MuslDir) {
             foreach ($line in Get-Content $spec) {
                 $t = $line.Trim()
                 if (-not $t) { continue }
-                if ($t.StartsWith("src ")) {
+                if ($t.StartsWith("gen ")) {
+                    $script = Join-Path $Root $t.Substring(4).Trim()
+                    if (-not $PyCmd) { $PyCmd = & (Join-Path $Root "tools\python.ps1") }
+                    $pyArgs = @($PyCmd | Select-Object -Skip 1)
+                    New-Item -ItemType Directory -Force -Path $genDir | Out-Null
+                    & $PyCmd[0] @pyArgs $script $genDir $Zig
+                    if ($LASTEXITCODE -ne 0) { throw "Gerador $script de $($prog.Name) falhou" }
+                    $mdeps += Get-Item $script
+                } elseif ($t.StartsWith("gensrc ")) {
+                    $pattern = Join-Path $genDir $t.Substring(7).Trim()
+                    $found = @(Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue)
+                    if ($found.Count -eq 0) { throw "build.txt de $($prog.Name): nada gerado em $pattern" }
+                    $msrcs += $found
+                } elseif ($t.StartsWith("src ")) {
                     $pattern = Join-Path $prog.FullName $t.Substring(4).Trim()
                     $found = @(Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue)
                     if ($found.Count -eq 0) { throw "build.txt de $($prog.Name): nada em $pattern" }
                     $msrcs += $found
                 } elseif ($t.StartsWith("flag ")) {
-                    $f = $t.Substring(5).Trim()
-                    if ($f.StartsWith("-I")) { $f = "-I" + (Join-Path $prog.FullName $f.Substring(2)) }
-                    $mextra += $f
+                    foreach ($f in ($t.Substring(5).Trim() -split '\s+')) {
+                        $f = $f.Replace("@gen", $genDir).Replace("@root", $Root)
+                        if ($f.StartsWith("-I") -and -not [System.IO.Path]::IsPathRooted($f.Substring(2))) {
+                            $f = "-I" + (Join-Path $prog.FullName $f.Substring(2))
+                        }
+                        $mextra += $f
+                    }
                 } elseif ($t.StartsWith("dep ")) {
                     $mdeps += @(Get-ChildItem -Path (Join-Path $prog.FullName $t.Substring(4).Trim()) -File -Recurse -ErrorAction SilentlyContinue)
+                } elseif ($t.StartsWith("link ")) {
+                    foreach ($n in ($t.Substring(5).Trim() -split '\s+')) { $muslLinks[$n] = $prog.Name }
                 }
             }
         }
         $msrcs += @(Get-ChildItem $prog.FullName -Filter *.c -File)
         $mdeps += @(Get-ChildItem $prog.FullName -Filter *.h -File)
+        if (Test-Path $genDir) { $mdeps += @(Get-ChildItem $genDir -Filter *.h -File) }
         $mdeps += Get-Item $spec -ErrorAction SilentlyContinue
         $newest = ($msrcs + $mdeps | Where-Object { $_ } | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
         if (-not (Test-Path $mout) -or (Get-Item $mout).LastWriteTime -lt $newest) {
@@ -170,6 +193,9 @@ if (Test-Path $MuslDir) {
             if ($LASTEXITCODE -ne 0) { throw "Erro compilando $($prog.Name) contra a musl" }
         }
         $userBins[$prog.Name] = $mout
+    }
+    foreach ($n in $muslLinks.Keys) {
+        if (-not $userBins.ContainsKey($n)) { $userBins[$n] = $userBins[$muslLinks[$n]] }
     }
 }
 

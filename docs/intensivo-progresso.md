@@ -16,7 +16,7 @@ ou sinais), 5 vezes seguidas:
 
     .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
 
-Proxima etapa: 1.9.
+Proxima etapa: 1.10.
 
 ## Checklist
 
@@ -37,7 +37,7 @@ Proxima etapa: 1.9.
 | 1.6 | Threads (clone) | [x] | 03:10 | 03:50 | (ver diario) |
 | 1.7 | futex | [x] | 03:50 | 04:28 | (ver diario) |
 | 1.8 | Tempo e sinais completos | [x] | 04:28 | 05:37 | (ver diario) |
-| 1.9 | dash, lua, sbase | [ ] | | | |
+| 1.9 | dash, lua, sbase | [x] | 05:37 | 06:28 | (ver diario) |
 | 1.10 | Doom | [ ] | | | |
 | 1.11 | tcc dentro do Orion | [ ] | | | |
 | 1.12 | Programas na musl, aposentar a libc propria | [ ] | | | |
@@ -416,3 +416,28 @@ atual. Tudo corrigido.
 Regressao 179 -> 196, estresse 5x verde.
 Pendente: um NMI na janela antes do `swapgs` (fase 8); `ITIMER_VIRTUAL` e
 `ITIMER_PROF`; relogios de CPU no `clock_nanosleep`.
+
+#### 1.9 dash, lua, sbase - 05:37 as 06:28 - FEITO
+Tres programas de verdade, compilados para Linux e sem mudar uma linha deles:
+`dash` 0.5.13.5, `lua` 5.4.9 e o `sbase` (commit `c546c3a`, 97 utilitarios
+num multicall `sbase-box`; 29 deles copiados em `/bin`). Fontes conferidas por
+SHA-256 (e, no sbase, pelo hash do commit e da arvore) em `third_party`.
+O `build.txt` ganhou `gen`, `gensrc`, `@gen`/`@root` e `link`; os arquivos que
+o `configure`/`make` deles geraria saem de `tools/dash_gen.py` (`config.h` para
+a musl, tabelas de tokens e de builtins, nomes dos sinais, e os geradores em C
+do proprio dash rodando no host) e `tools/sbase_box.py`. O build passou a
+precisar de Python 3 (`tools/python.ps1` acha; `setup.ps1` instala).
+Kernel: `faccessat2`. O `sh` proprio ganhou `-c` (o `system()`/`popen()` da
+musl, usados pelo `os.execute` do lua, chamam `/bin/sh -c`). Criterios do
+plano: `for i in 1 2 3` no dash e `lua -e 'print(2^10)'` passam; a regressao
+entra no dash e testa laco, substituicao de comando, aritmetica, funcao,
+`case`, `while read`, `test -x`, `os.execute` do lua, `seq`/`paste`/`tr`/`cut`/
+`find` do sbase e o codigo de saida. A pesquisa das fontes rodou num subagente
+em paralelo. Uma revisao achou 12 problemas (carimbo do gerador por data,
+links nao recopiados, `sh -c` cortando comandos longos...), corrigidos. Achado
+no caminho: o `rev` do sbase nesse commit esta quebrado no upstream (fica fora
+de `/bin`).
+Regressao 196 -> 207, estresse 5x verde.
+Pendente: o escalonador nao acorda CPU ociosa quando entra trabalho na fila
+(um filho novo espera o proximo tick; no TCG uns 15 ms); o `dash` fica sem
+edicao de linha (`SMALL`, sem libedit).

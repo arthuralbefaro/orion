@@ -586,12 +586,32 @@ static long sys_newfstatat(int dirfd, const char *upath, struct user_stat *ust, 
 
 static long sys_faccessat(int dirfd, const char *upath, int mode)
 {
-    (void)mode;
+    if (mode & ~7)
+        return -EINVAL;
     char full[PROCESS_CWD_MAX];
     long r = resolve_at(dirfd, upath, full, sizeof(full));
     if (r < 0)
         return r;
     return path_lookup(full, NULL, NULL) ? 0 : -ENOENT;
+}
+
+static long sys_faccessat2(int dirfd, const char *upath, int mode, int flags)
+{
+    if (flags & ~(AT_EACCESS | AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))
+        return -EINVAL;
+    if (flags & AT_EMPTY_PATH) {
+        char c;
+        if (copy_from_user(&c, upath, 1) < 0)
+            return -EFAULT;
+        if (c == 0) {
+            if (mode & ~7)
+                return -EINVAL;
+            if (dirfd == AT_FDCWD)
+                return 0;
+            return process_fd_pin(dirfd) ? 0 : -EBADF;
+        }
+    }
+    return sys_faccessat(dirfd, upath, mode);
 }
 
 static long sys_readlinkat(int dirfd, const char *upath, char *ubuf, uint64_t size)
@@ -1317,6 +1337,7 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_RENAMEAT:    ret = sys_renameat((int)f->rdi, (const char *)f->rsi, (int)f->rdx, (const char *)f->r10); break;
     case SYS_READLINKAT:  ret = sys_readlinkat((int)f->rdi, (const char *)f->rsi, (char *)f->rdx, f->r10); break;
     case SYS_FACCESSAT:   ret = sys_faccessat((int)f->rdi, (const char *)f->rsi, (int)f->rdx); break;
+    case SYS_FACCESSAT2:  ret = sys_faccessat2((int)f->rdi, (const char *)f->rsi, (int)f->rdx, (int)f->r10); break;
     case SYS_DUP3:        ret = sys_dup3((int)f->rdi, (int)f->rsi, (int)f->rdx); break;
     case SYS_PIPE2:       ret = sys_pipe2((int *)f->rdi, (int)f->rsi); break;
     case SYS_READV:       ret = sys_readv((int)f->rdi, (const struct user_iovec *)f->rsi, (int)f->rdx); break;

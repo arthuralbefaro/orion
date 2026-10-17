@@ -76,6 +76,16 @@ if ($runAll -or $OnlyA) {
         "cmd:sctest", "until:30:sctest: fim", "cmd:filetest", "until:60:filetest: fim",
         "cmd:mhello", "until:30:mhello: fim",
         "cmd:mthreads", "until:120:mthreads: fim", "cmd:mfutex", "until:240:mfutex: fim",
+        "cmd:dash", "wait:2",
+        "cmd:for i in 1 2 3; do echo laco`$i; done", "wait:2",
+        "cmd:x=`$(echo oi); echo sub[`$x] conta=`$((6*7))", "wait:2",
+        "cmd:f() { echo arg=`$1; }; f um; case abc in a*) echo casou;; esac", "wait:2",
+        "cmd:printf 'x\ny\n' | while read l; do echo linha=`$l; done", "wait:2",
+        "cmd:lua -e 'print(2^10)'", "wait:3",
+        "cmd:lua -e 'print(os.execute([[echo dentro-do-lua]]))'", "wait:3",
+        "cmd:seq 1 10 | paste -s -d + -; echo orion | tr a-z A-Z | cut -c2-; find /bin -name 'lu*'", "wait:4",
+        "cmd:test -x /bin/dash && echo dash-executavel", "wait:2",
+        "cmd:exit 7", "wait:2",
         "cmd:sleep 100", "wait:2", "key:03", "wait:2",
         "cmd:hello um dois", "wait:1",
         "cmd:date", "wait:1",
@@ -211,6 +221,17 @@ if ($runAll -or $OnlyA) {
     Expect $a "FUTEX_CMP_REQUEUE acorda 1 e move 3 +ok" "mfutex: FUTEX_CMP_REQUEUE"
     Expect $a "mutex compartilhado entre dois processos \(MAP_SHARED\) +ok" "mfutex: futex compartilhado entre processos"
     Expect $a "mfutex: fim, TUDO OK" "mfutex: futex completo"
+    Expect $a "laco1\s+laco2\s+laco3" "dash: for i in 1 2 3"
+    Expect $a "sub\[oi\] conta=42" "dash: substituicao de comando e aritmetica"
+    Expect $a "arg=um\s+casou" "dash: funcao e case"
+    Expect $a "linha=x\s+linha=y" "dash: pipe com while read"
+    Expect $a "(?m)^1024\.0" "lua -e 'print(2^10)'"
+    Expect $a "dentro-do-lua\s+true\s+exit\s+0" "lua: os.execute pelo /bin/sh -c (posix_spawn)"
+    Expect $a "1\+2\+3\+4\+5\+6\+7\+8\+9\+10" "sbase: seq e paste"
+    Expect $a "(?m)^RION" "sbase: tr e cut"
+    Expect $a "/bin/lua" "sbase: find"
+    Expect $a "dash-executavel" "dash: test -x (faccessat2)"
+    Expect $a "saiu com 7" "dash: exit 7 volta para o sh com o codigo"
     Expect $a "futex: 0 thread\(s\) esperando" "nenhuma thread esquecida na fila do futex"
     ExpectNot $a "syscall \d+ desconhecida" "nenhuma syscall desconhecida na sequencia A"
     Expect $a "flag NT ligada dentro do handler\s+ok" "flag NT do usuario nao derruba o iretq do rt_sigreturn"

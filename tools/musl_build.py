@@ -23,28 +23,46 @@ def find_zig():
     raise SystemExit("zig nao encontrado: rode setup.ps1 (Windows) ou ponha o Zig 0.16.0 em third_party/zig")
 
 
-def program_spec(prog):
-    srcs, extra, deps = [], [], []
+def program_spec(prog, zig):
+    srcs, extra, deps, links = [], [], [], []
+    gen = ROOT / "out" / "gen" / prog.name
     spec = prog / "build.txt"
     if spec.exists():
         deps.append(spec)
         for line in spec.read_text(encoding="utf-8").splitlines():
             t = line.strip()
-            if t.startswith("src "):
+            if t.startswith("gen "):
+                script = ROOT / t[4:].strip()
+                gen.mkdir(parents=True, exist_ok=True)
+                r = subprocess.run([sys.executable, str(script), str(gen), zig], cwd=ROOT)
+                if r.returncode != 0:
+                    raise SystemExit(f"gerador {script} de {prog.name} falhou")
+                deps.append(script)
+            elif t.startswith("gensrc "):
+                found = sorted(glob.glob(str(gen / t[7:].strip())))
+                if not found:
+                    raise SystemExit(f"build.txt de {prog.name}: nada gerado em {t[7:].strip()}")
+                srcs += [Path(f) for f in found]
+            elif t.startswith("src "):
                 found = sorted(glob.glob(str(prog / t[4:].strip())))
                 if not found:
                     raise SystemExit(f"build.txt de {prog.name}: nada em {t[4:].strip()}")
                 srcs += [Path(f) for f in found]
             elif t.startswith("flag "):
-                f = t[5:].strip()
-                if f.startswith("-I"):
-                    f = "-I" + str(prog / f[2:])
-                extra.append(f)
+                for f in t[5:].split():
+                    f = f.replace("@gen", str(gen)).replace("@root", str(ROOT))
+                    if f.startswith("-I") and not os.path.isabs(f[2:]):
+                        f = "-I" + str(prog / f[2:])
+                    extra.append(f)
             elif t.startswith("dep "):
                 deps += [Path(f) for f in glob.glob(str(prog / t[4:].strip()), recursive=True)]
+            elif t.startswith("link "):
+                links += t[5:].split()
     srcs += sorted(prog.glob("*.c"))
     deps += sorted(prog.glob("*.h"))
-    return srcs, extra, deps
+    if gen.exists():
+        deps += sorted(gen.glob("*.h"))
+    return srcs, extra, deps, links
 
 
 def build_all(quiet=False):
@@ -56,8 +74,11 @@ def build_all(quiet=False):
     bindir = out / "esp" / "bin"
     bindir.mkdir(parents=True, exist_ok=True)
     built = []
+    links = {}
     for prog in sorted(p for p in musl.iterdir() if p.is_dir()):
-        srcs, extra, deps = program_spec(prog)
+        srcs, extra, deps, plinks = program_spec(prog, zig)
+        for n in plinks:
+            links[n] = prog.name
         elf = out / f"{prog.name}.elf"
         newest = max((f.stat().st_mtime for f in srcs + deps if f.exists()), default=0)
         if not elf.exists() or elf.stat().st_mtime < newest:
@@ -68,6 +89,12 @@ def build_all(quiet=False):
                 raise SystemExit(f"erro compilando {prog.name} contra a musl")
         shutil.copyfile(elf, bindir / prog.name)
         built.append(prog.name)
+    progs = ROOT / "user" / "progs"
+    taken = {p.name for p in progs.iterdir() if p.is_dir()} if progs.exists() else set()
+    taken |= set(built)
+    for n, owner in links.items():
+        if n not in taken:
+            shutil.copyfile(out / f"{owner}.elf", bindir / n)
     return built
 
 
