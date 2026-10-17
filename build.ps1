@@ -131,6 +131,48 @@ foreach ($prog in Get-ChildItem (Join-Path $UserDir "progs") -Directory) {
     $userBins[$prog.Name] = $uelf
 }
 
+$MuslDir = Join-Path $UserDir "musl"
+if (Test-Path $MuslDir) {
+    $Zig = & (Join-Path $Root "tools\zig.ps1")
+    $MuslFlags = @("cc", "-target", "x86_64-linux-musl", "-static", "-O2", "-s", "-Wall", "-Wextra",
+                   "-Wno-unused-parameter")
+    foreach ($prog in Get-ChildItem $MuslDir -Directory) {
+        $mout = Join-Path $OutDir "$($prog.Name).elf"
+        $spec = Join-Path $prog.FullName "build.txt"
+        $msrcs = @()
+        $mextra = @()
+        $mdeps = @()
+        if (Test-Path $spec) {
+            foreach ($line in Get-Content $spec) {
+                $t = $line.Trim()
+                if (-not $t) { continue }
+                if ($t.StartsWith("src ")) {
+                    $pattern = Join-Path $prog.FullName $t.Substring(4).Trim()
+                    $found = @(Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue)
+                    if ($found.Count -eq 0) { throw "build.txt de $($prog.Name): nada em $pattern" }
+                    $msrcs += $found
+                } elseif ($t.StartsWith("flag ")) {
+                    $f = $t.Substring(5).Trim()
+                    if ($f.StartsWith("-I")) { $f = "-I" + (Join-Path $prog.FullName $f.Substring(2)) }
+                    $mextra += $f
+                } elseif ($t.StartsWith("dep ")) {
+                    $mdeps += @(Get-ChildItem -Path (Join-Path $prog.FullName $t.Substring(4).Trim()) -File -Recurse -ErrorAction SilentlyContinue)
+                }
+            }
+        }
+        $msrcs += @(Get-ChildItem $prog.FullName -Filter *.c -File)
+        $mdeps += @(Get-ChildItem $prog.FullName -Filter *.h -File)
+        $mdeps += Get-Item $spec -ErrorAction SilentlyContinue
+        $newest = ($msrcs + $mdeps | Where-Object { $_ } | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+        if (-not (Test-Path $mout) -or (Get-Item $mout).LastWriteTime -lt $newest) {
+            Write-Host "  ZIG  $($prog.Name) ($($msrcs.Count) arquivo(s))"
+            & $Zig @MuslFlags @mextra -o $mout @($msrcs | ForEach-Object { $_.FullName })
+            if ($LASTEXITCODE -ne 0) { throw "Erro compilando $($prog.Name) contra a musl" }
+        }
+        $userBins[$prog.Name] = $mout
+    }
+}
+
 New-Item -ItemType Directory -Force -Path (Join-Path $EspDir "EFI\BOOT"), (Join-Path $EspDir "boot\limine"), (Join-Path $EspDir "bin") | Out-Null
 Copy-Item (Join-Path $LimineDir "BOOTX64.EFI") (Join-Path $EspDir "EFI\BOOT\BOOTX64.EFI") -Force
 Copy-Item $KernelElf (Join-Path $EspDir "boot\$Kernel.elf") -Force

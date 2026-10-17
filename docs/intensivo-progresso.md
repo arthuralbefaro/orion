@@ -16,7 +16,7 @@ ou sinais), 5 vezes seguidas:
 
     .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
 
-Proxima etapa: 1.5.
+Proxima etapa: 1.6.
 
 ## Checklist
 
@@ -33,7 +33,7 @@ Proxima etapa: 1.5.
 | 1.2 | Syscalls de partida da musl | [x] | 01:29 | 01:51 | (ver diario) |
 | 1.3 | Arquivos no formato do Linux | [x] | 01:51 | 02:13 | (ver diario) |
 | 1.4 | Memoria do jeito Linux (VMAs, mmap) | [x] | 02:13 | 02:51 | (ver diario) |
-| 1.5 | Programas contra a musl com `zig cc` (plano B: musl pelo build.ps1) | [ ] | | | |
+| 1.5 | Programas contra a musl com `zig cc` (plano B: musl pelo build.ps1) | [x] | 02:52 | 03:10 | (ver diario) |
 | 1.6 | Threads (clone) | [ ] | | | |
 | 1.7 | futex | [ ] | | | |
 | 1.8 | Tempo e sinais completos | [ ] | | | |
@@ -315,3 +315,18 @@ Regressao 139 -> 149, estresse 5x verde.
 Fica para depois: sem memoria na falta de pagina o kernel ainda entra em
 panico ao criar tabela de paginas (etapa 8.4); falta de arquivo com
 interrupcoes desligadas e recusada (so acontece empurrando quadro de sinal).
+
+#### 1.5 Programas contra a musl com o Zig - 02:52 as 03:10 - FEITO
+Plano A do plano (o `zig cc`) funcionou; o plano B nao foi preciso. Zig 0.16.0
+baixado pelo `tools/zig.ps1` (zip oficial, SHA-256 conferido) para
+`third_party/zig`, fora do git; `build.ps1` compila `user/musl/<nome>/` com
+`zig cc -target x86_64-linux-musl -static -O2 -s`; `check.ps1` confere esses
+programas com o proprio Zig; `tools/musl_build.py` faz o mesmo no Linux/CI e o
+workflow baixa o Zig para Linux. Programa novo `mhello` (contra a musl, 13
+verificacoes: TLS com `__thread`, `errno`, `getenv`, `printf` com ponto
+flutuante, `malloc` pequeno e grande, `qsort`, `stat`, `opendir`/`readdir`,
+`uname`, `time`). Rodou no Orion de primeira, sem mudar o kernel - as etapas
+1.1 a 1.4 cobriram a partida da musl. A unica syscall que faltou foi
+`sched_getaffinity`, agora implementada; a sequencia A ganhou uma verificacao
+de que nenhuma syscall desconhecida aparece. `third_party/LICENSES.md` criado.
+Regressao 149 -> 154.

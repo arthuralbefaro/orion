@@ -78,6 +78,8 @@ if (Test-Path $hdr) {
 }
 Set-Content -Path (Join-Path $LimineDir "VERSION") -Value $LimineVersion
 
+& (Join-Path $Root "tools\zig.ps1") | Out-Null
+
 # ---------- Verificacao ----------
 Write-Host ""
 foreach ($t in "clang", "ld.lld", "qemu-system-x86_64") {

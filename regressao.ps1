@@ -74,6 +74,7 @@ if ($runAll -or $OnlyA) {
         "cmd:badptr", "until:40:badptr: fim",
         "cmd:fputest", "until:60:fputest: fim", "cmd:auxtest", "until:30:auxtest: fim",
         "cmd:sctest", "until:30:sctest: fim", "cmd:filetest", "until:60:filetest: fim",
+        "cmd:mhello", "until:30:mhello: fim",
         "cmd:sleep 100", "wait:2", "key:03", "wait:2",
         "cmd:hello um dois", "wait:1",
         "cmd:date", "wait:1",
@@ -164,6 +165,11 @@ if ($runAll -or $OnlyA) {
     Expect $a "openat relativo a um diretorio\s+ok" "openat relativo a um descritor de diretorio"
     Expect $a "exec fecha FD_CLOEXEC e mantem os outros\s+ok" "O_CLOEXEC/FD_CLOEXEC fechados no exec"
     Expect $a "filetest: fim, TUDO OK" "filetest: arquivos no formato do Linux"
+    Expect $a "mhello: programa compilado contra a musl" "programa da musl (zig cc) roda no Orion"
+    Expect $a "variavel __thread \(TLS\)\s+ok" "musl: TLS"
+    Expect $a "printf com ponto flutuante\s+ok" "musl: printf com ponto flutuante (SSE)"
+    Expect $a "mhello: fim, TUDO OK" "mhello: partida da musl completa"
+    ExpectNot $a "syscall \d+ desconhecida" "nenhuma syscall desconhecida na sequencia A"
     Expect $a "flag NT ligada dentro do handler\s+ok" "flag NT do usuario nao derruba o iretq do rt_sigreturn"
     Expect $a "Copias de usuario: [1-9]\d* falta\(s\) recuperada\(s\)" "tabela de excecoes recuperou as faltas"
     Expect $a "morto por sinal 2" "Ctrl\+C matou o sleep com SIGINT"

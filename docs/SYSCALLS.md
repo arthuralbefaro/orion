@@ -70,6 +70,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 160 | setrlimit | completa | subir o maximo da `EPERM` |
 | 162 | sync | completa | |
 | 186 | gettid | parcial | igual ao pid enquanto cada processo tem uma thread so (1.6) |
+| 204 | sched_getaffinity | completa | mascara com todas as CPUs online (a musl usa para contar CPUs) |
 | 218 | set_tid_address | parcial | guarda o endereco e zera a palavra na saida; o `futex` wake chega na 1.7 |
 | 228 | clock_gettime | parcial | `CLOCK_REALTIME` e `CLOCK_MONOTONIC` (o resto na 1.8) |
 | 231 | exit_group | completa | igual ao `exit` enquanto ha uma thread por processo |

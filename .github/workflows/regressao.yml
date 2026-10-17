@@ -17,8 +17,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang lld llvm make qemu-system-x86 ovmf python3-pil
 
+      - name: Zig 0.16.0 (musl)
+        run: |
+          curl -sSfL -o zig.tar.xz https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
+          echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  zig.tar.xz" | sha256sum -c
+          mkdir -p third_party/zig
+          tar -xJf zig.tar.xz -C third_party/zig --strip-components=1
+
       - name: Build
-        run: make -j"$(nproc)"
+        run: make -j"$(nproc)" && python3 tools/musl_build.py
 
       - name: Regressao A a E
         run: python3 tools/regress.py ABCDE

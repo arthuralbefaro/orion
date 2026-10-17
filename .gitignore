@@ -3,3 +3,4 @@ out/
 *.o
 *.iso
 *.log
+third_party/zig/

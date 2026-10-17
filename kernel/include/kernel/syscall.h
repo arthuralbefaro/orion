@@ -74,6 +74,7 @@
 #define SYS_GETTID        186
 #define SYS_SET_TID_ADDRESS 218
 #define SYS_EXIT_GROUP    231
+#define SYS_SCHED_GETAFFINITY 204
 #define SYS_SETRLIMIT     160
 #define SYS_PRLIMIT64     302
 #define SYS_READDIR       1000

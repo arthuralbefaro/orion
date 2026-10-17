@@ -266,6 +266,9 @@ def build(gui=False):
     else:
         r = subprocess.run(["make", "-j", str(os.cpu_count() or 2)], cwd=ROOT, stdout=subprocess.DEVNULL)
         if r.returncode == 0:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import musl_build
+            musl_build.build_all(quiet=True)
             write_autostart(gui)
     if r.returncode != 0:
         raise SystemExit("build falhou")

@@ -685,3 +685,27 @@ Uma linha por decisao, na ordem em que foram tomadas.
     RIP em `0x7ffffffff000+` voltaria para um endereco nao canonico.
   - O handler de excecao le o CR2 uma vez so, no comeco: com as interrupcoes
     religadas, outra falta (de outra thread) pode trocar o CR2 no meio.
+
+## v2.0.0-a5 (programas contra a musl com o Zig)
+
+- A musl chega pelo `zig cc -target x86_64-linux-musl -static`, como o plano
+  manda: o Zig traz a musl e os cabecalhos do Linux prontos, entao nao ha
+  configure, `alltypes.h` gerado nem WSL. Versao fixa 0.16.0 (abril de 2026),
+  baixada do site oficial pelo `tools/zig.ps1` com o SHA-256 conferido, em
+  `third_party/zig` (fora do git: sao ~100 MB). O `setup.ps1` chama o mesmo
+  script, e o `build.ps1` o chama sozinho se o Zig faltar.
+- Programas da musl moram em `user/musl/<nome>/` e viram `/bin/<nome>`. Um
+  `build.txt` opcional lista fontes de fora (`src`), opcoes (`flag`) e
+  dependencias para a recompilacao incremental (`dep`); e o que vai trazer o
+  `dash` e o `lua` na 1.9 sem um Makefile por programa.
+- O Zig gera `ET_EXEC` estatico em `0x1000000` com os cabecalhos dentro do
+  primeiro segmento; o carregador do Orion aceitou sem mudanca. `-s` tira a
+  informacao de depuracao (o `hello` cai de 1,3 MiB para 18 KiB).
+- O `check.ps1` confere os programas da musl com o proprio `zig cc` (que nao
+  aceita `-fsyntax-only`: compila para um objeto temporario).
+- No Linux e no CI, `tools/musl_build.py` faz o mesmo que o `build.ps1` (o
+  `Makefile` continua so com o kernel e a libc propria); o workflow baixa o
+  Zig 0.16.0 para Linux com o SHA-256 conferido.
+- `sched_getaffinity` virou syscall de verdade: a musl a usa para contar CPUs.
+- A sequencia A ganhou uma verificacao negativa: nenhuma syscall desconhecida
+  durante a sequencia inteira.

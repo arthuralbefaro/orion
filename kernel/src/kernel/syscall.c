@@ -1103,6 +1103,19 @@ static long sys_uname(struct user_utsname *uout)
     return copy_to_user(uout, &u, sizeof(u));
 }
 
+static long sys_sched_getaffinity(int pid, uint64_t size, void *umask)
+{
+    if (pid != 0 && pid != (int)process_current()->pid)
+        return -ESRCH;
+    if (size < sizeof(uint64_t))
+        return -EINVAL;
+    uint32_t n = smp_cpu_count();
+    uint64_t mask = n >= 64 ? ~0ull : ((1ull << n) - 1);
+    if (copy_to_user(umask, &mask, sizeof(mask)) < 0)
+        return -EFAULT;
+    return sizeof(mask);
+}
+
 #define SS_DISABLE 2
 
 struct user_stack_t {
@@ -1192,6 +1205,7 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_GETTID:      ret = process_current()->pid; break;
     case SYS_SET_TID_ADDRESS: thread_current()->clear_child_tid = f->rdi; ret = process_current()->pid; break;
     case SYS_EXIT_GROUP:  process_exit((int)f->rdi);
+    case SYS_SCHED_GETAFFINITY: ret = sys_sched_getaffinity((int)f->rdi, f->rsi, (void *)f->rdx); break;
     case SYS_SIGALTSTACK: ret = sys_sigaltstack((const struct user_stack_t *)f->rdi, (struct user_stack_t *)f->rsi); break;
     case SYS_RT_SIGRETURN: ret = signal_sigreturn(f); full_restore = true; break;
     case SYS_ALARM:       ret = process_alarm(f->rdi); break;
