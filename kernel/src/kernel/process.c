@@ -243,6 +243,7 @@ static void process_free(struct process *p)
         return;
     kfree(p->sig_handlers);
     kfree(p->fds);
+    kfree(p->fd_flags);
     kfree(p);
 }
 
@@ -263,8 +264,9 @@ static struct process *process_alloc(const char *name)
     if (!p)
         return NULL;
     p->fds = kzalloc(PROCESS_FD_INITIAL * sizeof(struct file *));
+    p->fd_flags = kzalloc(PROCESS_FD_INITIAL);
     p->sig_handlers = kzalloc(SIG_TABLE_SIZE);
-    if (!p->fds || !p->sig_handlers) {
+    if (!p->fds || !p->fd_flags || !p->sig_handlers) {
         process_free(p);
         return NULL;
     }
@@ -455,6 +457,27 @@ int process_fd_limit(struct process *p)
     return lim > PROCESS_FD_MAX ? PROCESS_FD_MAX : (int)lim;
 }
 
+static bool fd_table_resize(struct process *p, int cap)
+{
+    if (cap <= p->fd_cap)
+        return true;
+    struct file **n = kzalloc((size_t)cap * sizeof(struct file *));
+    uint8_t *fl = kzalloc((size_t)cap);
+    if (!n || !fl) {
+        kfree(n);
+        kfree(fl);
+        return false;
+    }
+    memcpy(n, p->fds, (size_t)p->fd_cap * sizeof(struct file *));
+    memcpy(fl, p->fd_flags, (size_t)p->fd_cap);
+    kfree(p->fds);
+    kfree(p->fd_flags);
+    p->fds = n;
+    p->fd_flags = fl;
+    p->fd_cap = cap;
+    return true;
+}
+
 bool process_fd_reserve(struct process *p, int fd)
 {
     if (fd < 0 || fd >= process_fd_limit(p))
@@ -466,28 +489,63 @@ bool process_fd_reserve(struct process *p, int fd)
         cap *= 2;
     if (cap > PROCESS_FD_MAX)
         cap = PROCESS_FD_MAX;
-    struct file **n = kzalloc((size_t)cap * sizeof(struct file *));
-    if (!n)
-        return false;
-    memcpy(n, p->fds, (size_t)p->fd_cap * sizeof(struct file *));
-    kfree(p->fds);
-    p->fds = n;
-    p->fd_cap = cap;
-    return true;
+    return fd_table_resize(p, cap);
 }
 
-int process_fd_install(struct process *p, struct file *f)
+int process_fd_alloc(struct process *p, struct file *f, int min, bool cloexec)
 {
     int limit = process_fd_limit(p);
-    for (int i = 0; i < limit; i++) {
+    if (min < 0)
+        return -EINVAL;
+    for (int i = min; i < limit; i++) {
         if (i >= p->fd_cap && !process_fd_reserve(p, i))
             return -EMFILE;
         if (!p->fds[i]) {
             p->fds[i] = f;
+            p->fd_flags[i] = cloexec ? FD_CLOEXEC : 0;
             return i;
         }
     }
     return -EMFILE;
+}
+
+int process_fd_install(struct process *p, struct file *f)
+{
+    return process_fd_alloc(p, f, 0, false);
+}
+
+int process_fd_replace(struct process *p, int fd, struct file *f, bool cloexec)
+{
+    if (!process_fd_reserve(p, fd))
+        return -EBADF;
+    struct file *old = p->fds[fd];
+    p->fds[fd] = f;
+    p->fd_flags[fd] = cloexec ? FD_CLOEXEC : 0;
+    if (old)
+        file_unref(old);
+    return fd;
+}
+
+int process_fd_get_flags(struct process *p, int fd)
+{
+    if (!process_fd_get(p, fd))
+        return -EBADF;
+    return p->fd_flags[fd];
+}
+
+int process_fd_set_flags(struct process *p, int fd, int flags)
+{
+    if (!process_fd_get(p, fd))
+        return -EBADF;
+    p->fd_flags[fd] = (uint8_t)(flags & FD_CLOEXEC);
+    return 0;
+}
+
+static void close_on_exec(struct process *p)
+{
+    for (int i = 0; i < p->fd_cap; i++)
+        if (p->fds[i] && (p->fd_flags[i] & FD_CLOEXEC))
+            process_fd_close(p, i);
 }
 
 struct file *process_fd_get(struct process *p, int fd)
@@ -503,6 +561,7 @@ int process_fd_close(struct process *p, int fd)
     if (!f)
         return -EBADF;
     p->fds[fd] = NULL;
+    p->fd_flags[fd] = 0;
     file_unref(f);
     return 0;
 }
@@ -585,19 +644,14 @@ int process_fork(struct interrupt_frame *frame)
     child->parent = parent;
     child->thread = NULL;
     memcpy(child->rlimits, parent->rlimits, sizeof(child->rlimits));
-    if (parent->fd_cap > child->fd_cap) {
-        struct file **n = kzalloc((size_t)parent->fd_cap * sizeof(struct file *));
-        if (!n) {
-            vmm_destroy_address_space(child->pml4_phys);
-            process_free(child);
-            return -ENOMEM;
-        }
-        kfree(child->fds);
-        child->fds = n;
-        child->fd_cap = parent->fd_cap;
+    if (!fd_table_resize(child, parent->fd_cap)) {
+        vmm_destroy_address_space(child->pml4_phys);
+        process_free(child);
+        return -ENOMEM;
     }
     for (int i = 0; i < parent->fd_cap; i++) {
         child->fds[i] = parent->fds[i];
+        child->fd_flags[i] = parent->fd_flags[i];
         if (child->fds[i])
             file_ref(child->fds[i]);
     }
@@ -670,6 +724,7 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
         wrmsr(MSR_IA32_FS_BASE, 0);
         fpu_reset_current();
         thread_current()->clear_child_tid = 0;
+        close_on_exec(p);
         cli();
         p->pml4_phys = new_pml4;
         write_cr3(new_pml4);

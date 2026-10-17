@@ -591,3 +591,33 @@ Uma linha por decisao, na ordem em que foram tomadas.
   quatro flags, `c_line`, `c_cc[19]`) e valores padrao de verdade (`CS8`,
   `ICRNL`, `OPOST|ONLCR`, `VINTR`=3, `VEOF`=4, `VMIN`=1...). `TCSETSW` e
   `TCSETSF` sao aceitos como `TCSETS`.
+
+## v2.0.0-a3 (arquivos no formato do Linux)
+
+- `struct stat` no layout do Linux x86_64 (144 bytes) em `stat`, `fstat`,
+  `lstat` e `newfstatat`. `st_blocks` conta setores de 512; datas sao a hora
+  do boot ate o VFS guardar datas por arquivo (2.1); `st_dev` e 1.
+- Todo arquivo aberto por caminho guarda o caminho absoluto (`file->path`). E
+  o que permite `openat`, `newfstatat`, `mkdirat`, `unlinkat`, `renameat`,
+  `faccessat` e `readlinkat` resolverem um caminho relativo a um descritor de
+  diretorio, sem um VFS de inodes (que chega na 2.1).
+- `getdents64` reaproveita o `readdir` por indice que os sistemas de arquivos
+  ja tinham: o `offset` do arquivo de diretorio vira o indice da proxima
+  entrada, e `lseek(fd, 0, SEEK_SET)` recomeca a listagem. `d_type` sai do
+  `is_dir`; dentro de `/dev`, os discos sao `DT_BLK` e o resto `DT_CHR`.
+- A libc propria passou a listar diretorios com `getdents64` (um bloco de
+  2 KiB por chamada em vez de uma syscall por entrada) e o `struct dirent`
+  perdeu os campos proprios (`d_size`, `d_is_dir`): o `ls` usa `d_type` e
+  `stat`. A syscall propria `readdir` (1000) continua existindo.
+- Flags por descritor (`FD_CLOEXEC`) num vetor paralelo a tabela de arquivos.
+  `O_CLOEXEC` no `open`/`openat`, `F_DUPFD`, `F_DUPFD_CLOEXEC`, `F_GETFD`,
+  `F_SETFD`, `dup3` e `pipe2` (`O_CLOEXEC`, `O_NONBLOCK`); o `execve` fecha os
+  marcados.
+- `open` confere o caso antes de chamar o sistema de arquivos e devolve o erro
+  certo: `EEXIST` (`O_CREAT|O_EXCL`), `ENOTDIR` (`O_DIRECTORY` num arquivo),
+  `EISDIR` (diretorio aberto para escrita), `ENOENT`, `EROFS`.
+- `readlink` devolve `EINVAL` para um caminho que existe (ainda nao ha links
+  simbolicos, entao nada existente e link) e `ENOENT` para um que nao existe,
+  como o Linux. O plano dizia "devolve ENOENT"; `EINVAL` e o que a musl espera
+  de um arquivo comum.
+- `access`/`faccessat` so conferem a existencia: ainda nao ha permissoes (4.1).

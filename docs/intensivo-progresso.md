@@ -16,7 +16,7 @@ ou sinais), 5 vezes seguidas:
 
     .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
 
-Proxima etapa: 1.3.
+Proxima etapa: 1.4.
 
 ## Checklist
 
@@ -31,7 +31,7 @@ Proxima etapa: 1.3.
 | 0.7 | Limites: 256 fds, 256 processos, ulimit | [x] | 00:00 | 01:09 | (ver diario) |
 | 1.1 | Pilha inicial do Linux (auxv) | [x] | 00:55 | 01:29 | (ver diario) |
 | 1.2 | Syscalls de partida da musl | [x] | 01:29 | 01:51 | (ver diario) |
-| 1.3 | Arquivos no formato do Linux | [ ] | | | |
+| 1.3 | Arquivos no formato do Linux | [x] | 01:51 | 02:13 | (ver diario) |
 | 1.4 | Memoria do jeito Linux (VMAs, mmap) | [ ] | | | |
 | 1.5 | Programas contra a musl com `zig cc` (plano B: musl pelo build.ps1) | [ ] | | | |
 | 1.6 | Threads (clone) | [ ] | | | |
@@ -280,3 +280,15 @@ alocada a parte (2 KiB, no slab). `struct termios` do `TCGETS` no layout do
 kernel Linux. Tabela `docs/SYSCALLS.md` com o estado de cada syscall
 (completa, parcial, stub, propria). Programa novo `sctest` (22 verificacoes).
 Regressao 129 -> 134, estresse 5x verde.
+
+#### 1.3 Arquivos no formato do Linux - 01:51 as 02:13 - FEITO
+`struct stat` do Linux (144 bytes) em `stat`/`fstat`/`lstat`/`newfstatat`;
+`openat`, `mkdirat`, `unlinkat`, `renameat`, `faccessat`, `readlinkat`
+relativos a um descritor de diretorio (todo arquivo aberto por caminho guarda
+o caminho); `getdents64`; `access`; `readlink` (EINVAL/ENOENT); `fcntl` com
+`F_DUPFD`, `F_DUPFD_CLOEXEC`, `F_GETFD`, `F_SETFD`; `dup3`; `pipe2`;
+`O_CLOEXEC`, `O_DIRECTORY`, `O_EXCL` e os erros certos no `open`. A libc
+propria lista diretorios com `getdents64` e o `ls` continua funcionando (usa
+`d_type` e `stat`). Programa novo `filetest` (33 verificacoes, inclusive um
+neto que confere por `exec` que um descritor `FD_CLOEXEC` sumiu e outro nao).
+Regressao 134 -> 139, estresse 5x verde.

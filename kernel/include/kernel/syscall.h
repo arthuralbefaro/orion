@@ -50,6 +50,19 @@
 #define SYS_ARCH_PRCTL    158
 #define SYS_CLOCK_GETTIME 228
 #define SYS_GETRLIMIT     97
+#define SYS_LSTAT         6
+#define SYS_ACCESS        21
+#define SYS_READLINK      89
+#define SYS_GETDENTS64    217
+#define SYS_OPENAT        257
+#define SYS_MKDIRAT       258
+#define SYS_NEWFSTATAT    262
+#define SYS_UNLINKAT      263
+#define SYS_RENAMEAT      264
+#define SYS_READLINKAT    267
+#define SYS_FACCESSAT     269
+#define SYS_DUP3          292
+#define SYS_PIPE2         293
 #define SYS_READV         19
 #define SYS_WRITEV        20
 #define SYS_UNAME         63
@@ -155,9 +168,19 @@ struct user_pollfd {
 #define O_TRUNC    0x200
 #define O_APPEND   0x400
 #define O_NONBLOCK 0x800
+#define O_ACCMODE  3
+#define O_EXCL     0x80
+#define O_DIRECTORY 0x10000
+#define O_NOFOLLOW 0x20000
+#define O_CLOEXEC  0x80000
 
+#define F_DUPFD 0
+#define F_GETFD 1
+#define F_SETFD 2
 #define F_GETFL 3
 #define F_SETFL 4
+#define F_DUPFD_CLOEXEC 1030
+#define FD_CLOEXEC 1
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -190,13 +213,44 @@ struct user_dirent {
 };
 
 struct user_stat {
-    uint64_t st_size;
-    uint32_t st_mode;
-    uint32_t st_nlink;
+    uint64_t st_dev;
     uint64_t st_ino;
-    uint64_t st_blksize;
-    uint64_t st_mtime;
+    uint64_t st_nlink;
+    uint32_t st_mode;
+    uint32_t st_uid;
+    uint32_t st_gid;
+    uint32_t pad0;
+    uint64_t st_rdev;
+    int64_t  st_size;
+    int64_t  st_blksize;
+    int64_t  st_blocks;
+    int64_t  st_atime;
+    int64_t  st_atime_nsec;
+    int64_t  st_mtime;
+    int64_t  st_mtime_nsec;
+    int64_t  st_ctime;
+    int64_t  st_ctime_nsec;
+    int64_t  unused[3];
 };
+
+struct linux_dirent64 {
+    uint64_t d_ino;
+    int64_t  d_off;
+    uint16_t d_reclen;
+    uint8_t  d_type;
+    char     d_name[];
+};
+
+#define DT_UNKNOWN 0
+#define DT_CHR     2
+#define DT_DIR     4
+#define DT_BLK     6
+#define DT_REG     8
+
+#define AT_FDCWD            (-100)
+#define AT_SYMLINK_NOFOLLOW 0x100
+#define AT_REMOVEDIR        0x200
+#define AT_EMPTY_PATH       0x1000
 
 struct user_timespec {
     int64_t tv_sec;

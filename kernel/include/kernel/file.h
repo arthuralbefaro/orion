@@ -25,6 +25,7 @@ struct file {
     uint32_t flags;
     struct vfs_node node;
     bool has_node;
+    char *path;
 };
 
 struct file *file_alloc(const struct file_ops *ops, void *priv);

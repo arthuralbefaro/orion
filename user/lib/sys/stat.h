@@ -12,13 +12,30 @@
 #define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
 #define S_ISCHR(m) (((m) & S_IFMT) == S_IFCHR)
 
+#define S_IFLNK 0120000
+#define S_ISLNK(m) (((m) & S_IFMT) == S_IFLNK)
+#define S_ISBLK(m) (((m) & S_IFMT) == S_IFBLK)
+#define S_ISFIFO(m) (((m) & S_IFMT) == S_IFIFO)
+
 struct stat {
-    uint64_t st_size;
-    uint32_t st_mode;
-    uint32_t st_nlink;
+    uint64_t st_dev;
     uint64_t st_ino;
-    uint64_t st_blksize;
-    uint64_t st_mtime;
+    uint64_t st_nlink;
+    uint32_t st_mode;
+    uint32_t st_uid;
+    uint32_t st_gid;
+    uint32_t pad0;
+    uint64_t st_rdev;
+    int64_t  st_size;
+    int64_t  st_blksize;
+    int64_t  st_blocks;
+    int64_t  st_atime;
+    int64_t  st_atime_nsec;
+    int64_t  st_mtime;
+    int64_t  st_mtime_nsec;
+    int64_t  st_ctime;
+    int64_t  st_ctime_nsec;
+    int64_t  unused[3];
 };
 
 int stat(const char *path, struct stat *st);

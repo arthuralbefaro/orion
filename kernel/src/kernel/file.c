@@ -36,6 +36,7 @@ void file_unref(struct file *f)
     if (__atomic_sub_fetch(&f->refcount, 1, __ATOMIC_SEQ_CST) == 0) {
         if (f->ops->close)
             f->ops->close(f);
+        kfree(f->path);
         kfree(f);
     }
 }

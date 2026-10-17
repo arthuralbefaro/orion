@@ -53,6 +53,7 @@ struct process {
     struct thread *thread;
     struct process *parent;
     struct file **fds;
+    uint8_t *fd_flags;
     int fd_cap;
     struct user_rlimit rlimits[RLIMIT_COUNT];
     struct process *next;
@@ -89,3 +90,7 @@ long process_getrlimit(int resource, struct user_rlimit *out);
 long process_setrlimit(int resource, const struct user_rlimit *in);
 int  process_fd_limit(struct process *p);
 bool process_fd_reserve(struct process *p, int fd);
+int  process_fd_alloc(struct process *p, struct file *f, int min, bool cloexec);
+int  process_fd_replace(struct process *p, int fd, struct file *f, bool cloexec);
+int  process_fd_get_flags(struct process *p, int fd);
+int  process_fd_set_flags(struct process *p, int fd, int flags);

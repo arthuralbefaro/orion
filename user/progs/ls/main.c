@@ -2,6 +2,7 @@
 #include <string.h>
 #include <errno.h>
 #include <dirent.h>
+#include <sys/stat.h>
 
 int main(int argc, char **argv)
 {
@@ -12,11 +13,16 @@ int main(int argc, char **argv)
         return 1;
     }
     struct dirent *e;
+    char full[512];
     while ((e = readdir(d))) {
-        if (e->d_is_dir)
+        if (e->d_type == DT_DIR) {
             printf("  <DIR>          %s/\n", e->d_name);
-        else
-            printf("  %10lu     %s\n", e->d_size, e->d_name);
+            continue;
+        }
+        struct stat st;
+        snprintf(full, sizeof(full), "%s/%s", path, e->d_name);
+        long size = stat(full, &st) == 0 ? (long)st.st_size : 0;
+        printf("  %10lu     %s\n", (unsigned long)size, e->d_name);
     }
     closedir(d);
     return 0;

@@ -73,7 +73,7 @@ if ($runAll -or $OnlyA) {
         "cmd:sigtest", "wait:10",
         "cmd:badptr", "until:40:badptr: fim",
         "cmd:fputest", "until:60:fputest: fim", "cmd:auxtest", "until:30:auxtest: fim",
-        "cmd:sctest", "until:30:sctest: fim",
+        "cmd:sctest", "until:30:sctest: fim", "cmd:filetest", "until:60:filetest: fim",
         "cmd:sleep 100", "wait:2", "key:03", "wait:2",
         "cmd:hello um dois", "wait:1",
         "cmd:date", "wait:1",
@@ -149,6 +149,11 @@ if ($runAll -or $OnlyA) {
     Expect $a "sigaddset usa o bit sig-1 do Linux\s+ok" "mascara de sinais no formato Linux"
     Expect $a "TCGETS no formato do Linux\s+ok" "termios no formato do Linux"
     Expect $a "sctest: fim, TUDO OK" "sctest: syscalls de partida da musl"
+    Expect $a "struct stat tem 144 bytes\s+ok" "struct stat no layout do Linux"
+    Expect $a "getdents64 lista /bin com sh \(DT_REG\)\s+ok" "getdents64"
+    Expect $a "openat relativo a um diretorio\s+ok" "openat relativo a um descritor de diretorio"
+    Expect $a "exec fecha FD_CLOEXEC e mantem os outros\s+ok" "O_CLOEXEC/FD_CLOEXEC fechados no exec"
+    Expect $a "filetest: fim, TUDO OK" "filetest: arquivos no formato do Linux"
     Expect $a "flag NT ligada dentro do handler\s+ok" "flag NT do usuario nao derruba o iretq do rt_sigreturn"
     Expect $a "Copias de usuario: [1-9]\d* falta\(s\) recuperada\(s\)" "tabela de excecoes recuperou as faltas"
     Expect $a "morto por sinal 2" "Ctrl\+C matou o sleep com SIGINT"

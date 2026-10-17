@@ -54,6 +54,11 @@
 #define SYS_CLOCK_GETTIME 228
 #define SYS_GETRLIMIT     97
 #define SYS_SETRLIMIT     160
+#define SYS_GETDENTS64    217
+#define SYS_OPENAT        257
+#define SYS_NEWFSTATAT    262
+#define SYS_DUP3          292
+#define SYS_PIPE2         293
 #define SYS_READDIR       1000
 #define SYS_OPENPTY       1001
 
@@ -70,6 +75,7 @@ static inline long syscall6(long n, long a, long b, long c, long d, long e, long
     return ret;
 }
 
+static inline long syscall4(long n, long a, long b, long c, long d) { return syscall6(n, a, b, c, d, 0, 0); }
 static inline long syscall3(long n, long a, long b, long c) { return syscall6(n, a, b, c, 0, 0, 0); }
 static inline long syscall2(long n, long a, long b)         { return syscall6(n, a, b, 0, 0, 0, 0); }
 static inline long syscall1(long n, long a)                 { return syscall6(n, a, 0, 0, 0, 0, 0); }
