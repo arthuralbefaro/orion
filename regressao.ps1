@@ -228,6 +228,9 @@ if ($runAll -or $OnlyC) {
         "raw:linha um", "key:0D", "raw:linha dois", "wait:1",
         "key:13", "wait:3", "key:18", "wait:4",
         "cmd:cat /mnt/nota.txt", "wait:2", "cmd:rm /mnt/nota.txt",
+        "cmd:mkdir /mnt/p1", "cmd:mkdir /mnt/p2",
+        "cmd:fstest -a /mnt/p1 > /mnt/f1.txt | fstest -a /mnt/p2", 'cmd:echo FIM$X-PAR', "until:600:FIM-PAR",
+        "cmd:grep TUDO /mnt/f1.txt", "wait:1",
         "cmd:sync", "cmd:ls /mnt", "wait:1",
         "key:0B", "cmd:mem", "cmd:lsblk", "cmd:mutex"
     )
@@ -252,6 +255,9 @@ if ($runAll -or $OnlyC) {
     Expect $c "(?s)cat /mnt/nota\.txt.{0,40}?linha um\s+linha dois" "cat mostra o que o edit gravou"
     Expect $c "mutex\s+pegou\s+contencao\s+espera ms\s+max ms\s+dono" "comando mutex mostra a tabela de contencao"
     Expect $c "\n\s+ahci0\s+[1-9]\d*\s+\d+\s+\d+\s+\d+\s+-" "AHCI usa mutex (pego e livre no fim)"
+    Expect $c "grep TUDO /mnt/f1\.txt\s*\n\s*fstest: TUDO OK" "fstest em paralelo: a primeira instancia passou"
+    Expect $c "(?s)fstest -a /mnt/p2.*?fstest: TUDO OK.*?\nFIM-PAR" "fstest em paralelo: a segunda instancia passou"
+    Expect $c "\n\s+(fat-sdb|bcache)\s+\d+\s+[1-9]\d*\s+" "fstest em paralelo disputou FAT/cache e esperou dormindo"
     Test-MemDelta $c "memoria estavel na sequencia C" 24
 }
 

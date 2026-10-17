@@ -2,7 +2,7 @@
 #include <fs/vfs.h>
 #include <fs/block.h>
 #include <kernel/log.h>
-#include <kernel/spinlock.h>
+#include <kernel/mutex.h>
 #include <mm/heap.h>
 #include <lib/string.h>
 #include <drivers/rtc.h>
@@ -30,7 +30,8 @@ struct fat_fs {
     uint32_t fat_dirty_hi;
     uint32_t next_free;
     bool writable;
-    spinlock_t lock;
+    struct mutex lock;
+    char lock_name[16];
     char label[12];
 };
 
@@ -199,7 +200,7 @@ static bool iterate_dir(struct filesystem *fs, const struct vfs_node *dir, diren
     struct lfn_state lfn = { .valid = false };
     bool stop = false, found = false;
 
-    spin_lock(&f->lock);
+    mutex_lock(&f->lock);
     if (dir->ino == 0 && f->type != FAT32) {
         for (uint32_t s = 0; s < f->root_sectors && !stop; s++) {
             if (!blockdev_read(f->dev, f->root_lba + s, 1, f->cluster_buf))
@@ -218,7 +219,7 @@ static bool iterate_dir(struct filesystem *fs, const struct vfs_node *dir, diren
             c = fat_next(f, c);
         }
     }
-    spin_unlock(&f->lock);
+    mutex_unlock(&f->lock);
     return found;
 }
 
@@ -311,7 +312,7 @@ static int64_t fat_read(struct filesystem *fs, const struct vfs_node *node, uint
 
     uint8_t *out = buf;
     uint64_t done = 0;
-    spin_lock(&f->lock);
+    mutex_lock(&f->lock);
 
     uint32_t c = (uint32_t)node->ino;
     uint64_t skip = offset / f->cluster_size;
@@ -330,11 +331,9 @@ static int64_t fat_read(struct filesystem *fs, const struct vfs_node *node, uint
         in_cluster = 0;
         c = fat_next(f, c);
     }
-    spin_unlock(&f->lock);
+    mutex_unlock(&f->lock);
     return (int64_t)done;
 }
-
-/* ---------- Escrita ---------- */
 
 #define FAT_EOC 0x0FFFFFFF
 
@@ -503,7 +502,6 @@ static uint32_t chain_nth(struct fat_fs *f, uint32_t first, uint32_t index, bool
     return c;
 }
 
-/* Traduz um deslocamento em bytes dentro de um diretorio para o setor no disco. */
 static bool dir_locate(struct fat_fs *f, uint32_t dir_ino, uint32_t offset, uint64_t *lba,
                        uint32_t *within, bool grow)
 {
@@ -562,7 +560,6 @@ static uint32_t dir_capacity(struct fat_fs *f, uint32_t dir_ino)
     return n;
 }
 
-/* Acha `need` entradas livres consecutivas, crescendo o diretorio se preciso. */
 static bool dir_find_free(struct fat_fs *f, uint32_t dir_ino, uint32_t need, uint32_t *out)
 {
     uint32_t capacity = dir_capacity(f, dir_ino);
@@ -671,8 +668,6 @@ static void build_short(const char *name, uint32_t tail, uint8_t out[11])
         base[nb++] = '_';
 
     if (tail) {
-        /* Nome curto do Windows: duas letras, hash do nome longo e ~N. Assim o
-         * primeiro palpite quase sempre serve e nao viramos O(n^2) no diretorio. */
         uint32_t hash = 2166136261u;
         for (const char *s = name; *s; s++)
             hash = (hash ^ (uint8_t)*s) * 16777619u;
@@ -758,9 +753,9 @@ static bool dir_add_entry(struct filesystem *fs, const struct vfs_node *dir, con
     uint32_t lfns = lfn_entries_needed(name, sfn);
 
     uint32_t start;
-    spin_lock(&f->lock);
+    mutex_lock(&f->lock);
     if (!dir_find_free(f, (uint32_t)dir->ino, lfns + 1, &start)) {
-        spin_unlock(&f->lock);
+        mutex_unlock(&f->lock);
         return false;
     }
 
@@ -789,7 +784,7 @@ static bool dir_add_entry(struct filesystem *fs, const struct vfs_node *dir, con
         ok = dir_write_entry(f, (uint32_t)dir->ino, short_off, (const uint8_t *)&d, true);
     if (ok)
         ok = fat_flush(f);
-    spin_unlock(&f->lock);
+    mutex_unlock(&f->lock);
     if (ok && entry_off)
         *entry_off = short_off;
     return ok;
@@ -845,7 +840,7 @@ static int64_t fat_write(struct filesystem *fs, struct vfs_node *node, uint64_t 
 
     const uint8_t *in = buf;
     uint64_t done = 0;
-    spin_lock(&f->lock);
+    mutex_lock(&f->lock);
 
     while (done < len) {
         uint64_t pos = offset + done;
@@ -885,7 +880,7 @@ static int64_t fat_write(struct filesystem *fs, struct vfs_node *node, uint64_t 
     if (offset + done > node->size)
         node->size = offset + done;
     bool ok = update_entry_size(f, node);
-    spin_unlock(&f->lock);
+    mutex_unlock(&f->lock);
     if (!ok && done == 0)
         return -1;
     return (int64_t)done;
@@ -897,7 +892,7 @@ static bool fat_truncate(struct filesystem *fs, struct vfs_node *node, uint64_t 
     if (!f->writable || node->is_dir || size > 0xFFFFFFFFull)
         return false;
 
-    spin_lock(&f->lock);
+    mutex_lock(&f->lock);
     uint32_t first = (uint32_t)node->ino;
     if (size == 0) {
         if (first >= 2)
@@ -915,7 +910,7 @@ static bool fat_truncate(struct filesystem *fs, struct vfs_node *node, uint64_t 
     }
     node->size = size;
     bool ok = update_entry_size(f, node) && fat_flush(f);
-    spin_unlock(&f->lock);
+    mutex_unlock(&f->lock);
     return ok;
 }
 
@@ -932,9 +927,9 @@ static bool fat_create(struct filesystem *fs, const struct vfs_node *dir, const 
 
     uint32_t cluster = 0;
     if (is_dir) {
-        spin_lock(&f->lock);
+        mutex_lock(&f->lock);
         cluster = chain_extend(f, 0);
-        spin_unlock(&f->lock);
+        mutex_unlock(&f->lock);
         if (!cluster)
             return false;
     }
@@ -942,10 +937,10 @@ static bool fat_create(struct filesystem *fs, const struct vfs_node *dir, const 
     uint32_t entry_off = 0;
     if (!dir_add_entry(fs, dir, name, is_dir ? ATTR_DIR : 0, cluster, 0, &entry_off)) {
         if (cluster) {
-            spin_lock(&f->lock);
+            mutex_lock(&f->lock);
             fat_free_chain(f, cluster);
             fat_flush(f);
-            spin_unlock(&f->lock);
+            mutex_unlock(&f->lock);
         }
         return false;
     }
@@ -959,7 +954,7 @@ static bool fat_create(struct filesystem *fs, const struct vfs_node *dir, const 
         struct fat_dirent dot;
         uint16_t d, t;
         fat_now(&d, &t);
-        spin_lock(&f->lock);
+        mutex_lock(&f->lock);
         memset(&dot, 0, sizeof(dot));
         memset(dot.name, ' ', 11);
         dot.name[0] = '.';
@@ -975,7 +970,7 @@ static bool fat_create(struct filesystem *fs, const struct vfs_node *dir, const 
         dot.cluster_hi = (uint16_t)(parent >> 16);
         dir_write_entry(f, cluster, 32, (const uint8_t *)&dot, false);
         fat_flush(f);
-        spin_unlock(&f->lock);
+        mutex_unlock(&f->lock);
     }
 
     if (out) {
@@ -1022,11 +1017,11 @@ static bool fat_unlink(struct filesystem *fs, const struct vfs_node *dir, const 
             return false;
     }
 
-    spin_lock(&f->lock);
+    mutex_lock(&f->lock);
     if (node.ino >= 2)
         fat_free_chain(f, (uint32_t)node.ino);
     bool ok = dir_remove_entry(f, (uint32_t)dir->ino, node.dir_offset) && fat_flush(f);
-    spin_unlock(&f->lock);
+    mutex_unlock(&f->lock);
     return ok;
 }
 
@@ -1048,18 +1043,18 @@ static bool fat_rename(struct filesystem *fs, const struct vfs_node *dir, const 
                        (uint32_t)node.size, &entry_off))
         return false;
 
-    spin_lock(&f->lock);
+    mutex_lock(&f->lock);
     bool ok = dir_remove_entry(f, (uint32_t)dir->ino, node.dir_offset) && fat_flush(f);
-    spin_unlock(&f->lock);
+    mutex_unlock(&f->lock);
     return ok;
 }
 
 static bool fat_sync(struct filesystem *fs)
 {
     struct fat_fs *f = fs->priv;
-    spin_lock(&f->lock);
+    mutex_lock(&f->lock);
     bool ok = fat_flush(f);
-    spin_unlock(&f->lock);
+    mutex_unlock(&f->lock);
     return blockdev_sync() && ok;
 }
 
@@ -1156,7 +1151,8 @@ struct filesystem *fat_mount(struct blockdev *dev)
         kfree(fs);
         return NULL;
     }
-    spinlock_init(&f->lock);
+    ksnprintf(f->lock_name, sizeof(f->lock_name), "fat-%s", dev->name);
+    mutex_init(&f->lock, f->lock_name);
     f->fat_copies = nfats;
     f->fat_dirty_lo = 1;
     f->fat_dirty_hi = 0;

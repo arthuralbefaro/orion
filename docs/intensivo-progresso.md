@@ -16,7 +16,7 @@ ou sinais), 5 vezes seguidas:
 
     .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
 
-Proxima etapa: 0.3.
+Proxima etapa: 0.4.
 
 ## Checklist
 
@@ -24,8 +24,8 @@ Proxima etapa: 0.3.
 | --- | --- | --- | --- | --- | --- |
 | 0.1 | Commit da v1.9 e dos programas novos | [x] | 19:22 | 20:20 | `58bb747` |
 | 0.2 | Copia segura de memoria de usuario | [x] | 20:22 | 22:20 | `8b3d171` |
-| 0.3 | Mutex que dorme, AHCI | [~] | 22:25 | | |
-| 0.4 | FAT e cache de blocos com mutex | [ ] | | | |
+| 0.3 | Mutex que dorme, AHCI | [x] | 22:25 | 23:05 | `4d55e72` |
+| 0.4 | FAT e cache de blocos com mutex | [x] | 23:05 | 23:45 | (este commit) |
 | 0.5 | Harness em Python e CI | [ ] | | | |
 | 0.6 | Shell: `&`, jobs, fg, wait, `VAR=x cmd`, `&&`, `\|\|`, `;` | [ ] | | | |
 | 0.7 | Limites: 256 fds, 256 processos, ulimit | [ ] | | | |
@@ -180,3 +180,17 @@ logo antes, com as correcoes de concorrencia). Observacao: o commit `8b3d171`
 levou junto as edicoes que o dono fez durante a sessao no arquivo local de regras (regra de
 comentarios para todas as linguagens) e em `docs/PLANO.md` (secao "Linguagens",
 1.5 com `zig cc`, piloto Rust no ext2 em 2.5, etapa nova 8.7).
+
+#### 0.3 Mutex que dorme - 22:25 as 23:05 - commit 4d55e72 - FEITO
+`kernel/mutex.{h,c}`: dono, fila de espera, spinlock interno so do mutex,
+estatisticas (aquisicoes, contencao, espera total e maxima), panico em
+recursao e em disputa com interrupcoes desligadas, aviso a cada 5 s de espera
+com o dono. Comando `mutex` no shell do kernel. Cada porta AHCI tem o seu
+mutex (`ahci0`, `ahci1`) e a espera pelo fim do comando cede a CPU quando
+possivel. Regressao 97 -> 99 (sequencia C confere a tabela do `mutex` e que o
+`ahci0` foi pego e esta livre no fim). Estresse 5x verde.
+Limite conhecido: ate a 0.4 o AHCI e chamado de dentro do spinlock do cache de
+blocos, entao a contencao do `ahci*` fica em 0; quem disputa de verdade e o
+cache, que a 0.4 troca por mutex.
+A partir desta etapa, antes de cada commit roda o comando do dono que procura
+`//` e `/*` nos arquivos de codigo staged.

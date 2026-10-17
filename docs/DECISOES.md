@@ -454,3 +454,17 @@ Uma linha por decisao, na ordem em que foram tomadas.
 - Cada porta AHCI tem o seu mutex (`ahci0`, `ahci1`...). A espera pelo fim do
   comando cede a CPU (`thread_yield`) quando as interrupcoes estao ligadas, em
   vez de girar com `pause`.
+
+## v1.9.3 (FAT e cache de blocos com mutex)
+
+- A trava do cache de setores (`bcache`) e a de cada FAT montado (`fat-sda1`,
+  `fat-sdb`) viraram mutex. As duas eram seguradas durante a E/S de disco: com
+  spinlock, uma segunda thread querendo o disco ficava girando (ou cedendo a CPU
+  em laco) pelo tempo inteiro de um comando AHCI; agora ela dorme na fila.
+- Ordem das travas do disco: `fat-*` -> `bcache` -> `ahci*`. O `bdflush` segue
+  a mesma ordem (descarrega a FAT e depois o cache).
+- Como o cache agora e mutex, o AHCI e sempre chamado com interrupcoes ligadas
+  e a espera pelo fim do comando cede a CPU de verdade.
+- A sequencia C da regressao roda duas `fstest -a` ao mesmo tempo (um pipeline
+  com a saida da primeira redirecionada para arquivo, enquanto o shell ainda nao
+  tem `&`) e confere na tabela do `mutex` que houve disputa e espera dormindo.

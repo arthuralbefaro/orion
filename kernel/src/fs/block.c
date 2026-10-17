@@ -1,7 +1,7 @@
 #include <fs/block.h>
 #include <kernel/log.h>
 #include <kernel/sched.h>
-#include <kernel/spinlock.h>
+#include <kernel/mutex.h>
 #include <mm/heap.h>
 #include <lib/string.h>
 
@@ -18,7 +18,7 @@ struct cache_entry {
 };
 
 static struct cache_entry *cache;
-static spinlock_t cache_lock = SPINLOCK_INIT;
+static struct mutex cache_lock = MUTEX_INIT("bcache");
 static uint64_t cache_clock;
 static uint64_t stat_hits, stat_misses, stat_writes;
 
@@ -124,7 +124,7 @@ bool blockdev_read(struct blockdev *dev, uint64_t lba, uint32_t count, void *buf
     if (base->sector_size != BLOCK_SECTOR || !cache)
         return raw_read(base, abs, count, buf);
 
-    uint64_t flags = spin_lock_irqsave(&cache_lock);
+    mutex_lock(&cache_lock);
     bool ok;
     if (count > 1 && !range_has_dirty(base, abs, count)) {
         ok = raw_read(base, abs, count, buf);
@@ -134,7 +134,7 @@ bool blockdev_read(struct blockdev *dev, uint64_t lba, uint32_t count, void *buf
         for (uint32_t i = 0; i < count && ok; i++)
             ok = cached_sector_read(base, abs + i, (uint8_t *)buf + i * BLOCK_SECTOR);
     }
-    spin_unlock_irqrestore(&cache_lock, flags);
+    mutex_unlock(&cache_lock);
     return ok;
 }
 
@@ -149,7 +149,7 @@ bool blockdev_write(struct blockdev *dev, uint64_t lba, uint32_t count, const vo
     if (base->sector_size != BLOCK_SECTOR || !cache)
         return raw_write(base, abs, count, buf);
 
-    uint64_t flags = spin_lock_irqsave(&cache_lock);
+    mutex_lock(&cache_lock);
     for (uint32_t i = 0; i < count; i++) {
         struct cache_entry *e = cache_lookup(base, abs + i);
         if (!e) {
@@ -162,7 +162,7 @@ bool blockdev_write(struct blockdev *dev, uint64_t lba, uint32_t count, const vo
         e->dirty = true;
         e->stamp = ++cache_clock;
     }
-    spin_unlock_irqrestore(&cache_lock, flags);
+    mutex_unlock(&cache_lock);
     return true;
 }
 
@@ -171,7 +171,7 @@ bool blockdev_sync(void)
     if (!cache)
         return true;
     bool ok = true;
-    uint64_t flags = spin_lock_irqsave(&cache_lock);
+    mutex_lock(&cache_lock);
     for (uint32_t i = 0; i < BLOCK_CACHE_ENTRIES; i++) {
         if (!cache[i].valid || !cache[i].dirty)
             continue;
@@ -182,18 +182,18 @@ bool blockdev_sync(void)
             ok = false;
         }
     }
-    spin_unlock_irqrestore(&cache_lock, flags);
+    mutex_unlock(&cache_lock);
     return ok;
 }
 
 void blockdev_cache_stats(uint64_t *hits, uint64_t *misses, uint64_t *writes, uint32_t *dirty)
 {
     uint32_t n = 0;
-    uint64_t flags = spin_lock_irqsave(&cache_lock);
+    mutex_lock(&cache_lock);
     for (uint32_t i = 0; cache && i < BLOCK_CACHE_ENTRIES; i++)
         if (cache[i].valid && cache[i].dirty)
             n++;
-    spin_unlock_irqrestore(&cache_lock, flags);
+    mutex_unlock(&cache_lock);
     *hits = stat_hits;
     *misses = stat_misses;
     *writes = stat_writes;
