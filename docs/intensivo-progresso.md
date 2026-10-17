@@ -27,24 +27,12 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado na pausa (2026-10-17 15:56, pedido do dono): a etapa 2.5 esta pronta no
-arvore de trabalho e **sem commit**. O codigo com as correcoes da primeira
-revisao passou na regressao inteira (278 verificacoes) e no estresse 5x; as
-correcoes da segunda revisao (limite de entradas por passada no diretorio,
-`..` que aponta para si mesmo, `exec` acima de 64 MiB recusado, ponteiros de
-tabela indireta conferidos, fuzz mais forte) passaram no `check.ps1` e no fuzz
-com 4 sementes, mas a ultima regressao foi interrompida no meio pela pausa.
-Para fechar a 2.5:
+Estado (2026-10-17, noite): 2.5 e 2.6 feitas e commitadas pelo dono, fora do
+intensivo, com a regressao inteira verde. A 2.5 foi fechada junto com a parte 1
+da 2.6 num commit so; as partes 2 e 3 da 2.6 vieram em commits proprios. Versao
+no arvore: 2.1.0-a6.
 
-    .\check.ps1
-    .\regressao.ps1                               # tem que dar VERDE (278 verificacoes)
-    .\regressao.ps1 -NoBuild -OnlyE -StressRuns 5
-    git add -A                                    # conferir antes a checagem de comentarios
-    git commit                                    # "v2.1: 2.5 - ext2 so leitura com o leitor em Rust ..."
-
-e preencher a linha 2.5 da tabela (fim e commit). Versao no arvore: 2.1.0-a5.
-
-Proxima etapa: terminar a 2.5 (acima); depois 2.6.
+Proxima etapa: 2.7.
 
 ## Checklist
 
@@ -73,8 +61,8 @@ Proxima etapa: terminar a 2.5 (acima); depois 2.6.
 | 2.2 | tmpfs | [x] | 11:06 | 11:47 | 3b80cdc |
 | 2.3 | procfs | [x] | 11:48 | 12:52 | b0a87e9 |
 | 2.4 | Cache de paginas unificado | [x] | 12:53 | 14:55 | c485b85 |
-| 2.5 | ext2 leitura, piloto em Rust | [~] | 14:56 | | |
-| 2.6 | ext2 escrita, mkfs.ext2, fsck | [ ] | | | |
+| 2.5 | ext2 leitura, piloto em Rust | [x] | 14:56 | 16:36 | ver `git log` |
+| 2.6 | ext2 escrita, mkfs.ext2, fsck | [x] | 16:36 | 19:00 | ver `git log` (3 partes) |
 | 2.7 | Links simbolicos, chmod, chown, utime | [ ] | | | |
 | 2.8 | GPT e raiz em ext2 | [ ] | | | |
 | 3.1 | TCP parte 1 | [ ] | | | |
@@ -604,7 +592,7 @@ Observado: numa rodada do estresse o QEMU demorou mais de 60 s para mostrar o
 prompt e o harness digitou o comando antes de o shell ler (os bytes se
 perderam); o boot terminou normal e a rodada repetida passou inteira.
 
-#### 2.5 ext2 leitura, piloto em Rust - 14:56 a 15:56 - EM ANDAMENTO (pausado sem commit)
+#### 2.5 ext2 leitura, piloto em Rust - 14:56 a 16:36
 O leitor de ext2 e o primeiro Rust do kernel: `kernel/rust/ext2`, `staticlib`
 `no_std` para `x86_64-unknown-none`, ligada pelo `build.ps1` e pelo `Makefile`;
 o `check.ps1` roda `cargo clippy -D warnings`, procura comentario nos `.rs` e
@@ -621,4 +609,25 @@ corrigidos; o teste no hospedeiro monta e percorre centenas de imagens com bytes
 trocados ao acaso, com checagem de estouro, sem nenhum `panic`. Avaliacao do
 piloto em `docs/DECISOES.md`: o Rust continua (build de 0,8 s, ~12 KB no
 kernel, simbolos e `panic` funcionando, parser testavel fora do kernel).
-Falta: a regressao inteira e o estresse 5x com o codigo final, e o commit.
+Fechada pelo dono depois da pausa: regressao inteira verde e commit junto com a
+parte 1 da 2.6.
+
+#### 2.6 ext2 escrita, mkfs.ext2, fsck - 16:36 a 19:00
+Feita fora do intensivo, em tres partes, cada uma com regressao verde e commit
+proprio. Parte 1: montagem com escrita por padrao, `write` e `truncate` em
+arquivo existente (alocacao de blocos e tabelas indiretas, esparsos, contadores
+gravados no `sync` e no `umount`). Parte 2: `create`, `mkdir`, `unlink`,
+`rmdir` e `rename`, arquivo apagado aberto liberado so no ultimo `close`,
+diretorio indexado perde o indice ao mudar. Parte 3: `mkfs.ext2` e `fsck.ext2`
+em `user/musl` (C, leem e gravam o dispositivo por `lseek` + `read`/`write`,
+porque `pread` em dispositivo de bloco da `ESPIPE` no Orion), e a regressao C
+passou a conferir com o `fsck.ext2` as duas imagens depois do `ext2test`,
+formatar o `sdd` com o `mkfs.ext2`, rodar o `fstest -a` nele (o criterio da
+etapa) e conferir de novo (+10 verificacoes). Validacao no hospedeiro: as
+imagens do `mkfs.ext2` passam no `e2fsck -fn` oficial em 15 tamanhos e blocos
+de 1, 2 e 4 KiB; o `fsck.ext2` concorda com o `e2fsck` em 70 imagens limpas,
+corrige 12 tipos de corrupcao feitos com o `debugfs` (e o `e2fsck` concorda
+depois), e o fuzz com ASan achou e ajudou a corrigir 3 erros dele; a rodada
+final, com o codigo entregue, passou por 480 imagens mutadas sem erro de
+memoria, sem travar e sem precisar de duas passadas para corrigir. Detalhes em
+`docs/DECISOES.md`.

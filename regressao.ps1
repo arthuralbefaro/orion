@@ -462,8 +462,17 @@ if ($runAll -or $OnlyC) {
         "cmd:mkdir /mnt/q", "cmd:mount /dev/sdb /mnt/q", "cmd:rm -r /mnt/q", "wait:1",
         "cmd:mkdir /tmp/e4", "cmd:mount -t ext2 /dev/sdc /tmp/e4", "cmd:ext2test /tmp/e4", "until:300:falha(s))",
         "cmd:/tmp/e4/bin/hello ext2", "wait:2",
+        "cmd:mkfs.ext2 /dev/sdc", "cmd:fsck.ext2 /dev/sdc", "wait:1",
         "cmd:mkdir /tmp/e1", "cmd:mount -t ext2 /dev/sdd /tmp/e1", "cmd:ext2test /tmp/e1", "until:300:falha(s))",
         "cmd:umount /tmp/e4", "cmd:umount /tmp/e1", "wait:1",
+        "cmd:fsck.ext2 /dev/sdc", 'cmd:echo FIM$X-FSCK1', "until:120:FIM-FSCK1",
+        "cmd:fsck.ext2 /dev/sdd", 'cmd:echo FIM$X-FSCK2', "until:120:FIM-FSCK2",
+        "cmd:mkfs.ext2 -L NOVO /dev/sdd", 'cmd:echo FIM$X-MKFS', "until:120:FIM-MKFS",
+        "cmd:fsck.ext2 /dev/sdd", 'cmd:echo FIM$X-FSCK3', "until:120:FIM-FSCK3",
+        "cmd:mount -t ext2 /dev/sdd /tmp/e1", "cmd:ls /tmp/e1",
+        "cmd:fstest -a /tmp/e1", 'cmd:echo FIM$X-FSTEST', "until:600:FIM-FSTEST",
+        "cmd:umount /tmp/e1", "wait:1",
+        "cmd:fsck.ext2 /dev/sdd", 'cmd:echo FIM$X-FSCK4', "until:120:FIM-FSCK4",
         "key:0B", "cmd:mem", "cmd:lsblk", "cmd:mutex"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -NoBuild -Disk -ExtraDisks @("out/ext2-4k.img", "out/ext2-1k.img") -LogPath "out\reg-c.log" `
@@ -521,6 +530,16 @@ if ($runAll -or $OnlyC) {
     Expect $c "link longlink\s+ok" "ext2: link simbolico lento lido pelo readlink"
     Expect $c "argv\[1\] = ext2" "binario do ext2 roda"
     Expect $c "/dev/sdc desmontado de /tmp/e4" "umount do ext2"
+    Expect $c "mkfs\.ext2: /dev/sdc: esta montado" "mkfs.ext2 recusa disco montado"
+    Expect $c "fsck\.ext2: /dev/sdc: esta montado" "fsck.ext2 recusa disco montado"
+    Expect $c "(?s)fsck\.ext2: /dev/sdc: limpo.*?FIM-FSCK1" "ext2 de 4 KiB limpo no fsck depois do ext2test"
+    Expect $c "(?s)fsck\.ext2: /dev/sdd: limpo.*?FIM-FSCK2" "ext2 de 1 KiB limpo no fsck depois do ext2test"
+    Expect $c "mkfs\.ext2: /dev/sdd pronto: \d+ blocos livres, \d+ inodes livres, rotulo 'NOVO'" "mkfs.ext2 formatou o sdd"
+    Expect $c "(?s)FIM-MKFS.*?fsck\.ext2: /dev/sdd: limpo.*?FIM-FSCK3" "ext2 recem-formatado passa no fsck"
+    Expect $c "ext2\s+sdd: rev 1, blocos de 1024 bytes, \d+ blocos \(\d+ livres\), \d+ inodes, \d+ grupo\(s\), label 'NOVO', leitura e escrita" "kernel monta o ext2 do mkfs.ext2"
+    Expect $c "ls /tmp/e1\s*\n\s*<DIR>\s+lost\+found/" "ext2 novo tem o lost+found"
+    Expect $c "(?s)fstest -a /tmp/e1.*?criou 300 arquivos com nome longo\s+ok.*?escreveu 3 MiB\s+ok.*?fstest: TUDO OK.*?FIM-FSTEST" "fstest -a no ext2"
+    Expect $c "(?s)FIM-FSTEST.*?fsck\.ext2: /dev/sdd: limpo.*?FIM-FSCK4" "ext2 limpo no fsck depois do fstest -a"
     Test-MemDelta $c "memoria estavel na sequencia C" 24
 }
 

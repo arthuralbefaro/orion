@@ -1681,3 +1681,58 @@ Uma linha por decisao, na ordem em que foram tomadas.
   recebem criacao, remocao, `rename` e `write` sorteados e nao podem dar
   `panic`. No Windows, sem `mke2fs` nem `e2fsck`, essas partes sao puladas
   com aviso e o resto roda.
+- Parte 3: `mkfs.ext2` e `fsck.ext2` sao programas da musl em C
+  (`user/musl/mkfs.ext2`, `user/musl/fsck.ext2`), como o `mkfs` de FAT, e nao
+  Rust: o Rust fica no kernel, nos lugares da secao "Linguagens". O formato
+  passa a estar descrito em tres lugares (o crate do kernel, o `mkext2.py` e
+  estes dois); o que impede que divirjam e o `e2fsck` oficial conferindo os
+  tres no hospedeiro.
+- `mkfs.ext2` grava o mesmo formato do `mkext2.py`: revisao 1, inodes de 128
+  bytes, `filetype`, `sparse_super` e `large_file`, sem `resize_inode`,
+  `dir_index` nem `ext_attr`. Bloco de 1 KiB ate 512 MiB e de 4 KiB acima
+  (`-b` troca), um inode a cada 4 KiB ate 512 MiB e a cada 16 KiB acima (`-i`
+  e `-N` trocam), como o `mke2fs`. Ultimo grupo menor que a propria sobrecarga
+  mais 50 blocos e descartado. `lost+found` nasce com 12 blocos (1 KiB) ou
+  4 blocos (4 KiB), para o `fsck` nao precisar alocar. Zera o primeiro KiB do
+  disco: um setor de boot de FAT antigo faria a deteccao automatica achar FAT.
+  Sem blocos reservados para o root, porque o kernel ainda nao os respeita.
+  UUID aleatorio do `/dev/urandom`.
+- Os dois leem e gravam o dispositivo com `lseek` + `read`/`write`: no Orion,
+  `pread`/`pwrite` so valem para arquivo regular (`positional_file` devolve
+  `ESPIPE` para dispositivo de bloco). No Linux funcionaria, entao o teste no
+  hospedeiro roda com uma biblioteca que faz `pread` falhar e corta cada
+  `read`/`write` em 4 KiB, como o kernel faz com arquivo que nao e regular.
+- `fsck.ext2` faz as passadas do `e2fsck` numa versao basica: 1) inodes
+  (tipo, ponteiros fora da area de dados, bloco com dois donos, tamanho,
+  `i_blocks`, campos do ext4 que tem de ser zero, orfaos de queda com arquivo
+  apagado aberto); 2) entradas de diretorio (registro corrompido, `.` e `..`,
+  entrada para inode livre, nome invalido, tipo errado, diretorio com dois
+  nomes); 3) arvore (`..` errado, diretorio desconectado ou em ciclo); 4)
+  `links_count`; 5) bitmaps, contadores por grupo, diretorios por grupo e
+  totais do superbloco. Com `-y` corrige o que nao perde dado; o que pediria
+  religar no `lost+found` (inode sem nome, diretorio desconectado, bloco com
+  dois donos, buraco em diretorio) fica como "nao corrigido" e a saida e 4.
+  Nao confere o indice htree, os inodes reservados (o inode 7 de
+  redimensionamento do `mke2fs`) nem horarios. Recusa disco montado. Saida 0,
+  1, 4 ou 8, como o `e2fsck`.
+- Validacao no hospedeiro: imagens do `mkfs.ext2` em 15 tamanhos (de 1 MiB a
+  600 MiB, tamanhos quebrados e grupo final descartado) passam no `e2fsck -fn`,
+  e o crate do kernel montou seis delas (blocos de 1, 2 e 4 KiB, grupo final
+  descartado) e rodou nelas o cenario pesado de criar, apagar e renomear. O
+  `fsck.ext2` concorda com o `e2fsck` em 70 imagens limpas (do `mkfs.ext2`,
+  do `mkext2.py`, do `mke2fs` com htree e inodes de 256 bytes, e as gravadas
+  pelos testes do crate) e corrige 12 corrupcoes
+  feitas com o `debugfs` (links, bitmaps, contadores, orfao, ponteiro fora do
+  disco, `i_blocks`, tamanho, entrada para inode apagado, raiz sem links); o
+  `e2fsck` acha a imagem limpa depois. Fuzz com ASan e UBSan: cada imagem
+  mutada passa por `-n`, `-y`, `-y` e `-n`, e o segundo `-y` nao pode achar
+  mais nada. Ele achou tres erros, corrigidos: leitura alem do fim do disco
+  por ponteiro direto invalido de diretorio no `-n`, raiz com zero links
+  tratada como inode apagado, e `..` "corrigido" sem haver entrada onde
+  gravar (agora o `.` e o `..` sao recriados quando o comeco do bloco esta
+  vazio). Rodada final: 480 imagens sem erro.
+- Regressao C: depois do `ext2test`, `mkfs.ext2` e `fsck.ext2` recusam o
+  `sdc` montado; com os dois desmontados, o `fsck.ext2` confere o `sdc` e o
+  `sdd` (o que o kernel gravou tem de estar limpo), o `mkfs.ext2` formata o
+  `sdd`, o `fsck.ext2` confere, o kernel monta, o `fstest -a` passa (o
+  criterio da etapa) e o `fsck.ext2` confere de novo depois do `umount`.

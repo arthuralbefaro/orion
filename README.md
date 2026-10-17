@@ -92,9 +92,20 @@ QEMU). Para exercitar o FAT de verdade use um disco cru:
     umount /mnt                      # EBUSY se houver arquivo aberto ou cwd dentro
     mount -r /dev/sdb /mnt           # so leitura
 
-Imagens ext2 (so leitura por enquanto; o leitor e o piloto em Rust do
-kernel) saem do `tools\mkext2.py`, a partir de um diretorio ou da arvore de
-teste, e entram no QEMU com `test.ps1 -ExtraDisks`:
+O ext2 (o driver e o piloto em Rust do kernel) monta com leitura e escrita;
+`mount -r` monta so leitura. O proprio Orion formata e confere o disco:
+
+    mkfs.ext2 -L DADOS /dev/sdb      # blocos de 1 KiB ate 512 MiB, 4 KiB acima (-b muda)
+    fsck.ext2 /dev/sdb               # so confere; -y corrige o que for seguro
+    mkdir /tmp/e
+    mount -t ext2 /dev/sdb /tmp/e
+    fstest -a /tmp/e
+    umount /tmp/e
+
+Os dois recusam disco montado. O `fsck.ext2` sai com 0 (limpo), 1 (corrigiu
+tudo), 4 (sobrou problema) ou 8 (nao deu para conferir), como o `e2fsck`.
+Imagens prontas tambem saem do `tools\mkext2.py`, a partir de um diretorio ou
+da arvore de teste, e entram no QEMU com `test.ps1 -ExtraDisks`:
 
     python tools\mkext2.py out\e.img --test --size 32 --block 4096
     mount -t ext2 /dev/sdb /tmp/e    # dentro do Orion
@@ -126,7 +137,7 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
 ## Programas proprios em /bin
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
-    ifconfig ping nslookup dhcp mkfs mount umount
+    ifconfig ping nslookup dhcp mkfs mkfs.ext2 fsck.ext2 mount umount
     testes: memtest fstest vfstest tmptest proctest pctest ext2test polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
