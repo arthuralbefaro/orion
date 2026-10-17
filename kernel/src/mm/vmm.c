@@ -1,9 +1,3 @@
-/*
- * vmm.c - manipulação das tabelas de página.
- *
- * Layout de um endereço virtual de 48 bits:
- *   [47:39] índice PML4 | [38:30] PDPT | [29:21] PD | [20:12] PT | [11:0] offset
- */
 #include <mm/vmm.h>
 #include <mm/pmm.h>
 #include <mm/memory.h>
@@ -33,7 +27,6 @@ static inline size_t pdpt_index(uint64_t v) { return (v >> 30) & 0x1FF; }
 static inline size_t pd_index(uint64_t v)   { return (v >> 21) & 0x1FF; }
 static inline size_t pt_index(uint64_t v)   { return (v >> 12) & 0x1FF; }
 
-/* Desce um nível: devolve a tabela filha (virtual), criando-a se `create`. */
 static uint64_t *next_level(uint64_t *table, size_t index, bool create, const char *what)
 {
     uint64_t entry = table[index];
@@ -53,8 +46,6 @@ static uint64_t *next_level(uint64_t *table, size_t index, bool create, const ch
     uint64_t *child = phys_to_virt(phys);
     memset(child, 0, PAGE_SIZE);
 
-    /* Tabelas intermediárias sempre com permissão total; a restrição fica
-     * na entrada final (PT). */
     table[index] = phys | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
     return child;
 }
@@ -89,7 +80,7 @@ void vmm_map_page_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t 
     uint64_t *pt   = next_level(pd,   pd_index(virt),   true, "PD");
 
     if (!nx_supported)
-        flags &= ~PTE_NX; /* bit reservado sem EFER.NXE -> #PF */
+        flags &= ~PTE_NX;
 
     pt[pt_index(virt)] = (phys & PTE_ADDR_MASK) | (flags & ~PTE_HUGE);
     if (tlb_needs_flush(pml4_phys))
@@ -188,6 +179,19 @@ uint64_t vmm_get_pte_in(uint64_t pml4_phys, uint64_t virt)
     return pt[pt_index(virt)];
 }
 
+void vmm_set_pte_in(uint64_t pml4_phys, uint64_t virt, uint64_t pte)
+{
+    uint64_t *pml4 = phys_to_virt(pml4_phys);
+    uint64_t *pdpt = next_level(pml4, pml4_index(virt), true, "PML4");
+    uint64_t *pd   = next_level(pdpt, pdpt_index(virt), true, "PDPT");
+    uint64_t *pt   = next_level(pd,   pd_index(virt),   true, "PD");
+    if (!nx_supported)
+        pte &= ~PTE_NX;
+    pt[pt_index(virt)] = pte;
+    if (tlb_needs_flush(pml4_phys))
+        invlpg(virt);
+}
+
 uint64_t vmm_create_address_space(void)
 {
     uint64_t phys = pmm_alloc_page();
@@ -204,7 +208,7 @@ static void free_table_level(uint64_t *table, int level)
 {
     for (size_t i = 0; i < ENTRIES; i++) {
         uint64_t e = table[i];
-        if (!(e & PTE_PRESENT))
+        if (!(e & PTE_PRESENT) && !(level == 1 && (e & PTE_PROTNONE)))
             continue;
         if (level == 1 && (e & PTE_NOFREE))
             continue;
@@ -271,7 +275,6 @@ void *vmm_map_mmio(uint64_t phys, size_t size)
     uint64_t end    = PAGE_ALIGN_UP(phys + size);
     uint64_t len    = end - start;
 
-    /* (cuidado: BASE + SIZE estoura 64 bits, por isso a conta é assim) */
     uint64_t used = mmio_next - KERNEL_MMIO_BASE;
     if (len > KERNEL_MMIO_SIZE - used)
         panic("vmm: janela de MMIO esgotada");

@@ -63,9 +63,9 @@ long file_ioctl(struct file *f, uint64_t request, uint64_t arg)
     return file_is_tty(f) ? 0 : -ENOTTY;
 }
 
-int64_t file_mmap(struct file *f, uint64_t len, int prot, uint64_t offset)
+int64_t file_mmap(struct file *f, uint64_t addr, uint64_t len, int prot, uint64_t offset)
 {
-    return f->ops->mmap ? f->ops->mmap(f, len, prot, offset) : -ENODEV;
+    return f->ops->mmap ? f->ops->mmap(f, addr, len, prot, offset) : -ENODEV;
 }
 
 short file_poll(struct file *f, struct poll_table *pt)

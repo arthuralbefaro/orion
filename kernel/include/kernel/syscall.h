@@ -147,6 +147,7 @@ struct user_procinfo {
 
 #define USER_ADDR_MAX 0x0000800000000000ull
 #define USER_MMAP_BASE 0x0000100000000000ull
+#define USER_MMAP_END  0x0000700000000000ull
 
 #define POLLIN   0x0001
 #define POLLPRI  0x0002
@@ -192,6 +193,13 @@ struct user_pollfd {
 #define MAP_SHARED    0x01
 #define MAP_PRIVATE   0x02
 #define MAP_ANONYMOUS 0x20
+#define MAP_TYPE      0x0f
+#define MAP_FIXED     0x10
+#define MAP_FIXED_NOREPLACE 0x100000
+#define PROT_NONE     0
+#define MADV_DONTNEED 4
+#define SYS_MPROTECT  10
+#define SYS_MADVISE   28
 
 #define ARCH_SET_FS 0x1002
 #define ARCH_GET_FS 0x1003

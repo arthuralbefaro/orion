@@ -18,7 +18,7 @@ bool user_range_ok(uint64_t ptr, uint64_t len);
 long copy_from_user(void *dst, const void *usrc, size_t len);
 long copy_to_user(void *udst, const void *src, size_t len);
 long strncpy_from_user(char *dst, const char *usrc, size_t size);
-bool uaccess_fixup(struct interrupt_frame *f);
+bool uaccess_fixup(struct interrupt_frame *f, uint64_t cr2);
 uint64_t uaccess_fault_count(void);
 
 void *kbuf_get(struct kbuf *b, size_t want);

@@ -64,9 +64,9 @@ long strncpy_from_user(char *dst, const char *usrc, size_t size)
     return n;
 }
 
-bool uaccess_fixup(struct interrupt_frame *f)
+bool uaccess_fixup(struct interrupt_frame *f, uint64_t cr2)
 {
-    if (f->int_no == EXC_PAGE_FAULT && read_cr2() >= USER_ADDR_MAX)
+    if (f->int_no == EXC_PAGE_FAULT && cr2 >= USER_ADDR_MAX)
         return false;
     for (const struct ex_entry *e = __ex_table_start; e < __ex_table_end; e++) {
         if (e->insn == f->rip) {

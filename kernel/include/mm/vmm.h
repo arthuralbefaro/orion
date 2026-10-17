@@ -1,10 +1,3 @@
-/*
- * vmm.h - gerenciador de memória virtual (tabelas de página x86_64, 4 níveis).
- *
- * Nesta versão só sabemos mapear/desmapear páginas de 4 KiB nas tabelas que
- * o bootloader nos entregou (CR3). É o suficiente para mapear MMIO (LAPIC,
- * I/O APIC, HPET...). Espaços de endereço por processo vêm depois.
- */
 #pragma once
 
 #include <kernel/compiler.h>
@@ -16,24 +9,17 @@
 #define PTE_NOCACHE   (1ull << 4)
 #define PTE_ACCESSED  (1ull << 5)
 #define PTE_DIRTY     (1ull << 6)
-#define PTE_HUGE      (1ull << 7)   /* PS: página de 2 MiB (PD) ou 1 GiB (PDPT) */
+#define PTE_HUGE      (1ull << 7)
 #define PTE_GLOBAL    (1ull << 8)
-#define PTE_NOFREE    (1ull << 9)   /* bit livre para o SO: pagina nao pertence ao PMM */
-#define PTE_COW       (1ull << 10)  /* bit livre para o SO: copiar na escrita */
+#define PTE_NOFREE    (1ull << 9)
+#define PTE_COW       (1ull << 10)
+#define PTE_PROTNONE  (1ull << 11)
 #define PTE_NX        (1ull << 63)
 #define PTE_ADDR_MASK 0x000FFFFFFFFFF000ull
 
-/* Flags prontas para MMIO: leitura/escrita, sem cache (UC). */
 #define PTE_MMIO (PTE_PRESENT | PTE_WRITABLE | PTE_NOCACHE | PTE_WRITETHRU)
-/* Dados do kernel: RW, sem execução (NX é ignorado se a CPU não suportar). */
 #define PTE_KERNEL_RW (PTE_PRESENT | PTE_WRITABLE | PTE_NX)
 
-/*
- * Mapa da metade superior (PDPT 511 = últimos 1 GiB):
- *   0xffffffff80000000  kernel (imagem ELF)                    [PDPT 510]
- *   0xffffffffc0000000  heap "large" (KERNEL_HEAP, 512 MiB)     [PDPT 511]
- *   0xffffffffe0000000  janela de MMIO (KERNEL_MMIO, 512 MiB)   [PDPT 511]
- */
 #define KERNEL_HEAP_BASE ((uint64_t)0xffffffffc0000000)
 #define KERNEL_HEAP_SIZE MiB(512)
 #define KERNEL_MMIO_BASE ((uint64_t)0xffffffffe0000000)
@@ -49,23 +35,17 @@ void     vmm_map_page_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint6
 void     vmm_unmap_page_in(uint64_t pml4_phys, uint64_t virt);
 uint64_t vmm_virt_to_phys_in(uint64_t pml4_phys, uint64_t virt);
 uint64_t vmm_get_pte_in(uint64_t pml4_phys, uint64_t virt);
+void     vmm_set_pte_in(uint64_t pml4_phys, uint64_t virt, uint64_t pte);
 
-/* Resolve uma falta de escrita numa pagina marcada como copy-on-write.
- * Devolve false se a pagina nao era COW (a falta e um erro de verdade). */
 bool     vmm_cow_fault(uint64_t pml4_phys, uint64_t virt);
 void     vmm_cow_stats(uint64_t *faults, uint64_t *copies);
 
-/* Mapeia uma página de 4 KiB. Aloca tabelas intermediárias se preciso. */
 void vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags);
 void vmm_unmap_page(uint64_t virt);
 
-/* Versões para faixas contíguas. Em unmap, free_phys=true devolve as
- * páginas físicas ao PMM. */
 void vmm_map_range(uint64_t virt, uint64_t phys, uint64_t pages, uint64_t flags);
 void vmm_unmap_range(uint64_t virt, uint64_t pages, bool free_phys);
 
-/* Traduz um endereço virtual (0 se não mapeado). */
 uint64_t vmm_virt_to_phys(uint64_t virt);
 
-/* Reserva `size` bytes da janela de MMIO e mapeia `phys` lá. */
 void *vmm_map_mmio(uint64_t phys, size_t size);

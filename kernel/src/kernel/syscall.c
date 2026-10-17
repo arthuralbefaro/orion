@@ -10,6 +10,7 @@
 #include <mm/pmm.h>
 #include <mm/memory.h>
 #include <mm/uaccess.h>
+#include <mm/vma.h>
 #include <lib/string.h>
 #include <kernel/time.h>
 #include <drivers/rtc.h>
@@ -639,58 +640,121 @@ static long sys_lseek(int fd, int64_t off, int whence)
     return (long)f->offset;
 }
 
+static uint32_t prot_to_vma(int prot)
+{
+    uint32_t f = 0;
+    if (prot & PROT_READ)
+        f |= VMA_READ;
+    if (prot & PROT_WRITE)
+        f |= VMA_WRITE | VMA_READ;
+    if (prot & PROT_EXEC)
+        f |= VMA_EXEC | VMA_READ;
+    return f;
+}
+
 static long sys_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t off)
 {
-    (void)addr;
     struct process *p = process_current();
-    if (len == 0)
+    int type = flags & MAP_TYPE;
+    if (len == 0 || !IS_ALIGNED(off, PAGE_SIZE) || (type != MAP_PRIVATE && type != MAP_SHARED))
         return -EINVAL;
-    if (fd >= 0) {
-        struct file *f = process_fd_get(p, fd);
+    if (len > USER_MMAP_END)
+        return -ENOMEM;
+    len = PAGE_ALIGN_UP(len);
+    bool fixed = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) != 0;
+    if (fixed && (!IS_ALIGNED(addr, PAGE_SIZE) || addr == 0 || addr >= USER_STACK_TOP ||
+                  len > USER_STACK_TOP - addr))
+        return -EINVAL;
+
+    struct file *f = NULL;
+    uint32_t vflags = prot_to_vma(prot) | (type == MAP_SHARED ? VMA_SHARED : 0);
+    if (!(flags & MAP_ANONYMOUS)) {
+        f = process_fd_get(p, fd);
         if (!f)
             return -EBADF;
-        return (long)file_mmap(f, len, prot, off);
+        if (!f->ops->mmap) {
+            if (!file_is_regular(f) || f->node.is_dir)
+                return -ENODEV;
+            if (type == MAP_SHARED && (prot & PROT_WRITE))
+                return -ENODEV;
+            vflags |= VMA_FILE;
+            vflags &= ~(uint32_t)VMA_SHARED;
+        }
     }
-    if (fd != -1 || !(flags & MAP_ANONYMOUS))
-        return -EINVAL;
-    uint64_t pages = PAGE_ALIGN_UP(len) / PAGE_SIZE;
-    uint64_t base = p->mmap_next;
-    if (base + pages * PAGE_SIZE > USER_STACK_TOP - USER_STACK_SIZE - MiB(16))
-        return -ENOMEM;
-    uint64_t pf = PTE_PRESENT | PTE_USER;
-    if (prot & PROT_WRITE)
-        pf |= PTE_WRITABLE;
-    if (!(prot & PROT_EXEC))
-        pf |= PTE_NX;
-    for (uint64_t i = 0; i < pages; i++) {
-        uint64_t phys = pmm_alloc_page();
-        if (!phys)
+
+    uint64_t base;
+    if (fixed) {
+        if (flags & MAP_FIXED_NOREPLACE) {
+            if (!vma_range_free(p, addr, addr + len))
+                return -EEXIST;
+        } else {
+            vma_unmap(p, addr, addr + len);
+        }
+        base = addr;
+    } else if (addr && IS_ALIGNED(addr, PAGE_SIZE) && addr >= USER_MMAP_BASE && addr < USER_MMAP_END &&
+               len <= USER_MMAP_END - addr && vma_range_free(p, addr, addr + len)) {
+        base = addr;
+    } else {
+        base = vma_find_free(p, len);
+        if (!base)
             return -ENOMEM;
-        memset(phys_to_virt(phys), 0, PAGE_SIZE);
-        vmm_map_page_in(p->pml4_phys, base + i * PAGE_SIZE, phys, pf);
-        p->pages++;
     }
-    p->mmap_next = base + pages * PAGE_SIZE;
+
+    if (f && f->ops->mmap) {
+        int64_t r = file_mmap(f, base, len, prot, off);
+        if (r < 0)
+            return r;
+        vflags |= VMA_SHARED | VMA_NOFREE;
+        if (!vma_add(p, base, base + len, vflags, NULL, 0, 0))
+            return -ENOMEM;
+        return (long)base;
+    }
+    if (!vma_add(p, base, base + len, vflags, f, off, f ? f->node.size : 0))
+        return -ENOMEM;
+    if (!f && (vflags & VMA_SHARED)) {
+        uint64_t pte_flags = vma_pte_flags(vflags);
+        bool none = !(vflags & (VMA_READ | VMA_WRITE | VMA_EXEC));
+        for (uint64_t va = base; va < base + len; va += PAGE_SIZE) {
+            uint64_t phys = pmm_alloc_page();
+            if (!phys) {
+                vma_unmap(p, base, base + len);
+                return -ENOMEM;
+            }
+            memset(phys_to_virt(phys), 0, PAGE_SIZE);
+            if (none)
+                vmm_set_pte_in(p->pml4_phys, va, phys | (pte_flags & ~PTE_PRESENT) | PTE_PROTNONE);
+            else
+                vmm_map_page_in(p->pml4_phys, va, phys, pte_flags);
+            p->pages++;
+        }
+    }
     return (long)base;
 }
 
 static long sys_munmap(uint64_t addr, uint64_t len)
 {
-    struct process *p = process_current();
-    if (!IS_ALIGNED(addr, PAGE_SIZE) || addr < USER_MMAP_BASE || addr + len > p->mmap_next)
+    if (!IS_ALIGNED(addr, PAGE_SIZE) || len == 0 || !user_range_ok(addr, len))
         return -EINVAL;
-    uint64_t pages = PAGE_ALIGN_UP(len) / PAGE_SIZE;
-    for (uint64_t i = 0; i < pages; i++) {
-        uint64_t v = addr + i * PAGE_SIZE;
-        uint64_t pte = vmm_get_pte_in(p->pml4_phys, v);
-        if (!(pte & PTE_PRESENT))
-            continue;
-        vmm_unmap_page_in(p->pml4_phys, v);
-        if (!(pte & PTE_NOFREE)) {
-            pmm_free_page(pte & PTE_ADDR_MASK);
-            p->pages--;
-        }
-    }
+    return vma_unmap(process_current(), addr, addr + PAGE_ALIGN_UP(len));
+}
+
+static long sys_mprotect(uint64_t addr, uint64_t len, int prot)
+{
+    if (!IS_ALIGNED(addr, PAGE_SIZE) || !user_range_ok(addr, len))
+        return -EINVAL;
+    if (prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC))
+        return -EINVAL;
+    if (len == 0)
+        return 0;
+    return vma_protect(process_current(), addr, addr + PAGE_ALIGN_UP(len), prot_to_vma(prot));
+}
+
+static long sys_madvise(uint64_t addr, uint64_t len, int advice)
+{
+    if (!IS_ALIGNED(addr, PAGE_SIZE) || !user_range_ok(addr, len))
+        return -EINVAL;
+    if (advice == MADV_DONTNEED)
+        return vma_discard(process_current(), addr, addr + PAGE_ALIGN_UP(len));
     return 0;
 }
 
@@ -805,29 +869,22 @@ static long sys_dup2(int oldfd, int newfd)
 static long sys_brk(uint64_t addr)
 {
     struct process *p = process_current();
-    if (addr == 0)
+    if (addr == 0 || addr < p->brk_start || addr > p->brk_start + USER_HEAP_MAX)
         return (long)p->brk;
-    if (addr < p->brk_start || addr > p->brk_start + USER_HEAP_MAX)
-        return -ENOMEM;
     uint64_t old_end = PAGE_ALIGN_UP(p->brk);
     uint64_t new_end = PAGE_ALIGN_UP(addr);
-    for (uint64_t v = old_end; v < new_end; v += PAGE_SIZE) {
-        if (vmm_virt_to_phys_in(p->pml4_phys, v))
-            continue;
-        uint64_t phys = pmm_alloc_page();
-        if (!phys)
-            return -ENOMEM;
-        memset(phys_to_virt(phys), 0, PAGE_SIZE);
-        vmm_map_page_in(p->pml4_phys, v, phys, PTE_PRESENT | PTE_USER | PTE_WRITABLE | PTE_NX);
-        p->pages++;
-    }
-    for (uint64_t v = new_end; v < old_end; v += PAGE_SIZE) {
-        uint64_t phys = vmm_virt_to_phys_in(p->pml4_phys, v);
-        if (phys) {
-            vmm_unmap_page_in(p->pml4_phys, v);
-            pmm_free_page(PAGE_ALIGN_DOWN(phys));
-            p->pages--;
+    if (new_end > old_end) {
+        if (!vma_range_free(p, old_end, new_end))
+            return (long)p->brk;
+        struct vma *v = old_end > p->brk_start ? vma_find(p, old_end - 1) : NULL;
+        if (v && (v->flags & VMA_HEAP) && v->end == old_end) {
+            if (!vma_resize(p, v, new_end))
+                return (long)p->brk;
+        } else if (!vma_add(p, old_end, new_end, VMA_READ | VMA_WRITE | VMA_HEAP, NULL, 0, 0)) {
+            return (long)p->brk;
         }
+    } else if (new_end < old_end) {
+        vma_unmap(p, new_end, old_end);
     }
     p->brk = addr;
     return (long)addr;
@@ -1086,6 +1143,8 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_LSEEK:       ret = sys_lseek((int)f->rdi, (int64_t)f->rsi, (int)f->rdx); break;
     case SYS_MMAP:        ret = sys_mmap(f->rdi, f->rsi, (int)f->rdx, (int)f->r10, (int)f->r8, f->r9); break;
     case SYS_MUNMAP:      ret = sys_munmap(f->rdi, f->rsi); break;
+    case SYS_MPROTECT:    ret = sys_mprotect(f->rdi, f->rsi, (int)f->rdx); break;
+    case SYS_MADVISE:     ret = sys_madvise(f->rdi, f->rsi, (int)f->rdx); break;
     case SYS_IOCTL:       ret = sys_ioctl((int)f->rdi, f->rsi, f->rdx); break;
     case SYS_DUP:         ret = sys_dup((int)f->rdi); break;
     case SYS_GETCWD:      ret = sys_getcwd((char *)f->rdi, (size_t)f->rsi); break;

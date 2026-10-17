@@ -41,6 +41,8 @@ void    sched_yield(void)                          { syscall0(SYS_SCHED_YIELD); 
 int     stat(const char *path, struct stat *st)    { return (int)__syscall_ret(syscall2(SYS_STAT, (long)path, (long)st)); }
 int     fstat(int fd, struct stat *st)             { return (int)__syscall_ret(syscall2(SYS_FSTAT, fd, (long)st)); }
 int     munmap(void *addr, size_t len)             { return (int)__syscall_ret(syscall2(SYS_MUNMAP, (long)addr, (long)len)); }
+int     mprotect(void *addr, size_t len, int prot) { return (int)__syscall_ret(syscall3(10, (long)addr, (long)len, prot)); }
+int     madvise(void *addr, size_t len, int advice) { return (int)__syscall_ret(syscall3(28, (long)addr, (long)len, advice)); }
 int     clock_gettime(int clk, struct timespec *ts){ return (int)__syscall_ret(syscall2(SYS_CLOCK_GETTIME, clk, (long)ts)); }
 int     ioctl(int fd, unsigned long req, void *arg) { return (int)__syscall_ret(syscall3(SYS_IOCTL, fd, (long)req, (long)arg)); }
 int     poll(struct pollfd *fds, nfds_t n, int timeout) { return (int)__syscall_ret(syscall3(SYS_POLL, (long)fds, (long)n, timeout)); }
@@ -150,8 +152,8 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
 int brk(void *addr)
 {
     long r = syscall1(SYS_BRK, (long)addr);
-    if (r < 0) {
-        errno = (int)-r;
+    if (r != (long)addr) {
+        errno = ENOMEM;
         return -1;
     }
     return 0;
@@ -163,8 +165,8 @@ void *sbrk(long increment)
     if (increment == 0)
         return (void *)cur;
     long r = syscall1(SYS_BRK, cur + increment);
-    if (r < 0) {
-        errno = (int)-r;
+    if (r != cur + increment) {
+        errno = ENOMEM;
         return (void *)-1;
     }
     return (void *)cur;

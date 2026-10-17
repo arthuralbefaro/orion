@@ -62,7 +62,7 @@ static long fb_ioctl(struct file *f, uint64_t request, uint64_t arg)
     return copy_to_user((void *)arg, &info, sizeof(info));
 }
 
-static int64_t fb_mmap(struct file *f, uint64_t len, int prot, uint64_t offset)
+static int64_t fb_mmap(struct file *f, uint64_t base, uint64_t len, int prot, uint64_t offset)
 {
     const struct framebuffer *fb = console_get_framebuffer();
     if (!fb)
@@ -80,9 +80,6 @@ static int64_t fb_mmap(struct file *f, uint64_t len, int prot, uint64_t offset)
     phys = PAGE_ALIGN_DOWN(phys) + offset;
 
     struct process *p = process_current();
-    uint64_t base = p->mmap_next;
-    if (base + bytes > USER_STACK_TOP - USER_STACK_SIZE - MiB(16))
-        return -ENOMEM;
 
     uint64_t flags = PTE_PRESENT | PTE_USER | PTE_NX | PTE_WRITETHRU | PTE_NOFREE;
     if (prot & PROT_WRITE)
@@ -90,14 +87,13 @@ static int64_t fb_mmap(struct file *f, uint64_t len, int prot, uint64_t offset)
     for (uint64_t off = 0; off < bytes; off += PAGE_SIZE)
         vmm_map_page_in(p->pml4_phys, base + off, phys + off, flags);
 
-    p->mmap_next = base + bytes;
     mapped_pages += bytes / PAGE_SIZE;
     if (!f->priv) {
         f->priv = (void *)1;
         if (__atomic_fetch_add(&graphics_users, 1, __ATOMIC_SEQ_CST) == 0)
             console_set_graphics(true);
     }
-    return (int64_t)base;
+    return 0;
 }
 
 static void fb_close(struct file *f)

@@ -27,6 +27,12 @@ extern int errno;
 #define EEXIST  17
 #define ENOTEMPTY 39
 #define ENAMETOOLONG 36
+#define ENXIO   6
+#define ENODEV  19
+#define ENFILE  23
+#define ELOOP   40
+#define EOVERFLOW 75
+#define ENOTSUP 95
 #define EROFS   30
 #define ENOSPC  28
 

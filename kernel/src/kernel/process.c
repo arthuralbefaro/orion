@@ -17,6 +17,7 @@
 #include <arch/x86_64/fpu.h>
 #include <lib/random.h>
 #include <mm/uaccess.h>
+#include <mm/vma.h>
 #include <mm/pmm.h>
 #include <mm/heap.h>
 #include <mm/memory.h>
@@ -91,7 +92,7 @@ static bool load_elf(struct process *p, uint64_t pml4, const uint8_t *image, siz
         if (ph->p_type != PT_LOAD)
             continue;
         if (ph->p_memsz > USER_STACK_TOP || ph->p_vaddr > USER_STACK_TOP - ph->p_memsz ||
-            ph->p_vaddr + ph->p_memsz > USER_STACK_TOP - USER_STACK_SIZE ||
+            ph->p_vaddr + ph->p_memsz > USER_STACK_TOP - USER_STACK_MAX ||
             ph->p_filesz > ph->p_memsz || ph->p_offset > size || ph->p_filesz > size - ph->p_offset)
             return false;
         uint64_t flags = PTE_PRESENT | PTE_USER;
@@ -100,6 +101,13 @@ static bool load_elf(struct process *p, uint64_t pml4, const uint8_t *image, siz
         if (!(ph->p_flags & PF_X))
             flags |= PTE_NX;
         if (!map_user_range(p, pml4, ph->p_vaddr, ph->p_memsz, flags))
+            return false;
+        uint32_t vf = VMA_READ | VMA_IMAGE;
+        if (ph->p_flags & PF_W)
+            vf |= VMA_WRITE;
+        if (ph->p_flags & PF_X)
+            vf |= VMA_EXEC;
+        if (!vma_add_merge(p, pml4, PAGE_ALIGN_DOWN(ph->p_vaddr), PAGE_ALIGN_UP(ph->p_vaddr + ph->p_memsz), vf))
             return false;
         copy_to_space(pml4, ph->p_vaddr, image + ph->p_offset, ph->p_filesz);
         if (!phdr && eh->e_phoff >= ph->p_offset && eh->e_phoff < ph->p_offset + ph->p_filesz)
@@ -203,6 +211,9 @@ static bool setup_image(struct process *p, uint64_t pml4, const void *image, siz
     if (!map_user_range(p, pml4, USER_STACK_TOP - USER_STACK_SIZE, USER_STACK_SIZE,
                         PTE_PRESENT | PTE_USER | PTE_WRITABLE | PTE_NX))
         return false;
+    if (!vma_add(p, USER_STACK_TOP - USER_STACK_MAX, USER_STACK_TOP, VMA_READ | VMA_WRITE | VMA_STACK,
+                 NULL, 0, 0))
+        return false;
     uint64_t sp = build_stack(pml4, argv, envp, &info, execfn);
     if (!sp)
         return false;
@@ -241,6 +252,7 @@ static void process_free(struct process *p)
 {
     if (!p)
         return;
+    vma_release_all(p);
     kfree(p->sig_handlers);
     kfree(p->fds);
     kfree(p->fd_flags);
@@ -280,7 +292,6 @@ static struct process *process_alloc(const char *name)
     }
     p->state = PROC_RUNNING;
     signal_init_process(p);
-    p->mmap_next = USER_MMAP_BASE;
     strlcpy(p->cwd, "/", sizeof(p->cwd));
     return p;
 }
@@ -566,9 +577,9 @@ int process_fd_close(struct process *p, int fd)
     return 0;
 }
 
-static bool share_user_pages(struct process *child, uint64_t parent_pml4)
+static bool share_user_pages(struct process *child, struct process *parent)
 {
-    uint64_t *pml4 = phys_to_virt(parent_pml4);
+    uint64_t *pml4 = phys_to_virt(parent->pml4_phys);
     for (uint64_t i4 = 0; i4 < 256; i4++) {
         if (!(pml4[i4] & PTE_PRESENT)) continue;
         uint64_t *pdpt = phys_to_virt(pml4[i4] & PTE_ADDR_MASK);
@@ -580,20 +591,22 @@ static bool share_user_pages(struct process *child, uint64_t parent_pml4)
                 uint64_t *pt = phys_to_virt(pd[i2] & PTE_ADDR_MASK);
                 for (uint64_t i1 = 0; i1 < 512; i1++) {
                     uint64_t e = pt[i1];
-                    if (!(e & PTE_PRESENT)) continue;
+                    if (!(e & (PTE_PRESENT | PTE_PROTNONE))) continue;
                     uint64_t virt = (i4 << 39) | (i3 << 30) | (i2 << 21) | (i1 << 12);
                     uint64_t phys = e & PTE_ADDR_MASK;
                     uint64_t flags = e & ~PTE_ADDR_MASK;
                     if (e & PTE_NOFREE) {
-                        vmm_map_page_in(child->pml4_phys, virt, phys, flags);
+                        vmm_set_pte_in(child->pml4_phys, virt, e);
                         continue;
                     }
-                    if (flags & PTE_WRITABLE) {
+                    struct vma *v = vma_find(parent, virt);
+                    bool shared = v && (v->flags & VMA_SHARED);
+                    if (!shared) {
                         flags = (flags & ~PTE_WRITABLE) | PTE_COW;
                         pt[i1] = phys | flags;
                     }
                     pmm_ref_inc(phys);
-                    vmm_map_page_in(child->pml4_phys, virt, phys, flags);
+                    vmm_set_pte_in(child->pml4_phys, virt, phys | flags);
                     child->pages++;
                 }
             }
@@ -627,7 +640,8 @@ int process_fork(struct interrupt_frame *frame)
     if (!child)
         return -ENOMEM;
 
-    if (!share_user_pages(child, parent->pml4_phys)) {
+    if (!vma_copy_all(child, parent) || !share_user_pages(child, parent)) {
+        vma_release_all(child);
         vmm_destroy_address_space(child->pml4_phys);
         process_free(child);
         return -ENOMEM;
@@ -636,7 +650,6 @@ int process_fork(struct interrupt_frame *frame)
     child->stack_top = parent->stack_top;
     child->brk_start = parent->brk_start;
     child->brk = parent->brk;
-    child->mmap_next = parent->mmap_next;
     child->pgid = parent->pgid;
     child->sig_blocked = parent->sig_blocked;
     memcpy(child->sig_handlers, parent->sig_handlers, SIG_TABLE_SIZE);
@@ -695,18 +708,20 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
     path = full;
 
     uint64_t old_pml4 = p->pml4_phys;
-    uint64_t old_pages = p->pages, old_mmap = p->mmap_next, old_entry = p->entry;
+    uint64_t old_pages = p->pages, old_entry = p->entry;
+    struct vma *old_vmas = p->vmas;
+    p->vmas = NULL;
     uint64_t old_stack = p->stack_top, old_brk_start = p->brk_start, old_brk = p->brk;
     uint64_t new_pml4 = vmm_create_address_space();
     p->pages = 0;
-    p->mmap_next = USER_MMAP_BASE;
     int ret = 0;
     if (!new_pml4 ||
         !setup_image(p, new_pml4, image, size, (const char *const *)argv, (const char *const *)envp, full)) {
         if (new_pml4)
             vmm_destroy_address_space(new_pml4);
         p->pages = old_pages;
-        p->mmap_next = old_mmap;
+        vma_release_all(p);
+        p->vmas = old_vmas;
         p->entry = old_entry;
         p->stack_top = old_stack;
         p->brk_start = old_brk_start;
@@ -730,6 +745,10 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
         write_cr3(new_pml4);
         sti();
         vmm_destroy_address_space(old_pml4);
+        struct vma *new_vmas = p->vmas;
+        p->vmas = old_vmas;
+        vma_release_all(p);
+        p->vmas = new_vmas;
 
         memset(frame, 0, offsetof(struct interrupt_frame, rip));
         frame->rip = p->entry;
@@ -805,6 +824,7 @@ static NORETURN void process_terminate(int status)
             file_unref(p->fds[i]);
             p->fds[i] = NULL;
         }
+    vma_release_all(p);
     uint64_t flags = spin_lock_irqsave(&proc_lock);
     p->state = PROC_ZOMBIE;
     orphan_children_locked(p);

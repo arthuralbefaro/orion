@@ -621,3 +621,67 @@ Uma linha por decisao, na ordem em que foram tomadas.
   como o Linux. O plano dizia "devolve ENOENT"; `EINVAL` e o que a musl espera
   de um arquivo comum.
 - `access`/`faccessat` so conferem a existencia: ainda nao ha permissoes (4.1).
+
+## v2.0.0-a4 (memoria do jeito Linux)
+
+- Cada processo tem uma lista ordenada de areas (`struct vma`: inicio, fim,
+  permissoes, arquivo e deslocamento) em `mm/vma.c`. Ela substitui o
+  `mmap_next`, que so crescia. Uma lista simples basta enquanto os processos
+  tem dezenas de areas; uma arvore so faria diferenca com milhares.
+- Memoria anonima, `brk` e a pilha sao alocados sob demanda: o `mmap` so cria
+  a area, e a pagina nasce zerada na primeira falta. A falta e tratada pelo
+  mesmo caminho para usuario e kernel (um `copy_to_user` num buffer ainda nao
+  tocado tambem cai ali), antes da tabela de excecoes.
+- O handler de falta de pagina religa as interrupcoes quando o codigo
+  interrompido as tinha ligadas: preencher uma pagina de arquivo le o disco, e
+  o disco usa mutex. Com interrupcoes desligadas (quadro de sinal empurrado
+  numa IRQ) a falta de arquivo e recusada; a anonima continua funcionando.
+- A pilha e uma area de 8 MiB com so os 64 KiB do topo mapeados de saida
+  (onde o `execve` escreve argumentos e `auxv`); o resto vem sob demanda.
+  `RLIMIT_STACK` continua informando 64 KiB por enquanto.
+- Os segmentos do ELF continuam carregados de uma vez, mas ganham areas.
+  Dois segmentos que dividem uma pagina viram uma area com a uniao das
+  permissoes, e as paginas ja mapeadas sao reescritas com ela.
+- `mprotect` divide areas e reescreve as PTEs presentes. Uma pagina
+  copy-on-write continua sem escrita no PTE mesmo quando a area volta a ter
+  escrita: quem decide se a escrita vale e a area, e a copia acontece na falta.
+- `PROT_NONE` numa pagina ja populada nao a libera: o PTE fica sem o bit de
+  presente e com um bit de software (`PTE_PROTNONE`, bit 11) guardando o
+  endereco, e volta inteiro no proximo `mprotect`. O `fork` e a destruicao do
+  espaco de enderecos conhecem esse bit.
+- `MAP_SHARED` anonimo e compartilhado de verdade entre pai e filho: o `fork`
+  consulta a area e, nesse caso, nao marca copy-on-write.
+- `MAP_PRIVATE` de arquivo le a pagina do arquivo na falta (o cache de paginas
+  unificado e a etapa 2.4). `MAP_SHARED` de arquivo so e aceito sem escrita (e
+  ai e igual ao privado); com `PROT_WRITE` devolve `ENODEV`, porque ainda nao
+  ha como escrever de volta no arquivo.
+- Dispositivo (`/dev/fb0`) ganhou uma area `NOFREE`; o driver recebe o
+  endereco escolhido pelo `mmap` em vez de escolher sozinho.
+- `brk` segue o Linux: devolve o break novo, ou o antigo quando nao da. A libc
+  propria mudou junto. O heap e uma area que cresce e encolhe.
+- Enderecos de `mmap` sem `MAP_FIXED`: a dica, se estiver livre e alinhada;
+  senao o primeiro buraco a partir de `0x100000000000`. ASLR fica para a 4.4.
+- `madvise(MADV_DONTNEED)` descarta as paginas privadas (a proxima leitura ve
+  zero, ou o arquivo de novo); as outras dicas sao aceitas sem efeito.
+- Depois de uma revisao do diff, antes do commit:
+  - No `fork`, toda pagina privada vira copy-on-write, inclusive as que ja
+    estavam so de leitura. Antes uma pagina so de leitura era compartilhada
+    sem o bit, e um `mprotect(PROT_WRITE)` depois deixava um processo escrever
+    na pagina do outro.
+  - `MAP_SHARED` anonimo e populado inteiro no `mmap`. Sob demanda, uma pagina
+    tocada so depois do `fork` nascia separada em cada processo; com as
+    paginas criadas antes, o `fork` sempre as compartilha. Um objeto de
+    memoria compartilhada de verdade fica para quando houver `shm`.
+  - Area de dispositivo nao gera pagina sob demanda: o driver ja mapeou tudo o
+    que existe, e o resto da area e `SIGSEGV`.
+  - `mprotect` preserva os bits de cache da PTE (`PWT`/`PCD`), que o
+    framebuffer usa.
+  - `MADV_DONTNEED` nao descarta segmentos do executavel (`VMA_IMAGE`): eles
+    nao tem arquivo por tras e voltariam zerados.
+  - `brk` trabalha sobre a faixa entre o break antigo e o novo (cresce so se
+    ela estiver livre, encolhe com `munmap`), em vez de redimensionar a
+    "primeira area de heap", que podia ter sido cortada por um `munmap`.
+  - `mmap` nunca mapeia a ultima pagina da metade de usuario: um `sysret` com
+    RIP em `0x7ffffffff000+` voltaria para um endereco nao canonico.
+  - O handler de excecao le o CR2 uma vez so, no comeco: com as interrupcoes
+    religadas, outra falta (de outra thread) pode trocar o CR2 no meio.

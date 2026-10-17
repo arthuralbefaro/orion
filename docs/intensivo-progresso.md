@@ -16,7 +16,7 @@ ou sinais), 5 vezes seguidas:
 
     .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
 
-Proxima etapa: 1.4.
+Proxima etapa: 1.5.
 
 ## Checklist
 
@@ -32,7 +32,7 @@ Proxima etapa: 1.4.
 | 1.1 | Pilha inicial do Linux (auxv) | [x] | 00:55 | 01:29 | (ver diario) |
 | 1.2 | Syscalls de partida da musl | [x] | 01:29 | 01:51 | (ver diario) |
 | 1.3 | Arquivos no formato do Linux | [x] | 01:51 | 02:13 | (ver diario) |
-| 1.4 | Memoria do jeito Linux (VMAs, mmap) | [ ] | | | |
+| 1.4 | Memoria do jeito Linux (VMAs, mmap) | [x] | 02:13 | 02:51 | (ver diario) |
 | 1.5 | Programas contra a musl com `zig cc` (plano B: musl pelo build.ps1) | [ ] | | | |
 | 1.6 | Threads (clone) | [ ] | | | |
 | 1.7 | futex | [ ] | | | |
@@ -292,3 +292,26 @@ propria lista diretorios com `getdents64` e o `ls` continua funcionando (usa
 `d_type` e `stat`). Programa novo `filetest` (33 verificacoes, inclusive um
 neto que confere por `exec` que um descritor `FD_CLOEXEC` sumiu e outro nao).
 Regressao 134 -> 139, estresse 5x verde.
+
+#### 1.4 Memoria do jeito Linux - 02:13 as 02:51 - FEITO
+Lista de areas por processo (`mm/vma.c`) no lugar do `mmap_next`; memoria
+anonima, `brk` e pilha (agora 8 MiB) sob demanda pela falta de pagina;
+`mmap` com dica, `MAP_FIXED`, `MAP_FIXED_NOREPLACE`, `MAP_SHARED` anonimo e
+`MAP_PRIVATE` de arquivo (pagina lida do arquivo na falta); `munmap` parcial;
+`mprotect` (inclusive `PROT_NONE` preservando o conteudo); `madvise` com
+`MADV_DONTNEED`; `brk` com a semantica do Linux. As duas partes do plano
+(areas e `mmap` de arquivo) entraram juntas. `memtest` reescrito (43
+verificacoes, cada caso da etapa).
+Uma revisao do diff antes do commit achou 10 problemas reais, todos
+corrigidos e varios com caso novo no `memtest`: pagina privada so de leitura
+compartilhada sem copy-on-write no `fork` (um `mprotect` depois vazava escrita
+para o outro processo); `MAP_SHARED` anonimo tocado so depois do `fork` nao
+era compartilhado; pagina orfa vazada alem do framebuffer; `brk` atravessando
+outras areas; `vma_add_merge` pulando area; bits de cache do framebuffer
+perdidos no `mprotect`; `MADV_DONTNEED` zerando o executavel; ultima pagina da
+metade de usuario mapeavel (`sysret` nao canonico); CR2 relido depois de
+religar as interrupcoes.
+Regressao 139 -> 149, estresse 5x verde.
+Fica para depois: sem memoria na falta de pagina o kernel ainda entra em
+panico ao criar tabela de paginas (etapa 8.4); falta de arquivo com
+interrupcoes desligadas e recusada (so acontece empurrando quadro de sinal).

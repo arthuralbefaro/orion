@@ -13,6 +13,7 @@
 #include <mm/vmm.h>
 #include <mm/heap.h>
 #include <mm/uaccess.h>
+#include <mm/vma.h>
 #include <kernel/smp.h>
 #include <arch/x86_64/percpu.h>
 
@@ -211,19 +212,27 @@ void interrupts_dump(const struct interrupt_frame *f)
 
 static void handle_exception(struct interrupt_frame *f)
 {
+    uint64_t cr2 = read_cr2();
     if (handlers[f->int_no].fn) {
         handlers[f->int_no].fn(f, handlers[f->int_no].ctx);
         return;
     }
 
-    if (f->int_no == EXC_PAGE_FAULT && (f->err_code & 3) == 3) {
+    if (f->int_no == EXC_PAGE_FAULT && cr2 < USER_ADDR_MAX) {
         struct process *p = process_current();
-        if (p && vmm_cow_fault(p->pml4_phys, read_cr2()))
-            return;
+        if (p) {
+            bool was_on = (f->rflags & RFLAGS_IF) != 0;
+            if (was_on)
+                sti();
+            bool ok = vma_fault(p, cr2, f->err_code);
+            cli();
+            if (ok)
+                return;
+        }
     }
 
     if ((f->int_no == EXC_PAGE_FAULT || f->int_no == EXC_GENERAL_PROTECTION) && (f->cs & 3) == 0 &&
-        uaccess_fixup(f))
+        uaccess_fixup(f, cr2))
         return;
 
     if ((f->cs & 3) == 3 && f->int_no != EXC_DOUBLE_FAULT) {
@@ -232,7 +241,7 @@ static void handle_exception(struct interrupt_frame *f)
                 : f->int_no == EXC_INVALID_OPCODE ? SIGILL : SIGSEGV;
         log_error("proc", "pid %u '%s': %s em RIP=%016lx (err=%lx, CR2=%016lx) -> %s",
                   p->pid, p->name, exception_name((uint8_t)f->int_no), f->rip, f->err_code,
-                  read_cr2(), signal_name(sig));
+                  cr2, signal_name(sig));
         uint64_t action = SIGACT(p, sig)->sa_handler;
         if (action == SIG_DFL || action == SIG_IGN || (p->sig_blocked & SIGMASK(sig)))
             process_exit_signal(sig);
@@ -249,7 +258,7 @@ static void handle_exception(struct interrupt_frame *f)
 
     if (f->int_no == EXC_PAGE_FAULT) {
         uint64_t err = f->err_code;
-        kprintf("  Page fault em %016lx: %s, %s, %s%s%s\n", read_cr2(),
+        kprintf("  Page fault em %016lx: %s, %s, %s%s%s\n", cr2,
                 (err & 1) ? "violacao de protecao" : "pagina nao presente",
                 (err & 2) ? "escrita" : "leitura",
                 (err & 4) ? "ring 3" : "ring 0",
@@ -258,7 +267,7 @@ static void handle_exception(struct interrupt_frame *f)
     }
     if (f->int_no == EXC_DOUBLE_FAULT)
         kprintf("  Double fault: a CPU nao conseguiu entregar uma excecao (CR2=%016lx).\n"
-                "  A causa mais comum e estouro da pilha do kernel.\n", read_cr2());
+                "  A causa mais comum e estouro da pilha do kernel.\n", cr2);
 
     interrupts_dump(f);
     kprintf("Sistema travado.\n");

@@ -12,7 +12,7 @@ struct file_ops {
     void    (*close)(struct file *f);
     int     (*readdir)(struct file *f, uint64_t index, struct vfs_node *out);
     long    (*ioctl)(struct file *f, uint64_t request, uint64_t arg);
-    int64_t (*mmap)(struct file *f, uint64_t len, int prot, uint64_t offset);
+    int64_t (*mmap)(struct file *f, uint64_t addr, uint64_t len, int prot, uint64_t offset);
     short   (*poll)(struct file *f, struct poll_table *pt);
 };
 
@@ -42,5 +42,5 @@ int64_t file_read(struct file *f, void *buf, uint64_t len);
 int64_t file_write(struct file *f, const void *buf, uint64_t len);
 int     file_readdir(struct file *f, uint64_t index, struct vfs_node *out);
 long    file_ioctl(struct file *f, uint64_t request, uint64_t arg);
-int64_t file_mmap(struct file *f, uint64_t len, int prot, uint64_t offset);
+int64_t file_mmap(struct file *f, uint64_t addr, uint64_t len, int prot, uint64_t offset);
 short   file_poll(struct file *f, struct poll_table *pt);
