@@ -17,12 +17,11 @@ static uint64_t tsc_boot;
 
 static void tick_handler(struct interrupt_frame *frame, void *ctx)
 {
-    (void)frame;
     (void)ctx;
     if (percpu_cpu_id() == 0)
         ticks++;
     smp_watchdog_tick();
-    sched_tick(time_ticks());
+    sched_tick(time_ticks(), (frame->cs & 3) == 3);
 }
 
 static uint64_t calibrate_tsc(void)

@@ -247,7 +247,15 @@ static void handle_exception(struct interrupt_frame *f)
             sti();
             process_exit_signal(sig);
         }
-        signal_send_thread(thread_current(), sig);
+        struct sig_src src = { SI_KERNEL, 0, 0, 0, 0 };
+        if (sig == SIGSEGV && f->int_no == EXC_PAGE_FAULT) {
+            src.code = ((f->err_code & 1) || vma_covers(p, cr2)) ? SEGV_ACCERR : SEGV_MAPERR;
+            src.addr = cr2;
+        } else if (sig != SIGSEGV) {
+            src.code = 1;
+            src.addr = f->rip;
+        }
+        signal_send_thread_info(thread_current(), sig, &src, false);
         return;
     }
 

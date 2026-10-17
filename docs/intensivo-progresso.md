@@ -16,7 +16,7 @@ ou sinais), 5 vezes seguidas:
 
     .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
 
-Proxima etapa: 1.8.
+Proxima etapa: 1.9.
 
 ## Checklist
 
@@ -36,7 +36,7 @@ Proxima etapa: 1.8.
 | 1.5 | Programas contra a musl com `zig cc` (plano B: musl pelo build.ps1) | [x] | 02:52 | 03:10 | (ver diario) |
 | 1.6 | Threads (clone) | [x] | 03:10 | 03:50 | (ver diario) |
 | 1.7 | futex | [x] | 03:50 | 04:28 | (ver diario) |
-| 1.8 | Tempo e sinais completos | [ ] | | | |
+| 1.8 | Tempo e sinais completos | [x] | 04:28 | 05:37 | (ver diario) |
 | 1.9 | dash, lua, sbase | [ ] | | | |
 | 1.10 | Doom | [ ] | | | |
 | 1.11 | tcc dentro do Orion | [ ] | | | |
@@ -387,3 +387,32 @@ Regressao 164 -> 179, estresse 5x verde.
 Fica para a 1.8: `SA_RESTART` (toda espera interrompida devolve `EINTR`) e
 `nanosleep` interrompivel com o tempo restante. Fica para a robustez (fase 8):
 NMI na janela antes do `swapgs` da syscall.
+
+#### 1.8 Tempo e sinais completos - 04:28 as 05:37 - FEITO
+Reinicio de syscall como no Linux (`ERESTARTSYS`, `ERESTARTNOHAND`,
+`ERESTARTNOINTR`, `SA_RESTART` e "restart block" com `restart_syscall` para
+esperas com prazo); `rt_sigsuspend`, `rt_sigpending`, `rt_sigtimedwait`,
+`tkill`, `tgkill`; quadro de sinal no formato do `rt_sigframe` do Linux, com
+`siginfo` (origem de cada sinal: pid de quem mandou, `SI_TKILL`, `SIGCHLD` com
+pid e status, falta com endereco) e `ucontext` que o handler pode alterar
+(`pthread_cancel` da musl funciona); `SA_SIGINFO`, `SA_NODEFER`,
+`SA_RESETHAND`; todos os relogios do `clock_gettime`, `clock_getres`,
+`gettimeofday`, `time`, `nanosleep` e `clock_nanosleep` interrompiveis com o
+tempo restante, `getrusage`, `times`, `wait4` com `rusage`,
+`setitimer`/`getitimer` com intervalo. Tempo de CPU medido pelo TSC na troca
+de contexto: no QEMU TCG o timer chega a uns 70 Hz em vez de 1000, e contar
+ticks dava 19 ms para um laco de 300 ms. `sigtest` reescrito contra a musl
+(67 verificacoes, cada grupo num filho com prazo; escrito por um subagente a
+partir da especificacao do Linux, em paralelo com o kernel); o da libc
+propria saiu.
+Tres rodadas de revisao antes do commit, cada achado conferido por dois
+revisores. A primeira achou 15 problemas, o mais serio uma corrida em que outra
+thread trocava o handler entre a validacao e o uso e o `sysret` voltava para
+endereco nao canonico (#GP em ring 0 com pilha do usuario). A verificacao das
+correcoes achou mais 8 (restart block sobrevivendo a um handler, FPU
+desalinhado no quadro, DF no handler...). A regressao achou um panic: o
+Ctrl+C do terminal manda `kill` de dentro do kernel, onde nao ha processo
+atual. Tudo corrigido.
+Regressao 179 -> 196, estresse 5x verde.
+Pendente: um NMI na janela antes do `swapgs` (fase 8); `ITIMER_VIRTUAL` e
+`ITIMER_PROF`; relogios de CPU no `clock_nanosleep`.

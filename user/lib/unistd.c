@@ -122,15 +122,16 @@ int isatty(int fd)
 
 int nanosleep(const struct timespec *req, struct timespec *rem)
 {
-    (void)rem;
-    return (int)__syscall_ret(syscall1(SYS_NANOSLEEP, (long)req));
+    return (int)__syscall_ret(syscall2(SYS_NANOSLEEP, (long)req, (long)rem));
 }
 
 unsigned sleep(unsigned seconds)
 {
     struct timespec ts = { (time_t)seconds, 0 };
-    nanosleep(&ts, NULL);
-    return 0;
+    struct timespec rem = { 0, 0 };
+    if (nanosleep(&ts, &rem) == 0)
+        return 0;
+    return (unsigned)rem.tv_sec + (rem.tv_nsec != 0);
 }
 
 int usleep(unsigned long usec)

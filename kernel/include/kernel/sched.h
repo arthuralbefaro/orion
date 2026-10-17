@@ -1,6 +1,7 @@
 #pragma once
 
 #include <kernel/compiler.h>
+#include <kernel/signal.h>
 
 #define THREAD_NAME_MAX   24
 #define THREAD_STACK_SIZE (16 * 1024)
@@ -47,6 +48,18 @@ struct thread {
     bool     kill_me;
     uint64_t sig_blocked;
     uint64_t sig_pending;
+    uint64_t saved_mask;
+    uint64_t sig_waiting;
+    bool     restore_mask;
+    uint64_t utime;
+    uint64_t stime;
+    uint64_t run_us;
+    uint64_t prev_utime;
+    uint64_t prev_stime;
+    int      restart_kind;
+    uint64_t restart_deadline_us;
+    uint64_t restart_arg[2];
+    struct sig_src sig_src[NSIG - 1];
     struct thread *proc_next;
     struct file *pins[THREAD_PINS];
     int      npins;
@@ -66,6 +79,7 @@ struct thread *thread_create_for_process_paused(const char *name, thread_entry_t
 struct thread *thread_create_for_process(const char *name, thread_entry_t entry, void *arg,
                                          struct process *process);
 struct thread *thread_current(void);
+void thread_cpu_times(struct thread *t, uint64_t *user_us, uint64_t *sys_us);
 
 void thread_yield(void);
 void thread_sleep_ms(uint64_t ms);
@@ -82,7 +96,7 @@ bool sched_runq_held(void);
 void sched_block_switch(uint64_t wake_at);
 bool sched_make_ready(struct thread *t);
 uint64_t sched_deadline(uint64_t ms);
-void sched_tick(uint64_t now_ticks);
+void sched_tick(uint64_t now_ticks, bool user);
 void sched_check_preempt(void);
 
 void sched_dump(void);

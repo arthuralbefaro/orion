@@ -14,7 +14,7 @@ syscall_entry:
     pushq %r11
     pushq $0x23
     pushq %rcx
-    pushq $0
+    pushq %rax
     pushq $0x80
 
     pushq %rax

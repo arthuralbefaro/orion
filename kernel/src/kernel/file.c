@@ -265,7 +265,7 @@ static int64_t pipe_read(struct file *f, void *buf, uint64_t len)
         }
         wait_sleep_intr(&p->rq, &p->lock, 0);
         if (signal_pending_current() && !n) {
-            n = (uint64_t)-EINTR;
+            n = (uint64_t)-ERESTARTSYS;
             break;
         }
     }
@@ -304,7 +304,7 @@ static int64_t pipe_write(struct file *f, const void *buf, uint64_t len)
         }
         wait_sleep_intr(&p->wq, &p->lock, 0);
         if (signal_pending_current()) {
-            ret = n ? (int64_t)n : -EINTR;
+            ret = n ? (int64_t)n : -ERESTARTSYS;
             break;
         }
     }

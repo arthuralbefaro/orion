@@ -196,7 +196,7 @@ static long futex_wait(uint32_t *uaddr, uint32_t val, const struct user_timespec
         if (w.woken)
             break;
         if (signal_pending_current()) {
-            ret = -EINTR;
+            ret = to.has ? -EINTR : -ERESTARTSYS;
             break;
         }
     }

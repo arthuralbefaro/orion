@@ -23,6 +23,7 @@ struct percpu {
     volatile uint64_t heartbeat;
     uint64_t wd_seen;
     uint32_t wd_strikes;
+    uint64_t switch_us;
 };
 
 void percpu_init_bsp(uint32_t lapic_id);

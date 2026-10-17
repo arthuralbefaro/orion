@@ -315,7 +315,7 @@ long sys_recvfrom(int fd, void *ubuf, uint64_t len, int flags, struct sockaddr_i
         }
         if (signal_pending_current()) {
             spin_unlock_irqrestore(&sock_lock, irq);
-            return -EINTR;
+            return -ERESTARTSYS;
         }
         wait_sleep_timeout(&s->rx_wq, &sock_lock, 200);
     }

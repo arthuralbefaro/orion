@@ -872,3 +872,113 @@ Uma linha por decisao, na ordem em que foram tomadas.
   fora (o monitor do QEMU) e e assunto da etapa de robustez.
 - Fica para a 1.8: `nanosleep` acordado por sinal ainda devolve 0 sem o tempo
   restante.
+
+## v2.0.0-a8 (tempo e sinais completos)
+
+- Reinicio de syscall como no Linux. A entrada da syscall guarda o numero
+  original no campo `err_code` do quadro (antes ia zero). As esperas
+  bloqueantes devolvem codigos internos (`ERESTARTSYS`, `ERESTARTNOHAND`,
+  `ERESTARTNOINTR`, 512 a 514) e o `signal_check` decide na volta ao usuario:
+  com handler e `SA_RESTART` (ou `ERESTARTNOINTR`), volta o `rip` 2 bytes, para
+  cima da instrucao `syscall`, e repoe o `rax`; com handler sem `SA_RESTART`,
+  vira `EINTR`; sem handler nenhum (o sinal foi para outra thread ou era
+  ignorado), reinicia. O `sigreturn` marca o quadro restaurado como "nao
+  reiniciar", para um `rax` de usuario que por acaso valha -512 nao disparar
+  nada. So existe a porta da instrucao `syscall` (nao ha `int 0x80` para o
+  usuario), entao o vetor 0x80 no quadro identifica uma syscall.
+- Quem reinicia: leitura e escrita de pipe, terminal e pty, `/dev/input`,
+  `recvfrom`, `wait4` e `futex` sem prazo. `pause` e `rt_sigsuspend` usam
+  `ERESTARTNOHAND` (sempre `EINTR` depois de um handler). `poll`,
+  `nanosleep`, `rt_sigtimedwait` e esperas com prazo devolvem `EINTR` direto:
+  reiniciar com os argumentos originais recomecaria o prazo do zero (o Linux
+  usa um `restart_block` para isso, que nao vale o custo aqui).
+- `rt_sigsuspend` guarda a mascara antiga na thread (`saved_mask`); o quadro
+  do handler leva essa mascara, entao o `sigreturn` a devolve. Se nenhum
+  handler rodar, o `signal_check` a devolve antes de reiniciar.
+- `rt_sigtimedwait` desbloqueia o conjunto esperado durante a espera (e o que
+  faz o envio escolher esta thread e acorda-la) e devolve a mascara antes de
+  voltar. Sinais comuns nao tem fila: um segundo envio do mesmo sinal pendente
+  se junta ao primeiro (e guarda a origem do primeiro), como no Linux.
+- `tkill` e `tgkill` acham a thread pelo tid em todos os processos; a musl
+  usa o `tkill` no `raise` e no `pthread_kill`. Sinal para uma thread que o
+  bloqueia fica pendente nela sem acorda-la.
+- `SA_SIGINFO`, `SA_NODEFER` e `SA_RESETHAND` valem (o formato do quadro esta
+  no fim desta secao).
+- Tempo de CPU medido pelo TSC na troca de contexto (`run_us` por thread),
+  nao por ticks: no QEMU TCG o timer do LAPIC chega bem abaixo dos 1000 Hz
+  nominais (medido: uns 70 por segundo na CPU 0), e contar ticks dava 19 ms
+  para um laco de 300 ms. Os ticks so dividem o total entre usuario e sistema
+  (a fracao de ticks que pegou a thread em modo usuario), como o Linux faz.
+  Threads que saem somam no processo; `wait4` soma o filho (e os filhos dele)
+  no pai.
+- Relogios: os de parede e os monotonicos vem do TSC em microssegundos; os
+  `COARSE` cortam em milissegundos; `BOOTTIME` e `MONOTONIC_RAW` sao o
+  `MONOTONIC` (nao ha suspensao nem ajuste de frequencia); `TAI` e o
+  `REALTIME` (o Linux tambem usa deslocamento zero sem NTP).
+- `nanosleep` e `clock_nanosleep` dormem por fila de espera ate o prazo em
+  microssegundos, acordando no tick seguinte; um sinal devolve `EINTR` com o
+  tempo restante. Prazos acima de 10^9 segundos viram "para sempre".
+- `setitimer`/`getitimer` com `ITIMER_REAL` e intervalo, em cima do mesmo
+  `alarm_at` do `alarm`; a thread do alarme passou a olhar a cada 5 ms (antes
+  100 ms). `ITIMER_VIRTUAL` e `ITIMER_PROF` dao `EINVAL`.
+- `times` conta em ticks de 100 Hz, que e o `CLK_TCK` fixo da musl.
+- O `sigtest` foi reescrito contra a musl (64 verificacoes, cada grupo num
+  processo filho com prazo, para um kernel quebrado virar FALHA e nao travar
+  a regressao). O da libc propria saiu.
+- Depois de uma revisao do diff, antes do commit (15 problemas, todos
+  corrigidos):
+  - A entrega de sinal lia o endereco do handler duas vezes, sem trava: a
+    primeira para validar, a segunda depois de copiar o quadro para a pilha.
+    Outra thread trocando o handler no meio fazia o `sysret` voltar para um
+    endereco nao canonico, o que no Intel gera #GP em ring 0 com a pilha do
+    usuario. Agora a tabela de handlers so e lida e escrita sob o `tlock`, a
+    entrega usa uma copia validada, e toda volta ao usuario confere que `rip`
+    e `rsp` sao enderecos de usuario.
+  - O quadro de sinal passou a ter o formato do `rt_sigframe` do Linux
+    (`ucontext` com `mcontext` na ordem dos `REG_*`, `siginfo` e a area de
+    FPU), e o handler `SA_SIGINFO` recebe `siginfo` e `ucontext`. O
+    `sigreturn` restaura os registradores e a mascara do `ucontext`, entao um
+    handler que muda o `rip` ali muda o lugar da volta: e o que o
+    `pthread_cancel` da musl faz para cancelar uma thread presa numa syscall.
+  - Cada sinal pendente guarda de onde veio (`sig_src`): `kill` com o pid de
+    quem mandou, `tkill`/`tgkill` com `SI_TKILL`, `SIGCHLD` com pid e status do
+    filho, falta de pagina com `SEGV_MAPERR`/`SEGV_ACCERR` e o endereco.
+  - Sinal ignorado por padrao (`SIGCHLD`, `SIGWINCH`, `SIGURG`) so e
+    descartado no envio se alguma thread o deixa desbloqueado; bloqueado, fica
+    pendente para `sigtimedwait` e `sigpending`. Quem esta num `sigtimedwait`
+    conta como bloqueando o conjunto esperado (`sig_waiting`, o `real_blocked`
+    do Linux).
+  - Uma volta ao usuario entrega todos os sinais deliverables, empilhando um
+    quadro por handler (antes era um so, e o `sigsuspend` perdia o segundo).
+  - "Restart block" como o do Linux para esperas com prazo: `nanosleep`,
+    `clock_nanosleep` relativo e `poll` com prazo devolvem
+    `ERESTART_RESTARTBLOCK` e guardam o prazo absoluto na thread; sem handler,
+    a syscall vira `restart_syscall` (219) e continua ate o mesmo prazo; com
+    handler, vira `EINTR`. `poll` sem prazo e `clock_nanosleep` absoluto usam
+    `ERESTARTNOHAND`. Antes um sinal pego por outra thread dava `EINTR` sem
+    handler nenhum ter rodado.
+  - O tempo de CPU nao anda mais para tras: a divisao entre usuario e sistema
+    so cresce (como o `cputime_adjust` do Linux), e a leitura e feita sob a
+    trava da fila de prontas.
+  - `ITIMER_REAL` com intervalo rearma a partir do disparo anterior, nao do
+    momento em que a thread do alarme olhou; essa thread agora dorme ate o
+    proximo alarme em vez de acordar a cada 5 ms.
+  - `wait4` com `WNOHANG` sem filho pronto nao zera mais o `rusage`; o tempo
+    que a ultima thread gasta desmontando o processo conta para o pai;
+    `sigaction` para ignorar limpa tambem o pendente de cada thread; o
+    `sleep` da libc propria devolve os segundos que faltaram.
+- Uma segunda revisao, so das correcoes, achou mais 8 problemas, e a
+  regressao achou um panic; todos corrigidos:
+  - O `kill` vindo do kernel (Ctrl+C no terminal manda `SIGINT` ao grupo)
+    lia o pid de um processo atual que nao existe numa thread do kernel.
+  - O "restart block" e apagado no `sigreturn` e quando um handler roda
+    (como o Linux faz): sem isso, um `restart_syscall` salvo antes de um
+    handler podia retomar com o prazo e os argumentos de uma espera feita
+    dentro do handler.
+  - A area de FPU do quadro fica acima dele, alinhada em 64 bytes (como no
+    Linux), e o `sigreturn` a le pelo ponteiro `fpstate` do `ucontext`; o
+    handler comeca com o FPU limpo e com DF, TF e RF zerados.
+  - A divisao do tempo de CPU nunca subtrai alem do total (leituras de TSC de
+    CPUs diferentes podiam dar um total menor que o anterior).
+  - `SEGV_ACCERR` quando o endereco esta numa area mapeada (mesmo sem pagina
+    ainda), `SEGV_MAPERR` so fora de qualquer area.

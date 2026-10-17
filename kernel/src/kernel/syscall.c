@@ -19,6 +19,7 @@
 #include <drivers/pty.h>
 #include <kernel/wait.h>
 #include <kernel/futex.h>
+#include <kernel/timesys.h>
 #include <kernel/signal.h>
 #include <mm/heap.h>
 #include <net/socket.h>
@@ -359,7 +360,33 @@ static long sys_openpty(int *ufds)
     return install_pair(master, slave, ufds, false);
 }
 
+static long do_poll(struct user_pollfd *ufds, uint64_t nfds, int timeout, uint64_t deadline);
+
 static long sys_poll(struct user_pollfd *ufds, uint64_t nfds, int timeout)
+{
+    uint64_t deadline = timeout > 0 ? time_uptime_ms() + (uint64_t)timeout : 0;
+    return do_poll(ufds, nfds, timeout, deadline);
+}
+
+static long sys_restart_syscall(void)
+{
+    struct thread *t = thread_current();
+    int kind = t->restart_kind;
+    t->restart_kind = RESTART_NONE;
+    switch (kind) {
+    case RESTART_SLEEP:
+        return timesys_restart_sleep();
+    case RESTART_POLL: {
+        uint64_t deadline = t->restart_deadline_us;
+        int timeout = deadline > time_uptime_ms() ? 1 : 0;
+        return do_poll((struct user_pollfd *)t->restart_arg[0], t->restart_arg[1], timeout, deadline);
+    }
+    default:
+        return -EINTR;
+    }
+}
+
+static long do_poll(struct user_pollfd *ufds, uint64_t nfds, int timeout, uint64_t deadline)
 {
     if (nfds > POLL_TABLE_MAX)
         return -EINVAL;
@@ -371,7 +398,6 @@ static long sys_poll(struct user_pollfd *ufds, uint64_t nfds, int timeout)
     if (!pt)
         return -ENOMEM;
 
-    uint64_t deadline = timeout > 0 ? time_uptime_ms() + (uint64_t)timeout : 0;
     long ret = 0;
     for (;;) {
         poll_table_init(pt);
@@ -413,7 +439,16 @@ static long sys_poll(struct user_pollfd *ufds, uint64_t nfds, int timeout)
         }
         poll_table_sleep(pt, wait_ms);
         if (signal_pending_current()) {
-            ret = -EINTR;
+            if (timeout < 0) {
+                ret = -ERESTARTNOHAND;
+            } else {
+                struct thread *t = thread_current();
+                t->restart_kind = RESTART_POLL;
+                t->restart_deadline_us = deadline;
+                t->restart_arg[0] = (uint64_t)ufds;
+                t->restart_arg[1] = nfds;
+                ret = -ERESTART_RESTARTBLOCK;
+            }
             break;
         }
     }
@@ -853,25 +888,6 @@ static long sys_arch_prctl(int code, uint64_t addr)
     }
 }
 
-static long sys_clock_gettime(int clk, struct user_timespec *uts)
-{
-    struct user_timespec ts;
-    uint64_t us = time_now_us();
-    switch (clk) {
-    case CLOCK_REALTIME:
-        ts.tv_sec = (int64_t)(rtc_boot_epoch() + us / 1000000);
-        ts.tv_nsec = (int64_t)(us % 1000000) * 1000;
-        break;
-    case CLOCK_MONOTONIC:
-        ts.tv_sec = (int64_t)(us / 1000000);
-        ts.tv_nsec = (int64_t)(us % 1000000) * 1000;
-        break;
-    default:
-        return -EINVAL;
-    }
-    return copy_to_user(uts, &ts, sizeof(ts));
-}
-
 static long sys_dup3(int oldfd, int newfd, int flags)
 {
     struct process *p = process_current();
@@ -927,18 +943,6 @@ static long sys_brk(uint64_t addr)
     long r = do_brk(p, addr);
     mutex_unlock(&p->mm_lock);
     return r;
-}
-
-static long sys_nanosleep(const struct user_timespec *ureq)
-{
-    struct user_timespec req;
-    if (copy_from_user(&req, ureq, sizeof(req)) < 0)
-        return -EFAULT;
-    if (req.tv_sec < 0 || req.tv_nsec < 0 || req.tv_nsec >= 1000000000)
-        return -EINVAL;
-    uint64_t ms = (uint64_t)req.tv_sec * 1000 + (uint64_t)req.tv_nsec / 1000000;
-    thread_sleep_ms(ms ? ms : 1);
-    return 0;
 }
 
 static void free_strv(char **v)
@@ -1015,13 +1019,18 @@ static long sys_execve(const char *upath, char *const *uargv, char *const *uenvp
     return r;
 }
 
-static long sys_wait4(int pid, int *ustatus, int options)
+static long sys_wait4(int pid, int *ustatus, int options, struct user_rusage *uru)
 {
     if (ustatus && !user_range_ok((uint64_t)ustatus, sizeof(int)))
         return -EFAULT;
+    if (uru && !user_range_ok((uint64_t)uru, sizeof(*uru)))
+        return -EFAULT;
     int st = 0;
-    int r = process_waitpid(pid, &st, options);
+    struct cpu_times child = { 0, 0 };
+    int r = process_waitpid(pid, &st, options, &child);
     if (r > 0 && ustatus && copy_to_user(ustatus, &st, sizeof(st)) < 0)
+        return -EFAULT;
+    if (r > 0 && uru && rusage_to_user(&child, uru) < 0)
         return -EFAULT;
     return r;
 }
@@ -1163,7 +1172,55 @@ static long sys_pause(void)
     while (!signal_pending_current())
         wait_sleep_intr(&wq, &lock, 0);
     spin_unlock_irqrestore(&lock, flags);
-    return -EINTR;
+    return -ERESTARTNOHAND;
+}
+
+static long sys_rt_sigpending(uint64_t *uset, uint64_t setsize)
+{
+    if (setsize != sizeof(uint64_t))
+        return -EINVAL;
+    uint64_t set = signal_pending_set();
+    return copy_to_user(uset, &set, sizeof(set));
+}
+
+static long sys_rt_sigsuspend(const uint64_t *uset, uint64_t setsize)
+{
+    if (setsize != sizeof(uint64_t))
+        return -EINVAL;
+    uint64_t set;
+    if (copy_from_user(&set, uset, sizeof(set)) < 0)
+        return -EFAULT;
+    return signal_suspend(set);
+}
+
+static long sys_rt_sigtimedwait(const uint64_t *uset, struct user_siginfo *uinfo, const struct user_timespec *uto,
+                                uint64_t setsize)
+{
+    if (setsize != sizeof(uint64_t))
+        return -EINVAL;
+    uint64_t set;
+    if (copy_from_user(&set, uset, sizeof(set)) < 0)
+        return -EFAULT;
+    bool has_timeout = false;
+    uint64_t ms = 0;
+    if (uto) {
+        struct user_timespec ts;
+        if (copy_from_user(&ts, uto, sizeof(ts)) < 0)
+            return -EFAULT;
+        if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000)
+            return -EINVAL;
+        if (ts.tv_sec < 1000000000) {
+            has_timeout = true;
+            ms = (uint64_t)ts.tv_sec * 1000 + ((uint64_t)ts.tv_nsec + 999999) / 1000000;
+        }
+    }
+    if (uinfo && !user_range_ok((uint64_t)uinfo, sizeof(*uinfo)))
+        return -EFAULT;
+    struct user_siginfo info;
+    long r = signal_timedwait(set, &info, has_timeout, ms);
+    if (r > 0 && uinfo && copy_to_user(uinfo, &info, sizeof(info)) < 0)
+        return -EFAULT;
+    return r;
 }
 
 #define SS_DISABLE 2
@@ -1219,12 +1276,29 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_PIPE:        ret = sys_pipe((int *)f->rdi); break;
     case SYS_SCHED_YIELD: thread_yield(); ret = 0; break;
     case SYS_DUP2:        ret = sys_dup2((int)f->rdi, (int)f->rsi); break;
-    case SYS_NANOSLEEP:   ret = sys_nanosleep((const struct user_timespec *)f->rdi); break;
+    case SYS_NANOSLEEP:   ret = sys_nanosleep((const struct user_timespec *)f->rdi, (struct user_timespec *)f->rsi); break;
+    case SYS_CLOCK_NANOSLEEP: ret = sys_clock_nanosleep((int)f->rdi, (int)f->rsi, (const struct user_timespec *)f->rdx,
+                                                       (struct user_timespec *)f->r10); break;
+    case SYS_CLOCK_GETRES: ret = sys_clock_getres((int)f->rdi, (struct user_timespec *)f->rsi); break;
+    case SYS_GETTIMEOFDAY: ret = sys_gettimeofday((struct user_timeval *)f->rdi, (void *)f->rsi); break;
+    case SYS_TIME:        ret = sys_time((int64_t *)f->rdi); break;
+    case SYS_GETRUSAGE:   ret = sys_getrusage((int)f->rdi, (struct user_rusage *)f->rsi); break;
+    case SYS_TIMES:       ret = sys_times((struct user_tms *)f->rdi); break;
+    case SYS_GETITIMER:   ret = sys_getitimer((int)f->rdi, (struct user_itimerval *)f->rsi); break;
+    case SYS_SETITIMER:   ret = sys_setitimer((int)f->rdi, (const struct user_itimerval *)f->rsi,
+                                              (struct user_itimerval *)f->rdx); break;
+    case SYS_RT_SIGPENDING: ret = sys_rt_sigpending((uint64_t *)f->rdi, f->rsi); break;
+    case SYS_RT_SIGSUSPEND: ret = sys_rt_sigsuspend((const uint64_t *)f->rdi, f->rsi); break;
+    case SYS_RT_SIGTIMEDWAIT: ret = sys_rt_sigtimedwait((const uint64_t *)f->rdi, (struct user_siginfo *)f->rsi,
+                                                        (const struct user_timespec *)f->rdx, f->r10); break;
+    case SYS_RESTART_SYSCALL: ret = sys_restart_syscall(); break;
+    case SYS_TKILL:       ret = process_signal_thread(0, (int)f->rdi, (int)f->rsi); break;
+    case SYS_TGKILL:      ret = (int)f->rdi <= 0 ? -EINVAL : process_signal_thread((int)f->rdi, (int)f->rsi, (int)f->rdx); break;
     case SYS_GETPID:      ret = process_current()->pid; break;
     case SYS_FORK:        ret = process_fork(f); break;
     case SYS_EXECVE:      ret = sys_execve((const char *)f->rdi, (char *const *)f->rsi, (char *const *)f->rdx, f); break;
     case SYS_EXIT:        process_exit_thread((int)f->rdi);
-    case SYS_WAIT4:       ret = sys_wait4((int)f->rdi, (int *)f->rsi, (int)f->rdx); break;
+    case SYS_WAIT4:       ret = sys_wait4((int)f->rdi, (int *)f->rsi, (int)f->rdx, (struct user_rusage *)f->r10); break;
     case SYS_READDIR:     ret = sys_readdir((int)f->rdi, (struct user_dirent *)f->rsi, f->rdx); break;
     case SYS_OPENPTY:     ret = sys_openpty((int *)f->rdi); break;
     case SYS_POLL:        ret = sys_poll((struct user_pollfd *)f->rdi, f->rsi, (int)f->rdx); break;

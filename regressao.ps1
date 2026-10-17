@@ -70,7 +70,7 @@ if ($runAll -or $OnlyA) {
         "cmd:ls /bin | wc", "wait:1",
         "cmd:memtest", "wait:2",
         "cmd:crash", "wait:2",
-        "cmd:sigtest", "wait:10",
+        "cmd:sigtest", "until:180:sigtest: fim",
         "cmd:badptr", "until:40:badptr: fim",
         "cmd:fputest", "until:60:fputest: fim", "cmd:auxtest", "until:30:auxtest: fim",
         "cmd:sctest", "until:30:sctest: fim", "cmd:filetest", "until:60:filetest: fim",
@@ -146,7 +146,24 @@ if ($runAll -or $OnlyA) {
     Expect $a "pilha cresce alem de 64 KiB" "pilha de 8 MiB sob demanda"
     Expect $a "#PF Page Fault" "crash levou page fault"
     Expect $a "morto por sinal 11" "crash morto com SIGSEGV"
-    Expect $a "sigtest: TUDO OK" "sigtest TUDO OK"
+    Expect $a "sigtest: fim, TUDO OK" "sigtest (musl) TUDO OK"
+    Expect $a "sigsuspend volta com EINTR depois do handler +ok" "sigsuspend"
+    Expect $a "sigsuspend restaura a mascara com SIGUSR1 bloqueado +ok" "sigsuspend restaura a mascara"
+    Expect $a "sigtimedwait recebe SIGUSR2 com si_signo +ok" "rt_sigtimedwait"
+    Expect $a "sigtimedwait sem sinal expira com EAGAIN +ok" "rt_sigtimedwait com prazo"
+    Expect $a "pthread_kill entrega o sinal a thread alvo +ok" "tgkill/pthread_kill"
+    Expect $a "read com SA_RESTART continua e le o dado +ok" "SA_RESTART reinicia o read"
+    Expect $a "read sem SA_RESTART volta com -1 e EINTR +ok" "sem SA_RESTART o read da EINTR"
+    Expect $a "nanosleep devolve em rem o tempo que faltou +ok" "nanosleep interrompido devolve o resto"
+    Expect $a "clock_nanosleep TIMER_ABSTIME em CLOCK_MONOTONIC +ok" "clock_nanosleep absoluto"
+    Expect $a "clock_gettime aceita os 8 relogios +ok" "todos os relogios do clock_gettime"
+    Expect $a "CLOCK_PROCESS_CPUTIME_ID cresce com laco ocupado +ok" "tempo de CPU do processo"
+    Expect $a "getrusage\(RUSAGE_CHILDREN\) soma o filho esperado +ok" "getrusage dos filhos"
+    Expect $a "wait4 devolve o status e o rusage do filho +ok" "wait4 com rusage"
+    Expect $a "ITIMER_REAL de 50 ms dispara SIGALRM 3 vezes +ok" "setitimer com intervalo"
+    Expect $a "SA_SIGINFO recebe si_pid do kill e o ucontext +ok" "SA_SIGINFO com siginfo e ucontext"
+    Expect $a "sigtimedwait recebe SIGCHLD bloqueado com pid e status +ok" "SIGCHLD bloqueado nao e descartado"
+    Expect $a "pthread_cancel cancela a thread presa num read +ok" "pthread_cancel (ucontext no formato do Linux)"
     Expect $a "rcx e r11 sobrevivem a um sinal\s+ok" "rt_sigreturn devolve todos os registradores"
     Expect $a "badptr: fim, (\d+)/\1 TUDO OK" "badptr: ponteiros invalidos devolvem EFAULT sem panico"
     Expect $a "handler de sinal nao canonico\s+SIGSEGV" "handler nao canonico vira SIGSEGV"

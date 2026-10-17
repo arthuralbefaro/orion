@@ -37,6 +37,11 @@ enum process_state { PROC_RUNNING, PROC_ZOMBIE };
 
 #define PROCESS_FREE_BATCH 32
 
+struct cpu_times {
+    uint64_t utime;
+    uint64_t stime;
+};
+
 struct process {
     uint32_t pid;
     char name[PROCESS_NAME_MAX];
@@ -52,7 +57,13 @@ struct process {
     int exit_code;
     uint32_t pgid;
     uint64_t sig_pending;
+    struct sig_src sig_src[NSIG - 1];
     uint64_t alarm_at;
+    uint64_t alarm_interval;
+    uint64_t dead_utime;
+    uint64_t dead_stime;
+    uint64_t child_utime;
+    uint64_t child_stime;
     struct user_sigaction *sig_handlers;
     bool autofree;
     struct thread *threads;
@@ -81,7 +92,10 @@ struct process *process_find(uint32_t pid);
 int  process_fork(struct interrupt_frame *frame);
 int  process_fork_stack(struct interrupt_frame *frame, uint64_t newsp);
 int  process_execve(const char *path, char *const *argv, char *const *envp, struct interrupt_frame *frame);
-int  process_waitpid(int pid, int *status, int options);
+int  process_waitpid(int pid, int *status, int options, struct cpu_times *child);
+void process_cpu_times(struct process *p, struct cpu_times *self, struct cpu_times *children);
+long process_signal_thread(int tgid, int tid, int sig);
+void process_itimer(bool set, uint64_t value_ms, uint64_t interval_ms, uint64_t *old_value, uint64_t *old_interval);
 NORETURN void process_exit(int code);
 NORETURN void process_exit_thread(int code);
 NORETURN void process_thread_leave(void);

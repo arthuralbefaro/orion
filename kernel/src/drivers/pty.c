@@ -89,7 +89,7 @@ static int64_t master_read(struct file *f, void *buf, uint64_t len)
         wait_sleep_intr(&p->readers, &p->lock, 0);
         if (signal_pending_current()) {
             spin_unlock_irqrestore(&p->lock, flags);
-            return -EINTR;
+            return -ERESTARTSYS;
         }
     }
 }
@@ -227,7 +227,7 @@ static int64_t slave_write(struct file *f, const void *buf, uint64_t len)
     }
     spin_unlock_irqrestore(&p->lock, flags);
     if (interrupted)
-        return done ? (int64_t)done : -EINTR;
+        return done ? (int64_t)done : -ERESTARTSYS;
     return (int64_t)len;
 }
 

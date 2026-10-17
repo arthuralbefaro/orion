@@ -269,6 +269,17 @@ void vma_release_all(struct process *p)
     }
 }
 
+bool vma_covers(struct process *p, uint64_t addr)
+{
+    if (interrupts_enabled())
+        mutex_lock(&p->mm_lock);
+    else if (!mutex_trylock(&p->mm_lock))
+        return false;
+    bool found = vma_find(p, addr) != NULL;
+    mutex_unlock(&p->mm_lock);
+    return found;
+}
+
 static bool fault_locked(struct process *p, uint64_t addr, uint64_t err);
 
 bool vma_fault(struct process *p, uint64_t addr, uint64_t err)

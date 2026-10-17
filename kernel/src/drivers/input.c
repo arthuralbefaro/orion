@@ -130,7 +130,7 @@ int64_t input_read(void *buf, uint64_t len)
         wait_sleep_intr(&readers, &lock, wait_ms);
         spin_unlock_irqrestore(&lock, flags);
         if (signal_pending_current())
-            return -EINTR;
+            return -ERESTARTSYS;
     }
 }
 

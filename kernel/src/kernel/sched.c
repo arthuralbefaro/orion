@@ -241,6 +241,10 @@ struct thread *thread_current(void)
 
 static void switch_to(struct percpu *cpu, struct thread *prev, struct thread *next)
 {
+    uint64_t now_us = time_now_us();
+    if (now_us > cpu->switch_us)
+        prev->run_us += now_us - cpu->switch_us;
+    cpu->switch_us = now_us;
     next->state = THREAD_RUNNING;
     next->slice_left = SCHED_TIME_SLICE;
     next->cpu = cpu->cpu_id;
@@ -415,7 +419,43 @@ NORETURN void thread_exit(void)
     panic("thread zombie voltou a executar");
 }
 
-void sched_tick(uint64_t now)
+void thread_cpu_times(struct thread *t, uint64_t *user_us, uint64_t *sys_us)
+{
+    uint64_t flags = spin_lock_irqsave(&runq_lock);
+    uint64_t run = t->run_us;
+    if (t->state == THREAD_RUNNING) {
+        struct percpu *c = percpu_by_index(t->cpu);
+        uint64_t now = time_now_us();
+        if (c && c->current == t && now > c->switch_us)
+            run += now - c->switch_us;
+    }
+    if (run < t->prev_utime + t->prev_stime)
+        run = t->prev_utime + t->prev_stime;
+    uint64_t samples = t->utime + t->stime;
+    uint64_t ut = t->utime;
+    while (samples > 0xFFFFFFFFull) {
+        samples >>= 1;
+        ut >>= 1;
+    }
+    uint64_t user = samples ? run / samples * ut + run % samples * ut / samples : run;
+    if (user > run)
+        user = run;
+    uint64_t sys = run - user;
+    if (sys < t->prev_stime)
+        sys = t->prev_stime;
+    user = run - sys;
+    if (user < t->prev_utime) {
+        user = t->prev_utime;
+        sys = run - user;
+    }
+    t->prev_utime = user;
+    t->prev_stime = sys;
+    spin_unlock_irqrestore(&runq_lock, flags);
+    *user_us = user;
+    *sys_us = sys;
+}
+
+void sched_tick(uint64_t now, bool user)
 {
     if (!enabled)
         return;
@@ -425,6 +465,10 @@ void sched_tick(uint64_t now)
     struct thread *cur = cpu->current;
     cpu->ticks++;
     cur->total_ticks++;
+    if (user)
+        cur->utime++;
+    else if (!cur->is_idle)
+        cur->stime++;
 
     if (cpu->cpu_id == 0) {
         struct thread **pp = &sleeping;
