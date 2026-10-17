@@ -39,6 +39,7 @@ struct thread {
     uint64_t fs_base;
     bool     on_sleep_list;
     bool     on_runq;
+    void    *fpu;
     struct wait_entry *waits;
 
     struct thread *next;

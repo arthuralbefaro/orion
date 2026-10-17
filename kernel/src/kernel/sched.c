@@ -10,6 +10,7 @@
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/gdt.h>
 #include <arch/x86_64/percpu.h>
+#include <arch/x86_64/fpu.h>
 
 extern void context_switch(uint64_t *old_rsp, uint64_t new_rsp);
 extern void thread_trampoline(void);
@@ -92,6 +93,7 @@ static void free_thread(struct thread *z)
     if (z->process)
         process_thread_reaped(z->process);
     kfree(z->stack);
+    kfree(z->fpu);
     kfree(z);
 }
 
@@ -120,7 +122,11 @@ struct thread *thread_create_for_process(const char *name, thread_entry_t entry,
 
     t->stack_size = THREAD_STACK_SIZE;
     t->stack = kmalloc(t->stack_size);
-    if (!t->stack) {
+    if (process)
+        t->fpu = kmalloc(FPU_STATE_SIZE);
+    if (!t->stack || (process && !t->fpu)) {
+        kfree(t->stack);
+        kfree(t->fpu);
         uint64_t flags = spin_lock_irqsave(&runq_lock);
         struct thread **pp = &all_threads;
         while (*pp && *pp != t)
@@ -145,6 +151,8 @@ struct thread *thread_create_for_process(const char *name, thread_entry_t entry,
     t->rsp = (uint64_t)sp;
     t->kernel_stack_top = (uint64_t)t->stack + t->stack_size;
     t->process = process;
+    if (t->fpu)
+        fpu_init_state(t->fpu);
 
     uint64_t flags = spin_lock_irqsave(&runq_lock);
     t->state = THREAD_READY;
@@ -236,6 +244,10 @@ static void switch_to(struct percpu *cpu, struct thread *prev, struct thread *ne
     percpu_set_kernel_rsp(next->kernel_stack_top);
     if (next->fs_base != prev->fs_base)
         wrmsr(MSR_IA32_FS_BASE, next->fs_base);
+    if (prev->fpu)
+        fpu_save(prev->fpu);
+    if (next->fpu)
+        fpu_restore(next->fpu);
 
     context_switch(&prev->rsp, next->rsp);
 }

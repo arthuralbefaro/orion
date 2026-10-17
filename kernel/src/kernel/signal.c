@@ -10,6 +10,7 @@
 #include <mm/memory.h>
 #include <mm/vmm.h>
 #include <mm/uaccess.h>
+#include <arch/x86_64/fpu.h>
 
 #define SIGFRAME_MAGIC 0x4F52494F5349475Aull
 #define RED_ZONE       128
@@ -19,6 +20,7 @@ struct sigframe {
     uint64_t magic;
     uint64_t mask;
     struct interrupt_frame ctx;
+    uint8_t fpu[FPU_STATE_SIZE] ALIGNED(16);
 };
 
 static const char *const names[NSIG] = {
@@ -128,6 +130,7 @@ static bool push_sigframe(struct process *p, struct interrupt_frame *f, int sig)
     sf.magic = SIGFRAME_MAGIC;
     sf.mask = p->sig_blocked;
     sf.ctx = *f;
+    fpu_save(sf.fpu);
     if (copy_to_user((void *)sp, &sf, sizeof(sf)) < 0)
         return false;
 
@@ -218,6 +221,8 @@ long signal_sigreturn(struct interrupt_frame *f)
 
     struct interrupt_frame saved = sf.ctx;
     p->sig_blocked = sf.mask & ~SIGMASK(SIGKILL);
+    fpu_sanitize(sf.fpu);
+    fpu_restore(sf.fpu);
 
     saved.cs = f->cs;
     saved.ss = f->ss;

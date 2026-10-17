@@ -535,3 +535,33 @@ Uma linha por decisao, na ordem em que foram tomadas.
 - O `stress` ganhou um terceiro argumento (milissegundos que cada filho fica
   vivo) e aceita ate 256 filhos ao mesmo tempo; com ele imprime o pico de
   vivos.
+
+## v2.0.0-a1 (pilha inicial do Linux e estado de SSE)
+
+- A fase 1 leva a versao 2.0; enquanto ela nao fecha, o kernel se chama
+  `2.0.0-aN` (N = etapa da fase 1) e os commits levam `v2.0:` no titulo.
+- A pilha inicial segue o Linux: `argc`, `argv`, `NULL`, `envp`, `NULL` e o
+  vetor auxiliar (`AT_PHDR`, `AT_PHENT`, `AT_PHNUM`, `AT_PAGESZ`, `AT_BASE`,
+  `AT_FLAGS`, `AT_ENTRY`, `AT_UID`/`EUID`/`GID`/`EGID`, `AT_SECURE`,
+  `AT_CLKTCK`, `AT_HWCAP`, `AT_PLATFORM`, `AT_RANDOM`, `AT_EXECFN`, `AT_NULL`).
+  As strings, o nome da plataforma e os 16 bytes aleatorios ficam no topo;
+  `argc` fica alinhado em 16, como o ABI pede.
+- `AT_PHDR` aponta para os cabecalhos dentro de um segmento carregado (ou do
+  `PT_PHDR`). Os programas da libc propria sao ligados sem os cabecalhos
+  carregados; para eles o kernel copia a tabela para a pilha e aponta para la,
+  em vez de deixar 0. A musl usa o `AT_PHDR` para achar o `PT_TLS`.
+- Os bytes aleatorios saem de `lib/random.c` (xorshift semeado pelo TSC), o
+  mesmo gerador do `/dev/random`, que deixou de ter um proprio.
+- SSE ligado em todas as CPUs (`CR4.OSFXSR`/`OSXMMEXCPT`, `CR0.EM` desligado).
+  A musl compilada pelo Zig usa SSE; o kernel continua compilado sem SSE.
+- Cada thread de processo tem uma area de 512 bytes para `fxsave64`. A troca e
+  ansiosa: `switch_to` salva a anterior e restaura a proxima sempre. Como o
+  kernel nunca toca em SSE, os registradores durante uma syscall continuam
+  sendo os do usuario, o que simplifica `fork` (salva os registradores vivos
+  no inicio do filho) e `execve` (restaura o estado inicial).
+- O estado inicial e capturado uma vez no boot depois de `fninit` e
+  `ldmxcsr 0x1f80`, com as areas de ST e XMM zeradas a mao: `fninit` nao
+  zera os XMM e o firmware UEFI os usa.
+- O quadro de sinal leva o estado de SSE; o `rt_sigreturn` o restaura depois de
+  aplicar a mascara do MXCSR (bits reservados no MXCSR fazem o `fxrstor` dar
+  `#GP` em ring 0).

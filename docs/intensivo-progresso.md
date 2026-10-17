@@ -16,7 +16,7 @@ ou sinais), 5 vezes seguidas:
 
     .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
 
-Proxima etapa: 1.1.
+Proxima etapa: 1.2.
 
 ## Checklist
 
@@ -29,7 +29,7 @@ Proxima etapa: 1.1.
 | 0.5 | Harness em Python e CI | [x] | 23:09 | 23:39 | `bc9a8e0` |
 | 0.6 | Shell: `&`, jobs, fg, wait, `VAR=x cmd`, `&&`, `\|\|`, `;` | [x] | 23:40 | 00:00 | (ver diario) |
 | 0.7 | Limites: 256 fds, 256 processos, ulimit | [x] | 00:00 | 01:09 | (ver diario) |
-| 1.1 | Pilha inicial do Linux (auxv) | [ ] | | | |
+| 1.1 | Pilha inicial do Linux (auxv) | [x] | 00:55 | 01:29 | (ver diario) |
 | 1.2 | Syscalls de partida da musl | [ ] | | | |
 | 1.3 | Arquivos no formato do Linux | [ ] | | | |
 | 1.4 | Memoria do jeito Linux (VMAs, mmap) | [ ] | | | |
@@ -241,7 +241,7 @@ novo `limtest` (253 descritores alem de 0/1/2 e `EMFILE`, limite 16, `dup2`
 na borda 255/256, `EINVAL`/`EPERM`, `RLIMIT_NPROC` deixando passar 3 forks e
 devolvendo `EAGAIN` nos outros). `stress N W ms` mantem os filhos vivos ms
 milissegundos; a regressao confere 220 vivos ao mesmo tempo pelo `ps | wc`.
-Regressao 118 -> 123, estresse 5x verde (`.egressao.ps1 -OnlyE -StressRuns 5`).
+Regressao 118 -> 123, estresse 5x verde (`.\regressao.ps1 -OnlyE -StressRuns 5`).
 Problemas achados:
 (1) O passo `until` do `test.ps1` so procurava o texto quando chegavam dados
 novos: se a saida inteira ja tinha chegado durante o `cmd:`, ele esperava o
@@ -254,3 +254,19 @@ marcador proprio (`badptr: fim`, `limtest: fim`).
 (3) O primeiro `ps | wc` contou 194 em vez de 220+: 1 de cada 7 filhos do
 `stress` faz `exec /bin/true` e terminava antes da espera. A espera passou a
 vir antes do `exec`.
+
+#### 1.1 Pilha inicial do Linux - 00:55 as 01:29 - FEITO
+`argc`/`argv`/`envp` seguidos do vetor auxiliar completo (`AT_PHDR`,
+`AT_PHENT`, `AT_PHNUM`, `AT_PAGESZ`, `AT_ENTRY`, `AT_RANDOM` com 16 bytes
+novos a cada exec, `AT_HWCAP`, `AT_PLATFORM`, `AT_EXECFN`, ids e `AT_NULL`).
+Junto, por ser pre-requisito da musl do Zig (1.5): SSE ligado em todas as
+CPUs e estado de SSE por thread (`fxsave64`/`fxrstor64` na troca, no `fork`,
+no `execve` e no quadro de sinal). Programas novos `auxtest` (16 verificacoes,
+inclusive que o estado de SSE comeca limpo e que o `AT_RANDOM` muda entre um
+exec e outro, lido por um filho via pipe) e `fputest` (4 processos com XMM e
+MXCSR proprios, handler de sinal que estraga tudo sem efeito, `fork` herdando).
+Regressao 123 -> 129, estresse 5x verde.
+Problemas: (1) `fninit` nao zera os XMM e o firmware UEFI os usa, entao o
+estado inicial capturado no boot tinha lixo - zerado a mao; (2) os programas
+da libc propria nao tem os cabecalhos ELF dentro de um segmento carregado e o
+`AT_PHDR` saia 0 - o kernel agora copia a tabela para a pilha nesse caso.

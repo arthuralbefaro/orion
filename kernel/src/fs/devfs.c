@@ -7,6 +7,7 @@
 #include <fs/block.h>
 #include <lib/string.h>
 #include <arch/x86_64/cpu.h>
+#include <lib/random.h>
 
 struct device {
     const char *name;
@@ -42,32 +43,10 @@ static int64_t zero_read(struct file *f, void *buf, uint64_t len)
     return (int64_t)len;
 }
 
-static uint64_t random_state;
-
-static uint64_t random_next(void)
-{
-    uint64_t x = __atomic_load_n(&random_state, __ATOMIC_RELAXED);
-    uint64_t next;
-    do {
-        next = x ? x : (rdtsc() | 1);
-        next ^= next << 13;
-        next ^= next >> 7;
-        next ^= next << 17;
-    } while (!__atomic_compare_exchange_n(&random_state, &x, next, false, __ATOMIC_RELAXED,
-                                          __ATOMIC_RELAXED));
-    return next ^ rdtsc();
-}
-
 static int64_t random_read(struct file *f, void *buf, uint64_t len)
 {
     (void)f;
-    uint8_t *out = buf;
-    uint64_t done = 0;
-    while (done < len) {
-        uint64_t r = random_next();
-        for (int i = 0; i < 8 && done < len; i++, done++)
-            out[done] = (uint8_t)(r >> (i * 8));
-    }
+    random_fill(buf, len);
     return (int64_t)len;
 }
 

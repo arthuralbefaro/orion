@@ -33,6 +33,7 @@
 #include <mm/heap.h>
 #include <mm/memory.h>
 #include <limine.h>
+#include <arch/x86_64/fpu.h>
 
 static void init_console(void)
 {
@@ -112,6 +113,7 @@ void kmain(void)
     mouse_init();
     sched_init();
     syscall_init();
+    fpu_init_cpu();
     log_info("boot", "%u modulo(s) carregado(s)", boot_info.module_count);
 
     sti();

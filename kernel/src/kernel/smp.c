@@ -7,6 +7,7 @@
 #include <boot/bootinfo.h>
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/gdt.h>
+#include <arch/x86_64/fpu.h>
 #include <arch/x86_64/interrupts.h>
 #include <arch/x86_64/lapic.h>
 #include <arch/x86_64/percpu.h>
@@ -69,6 +70,7 @@ static void ap_entry(struct limine_mp_info *info)
     write_cr3(vmm_kernel_pml4());
     lapic_enable_this_cpu();
     syscall_init_cpu();
+    fpu_init_cpu();
     sched_init_ap();
     time_init_ap();
 

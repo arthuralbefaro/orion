@@ -72,6 +72,7 @@ if ($runAll -or $OnlyA) {
         "cmd:crash", "wait:2",
         "cmd:sigtest", "wait:10",
         "cmd:badptr", "until:40:badptr: fim",
+        "cmd:fputest", "until:60:fputest: fim", "cmd:auxtest", "until:30:auxtest: fim",
         "cmd:sleep 100", "wait:2", "key:03", "wait:2",
         "cmd:hello um dois", "wait:1",
         "cmd:date", "wait:1",
@@ -136,6 +137,12 @@ if ($runAll -or $OnlyA) {
     Expect $a "rcx e r11 sobrevivem a um sinal\s+ok" "rt_sigreturn devolve todos os registradores"
     Expect $a "badptr: fim, (\d+)/\1 TUDO OK" "badptr: ponteiros invalidos devolvem EFAULT sem panico"
     Expect $a "handler de sinal nao canonico\s+SIGSEGV" "handler nao canonico vira SIGSEGV"
+    Expect $a "fputest: fim, TUDO OK" "fputest: xmm e mxcsr por processo, em sinal e no fork"
+    Expect $a "xmm0\.\.xmm15 zerados na entrada\s+ok" "exec comeca com o estado de SSE limpo"
+    Expect $a "AT_PHDR aponta para os cabecalhos de verdade\s+ok" "auxv: AT_PHDR"
+    Expect $a "AT_ENTRY = _start\s+ok" "auxv: AT_ENTRY"
+    Expect $a "AT_RANDOM muda a cada exec\s+ok" "auxv: AT_RANDOM com 16 bytes novos a cada exec"
+    Expect $a "auxtest: fim, TUDO OK" "auxtest: todos os campos do auxv"
     Expect $a "flag NT ligada dentro do handler\s+ok" "flag NT do usuario nao derruba o iretq do rt_sigreturn"
     Expect $a "Copias de usuario: [1-9]\d* falta\(s\) recuperada\(s\)" "tabela de excecoes recuperou as faltas"
     Expect $a "morto por sinal 2" "Ctrl\+C matou o sleep com SIGINT"
