@@ -51,11 +51,11 @@ def parse_sequences():
             if lp:
                 seq["log"] = lp.group(1).replace("\\", "/")
         seq["remove_disk"] = bool(re.search(r'Remove-Item \(Join-Path \$Root "out\\disk\.img"\)', body))
-        for e in re.finditer(r'^\s*Expect \$\w+ ("(?:[^"`]|`.)*"|\'(?:[^\']|\'\')*\') ("(?:[^"`]|`.)*"|\'(?:[^\']|\'\')*\')\s*$',
+        for e in re.finditer(r'^\s*(Expect|ExpectNot) \$\w+ ("(?:[^"`]|`.)*"|\'(?:[^\']|\'\')*\') ("(?:[^"`]|`.)*"|\'(?:[^\']|\'\')*\')\s*$',
                              body, flags=re.M):
-            pat = ps_string(STRING.match(e.group(1)))
-            desc = ps_string(STRING.match(e.group(2)))
-            seq["expect"].append((pat, desc))
+            pat = ps_string(STRING.match(e.group(2)))
+            desc = ps_string(STRING.match(e.group(3)))
+            seq["expect"].append((pat, desc, e.group(1) == "ExpectNot"))
         md = re.search(r'^\s*Test-MemDelta \$\w+ "([^"]+)" (\d+)\s*$', body, flags=re.M)
         if md:
             seq["memdelta"] = (md.group(1), int(md.group(2)))
@@ -71,9 +71,9 @@ class Report:
         self.checks = 0
         self.failures = []
 
-    def expect(self, log, pattern, desc):
+    def expect(self, log, pattern, desc, negate=False):
         self.checks += 1
-        if re.search(pattern, log, flags=re.I):
+        if bool(re.search(pattern, log, flags=re.I)) != negate:
             print(f"  [ok]    {desc}")
         else:
             print(f"  [FALHA] {desc}   (padrao: {pattern})")
@@ -148,8 +148,8 @@ def main():
             qrun.write_autostart(False)
         if a.verbose:
             print(log)
-        for pat, desc in seq["expect"]:
-            rep.expect(log, pat, desc)
+        for pat, desc, negate in seq["expect"]:
+            rep.expect(log, pat, desc, negate)
         if seq["memdelta"]:
             rep.memdelta(log, *seq["memdelta"])
 

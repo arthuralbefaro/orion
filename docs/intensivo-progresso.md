@@ -16,18 +16,18 @@ ou sinais), 5 vezes seguidas:
 
     .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
 
-Proxima etapa: 0.6.
+Proxima etapa: 0.7.
 
 ## Checklist
 
 | # | Etapa | Estado | Inicio | Fim | Commit |
 | --- | --- | --- | --- | --- | --- |
 | 0.1 | Commit da v1.9 e dos programas novos | [x] | 19:22 | 20:20 | `58bb747` |
-| 0.2 | Copia segura de memoria de usuario | [x] | 20:22 | 22:20 | `8b3d171` |
-| 0.3 | Mutex que dorme, AHCI | [x] | 22:25 | 23:05 | `4d55e72` |
-| 0.4 | FAT e cache de blocos com mutex | [x] | 23:05 | 23:50 | `076285d` |
-| 0.5 | Harness em Python e CI | [x] | 23:55 | 00:50 | (ver diario) |
-| 0.6 | Shell: `&`, jobs, fg, wait, `VAR=x cmd`, `&&`, `\|\|`, `;` | [ ] | | | |
+| 0.2 | Copia segura de memoria de usuario | [x] | 20:22 | 22:15 | `8b3d171` |
+| 0.3 | Mutex que dorme, AHCI | [x] | 22:16 | 22:41 | `4d55e72` |
+| 0.4 | FAT e cache de blocos com mutex | [x] | 22:42 | 23:08 | `076285d` |
+| 0.5 | Harness em Python e CI | [x] | 23:09 | 23:39 | `bc9a8e0` |
+| 0.6 | Shell: `&`, jobs, fg, wait, `VAR=x cmd`, `&&`, `\|\|`, `;` | [x] | 23:40 | 00:00 | (ver diario) |
 | 0.7 | Limites: 256 fds, 256 processos, ulimit | [ ] | | | |
 | 1.1 | Pilha inicial do Linux (auxv) | [ ] | | | |
 | 1.2 | Syscalls de partida da musl | [ ] | | | |
@@ -122,7 +122,7 @@ outros escrevem no pipe); o criterio usado e a linha visivel com
 `0 falha(s) ok`, o eco de um marcador depois do pipeline e nenhum
 `PANIC`/`EXCECAO`/`deadlock` no log.
 
-#### 0.2 Copia segura de memoria de usuario - 20:22 as 22:20 - commit 8b3d171 - FEITO
+#### 0.2 Copia segura de memoria de usuario - 20:22 as 22:15 - commit 8b3d171 - FEITO
 `copy_from_user`, `copy_to_user` e `strncpy_from_user` com tabela de excecoes
 (`.ex_table` no `linker.ld`, `arch/x86_64/uaccess.S`, `mm/uaccess.c`); o
 handler de `#PF`/`#GP` em ring 0 desvia para a retomada. Todas as syscalls que
@@ -181,7 +181,7 @@ levou junto as edicoes que o dono fez durante a sessao no arquivo local de regra
 comentarios para todas as linguagens) e em `docs/PLANO.md` (secao "Linguagens",
 1.5 com `zig cc`, piloto Rust no ext2 em 2.5, etapa nova 8.7).
 
-#### 0.3 Mutex que dorme - 22:25 as 23:05 - commit 4d55e72 - FEITO
+#### 0.3 Mutex que dorme - 22:16 as 22:41 - commit 4d55e72 - FEITO
 `kernel/mutex.{h,c}`: dono, fila de espera, spinlock interno so do mutex,
 estatisticas (aquisicoes, contencao, espera total e maxima), panico em
 recursao e em disputa com interrupcoes desligadas, aviso a cada 5 s de espera
@@ -195,7 +195,7 @@ cache, que a 0.4 troca por mutex.
 A partir desta etapa, antes de cada commit roda o comando do dono que procura
 `//` e `/*` nos arquivos de codigo staged.
 
-#### 0.4 FAT e cache de blocos com mutex - 23:05 as 23:50 - commit 076285d - FEITO
+#### 0.4 FAT e cache de blocos com mutex - 22:42 as 23:08 - commit 076285d - FEITO
 A trava do cache de setores (`bcache`) e a de cada FAT (`fat-sda1`,
 `fat-sdb`) viraram mutex; ordem `fat-*` -> `bcache` -> `ahci*`. A sequencia C
 roda duas `fstest -a` ao mesmo tempo (diretorios /mnt/p1 e /mnt/p2), as duas
@@ -208,7 +208,7 @@ comentarios antigos no `fat.c` (de antes do intensivo); removidos, o porque
 deles ja estava no DECISOES (v1.3). Tambem tirei um BOM que um
 `Set-Content -Encoding utf8` colocou no diario.
 
-#### 0.5 Harness em Python e CI - 23:55 as 00:50 - FEITO
+#### 0.5 Harness em Python e CI - 23:09 as 23:39 - commit bc9a8e0 - FEITO
 `tools/qrun.py` (equivalente ao `test.ps1`, com os mesmos passos) e
 `tools/regress.py`, que le os passos e as verificacoes do proprio
 `regressao.ps1` em vez de manter uma segunda copia. Sequencia nova E no
@@ -221,3 +221,14 @@ O que faltou: o workflow so roda quando o dono fizer push, e nesta maquina nao
 ha Linux para conferir o caminho do `make` (o WSL so tem a distro do Docker e
 o daemon do Docker estava parado). O `qrun.py` foi escrito para os dois
 sistemas, mas so o caminho do Windows foi exercitado.
+
+#### 0.6 Shell: listas e trabalhos - 23:40 as 00:00 - FEITO
+`sh` reescrito na parte de execucao: a linha vira uma lista de pipelines
+separados por `;`, `&&`, `||` e `&`; `$?`; `NOME=valor cmd` so para o comando;
+`cmd &` com tabela de trabalhos, `jobs`, `fg` e `wait`; aviso `[n] pronto` no
+prompt. Trabalho em segundo plano le de `/dev/null`. Programa novo `false`.
+Os comentarios antigos do `sh/main.c` sairam junto com a reescrita.
+Regressao 105 -> 118 (13 verificacoes novas na sequencia A, inclusive uma
+negativa: `false && echo NAO-DEVIA` nao pode imprimir). O `regress.py`
+aprendeu `ExpectNot`. Sem estresse: a etapa so mexe em espaco de usuario.
+Fora: `bg`, Ctrl+Z e `2>&1` (o kernel ainda nao tem `SIGTSTP`/`SIGCONT`).

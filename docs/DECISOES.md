@@ -490,3 +490,27 @@ Uma linha por decisao, na ordem em que foram tomadas.
 - `.github/workflows/regressao.yml` roda `make` e `tools/regress.py ABCDE` num
   Ubuntu 24.04 a cada push. Ele so roda quando o dono fizer push; daqui nao da
   para verificar (o intensivo nao faz push).
+
+## v1.9.5 (shell: listas e trabalhos em segundo plano)
+
+- A linha e quebrada primeiro em uma lista de segmentos separados por `;`,
+  `&&`, `||` e `&` (nessa ordem de reconhecimento: `&&` antes de `&`, `||`
+  antes de `|`); cada segmento e um pipeline. `&` logo depois de `<` ou `>`
+  nao separa, para nao confundir com um futuro `2>&1`.
+- A expansao de `$NOME` passou a ser por segmento, na hora de rodar, e nao na
+  linha inteira de uma vez. E o que faz `false ; echo $?` mostrar 1. `$?` e o
+  status do ultimo segmento: codigo de saida, ou 128 + sinal.
+- `NOME=valor cmd` guarda as atribuicoes no comando e as aplica no filho logo
+  antes do `execv`; o shell nao muda. Para builtins, o shell aplica, roda e
+  restaura o valor anterior. So atribuicoes, sem comando, continuam mudando o
+  ambiente do shell.
+- Trabalhos em segundo plano ficam numa tabela de 16 posicoes (pgid, pids de
+  cada estagio, texto). O shell espera os de primeiro plano por pid
+  especifico, entao nao colhe os de segundo plano por engano; esses sao
+  colhidos com `WNOHANG` antes de cada prompt, que avisa `[n] pronto`.
+- Trabalho em segundo plano le de `/dev/null` quando nao tem `<`: sem isso ele
+  disputaria o teclado com o shell (ainda nao ha `SIGTTIN`).
+- `fg` passa o terminal para o grupo do trabalho e espera; `wait` sem
+  argumento espera todos. Nao ha `bg` nem suspensao (Ctrl+Z), porque o kernel
+  ainda nao tem `SIGTSTP`/`SIGCONT`.
+- Programa novo `false` (o `true` ja existia), para testar `&&` e `||`.

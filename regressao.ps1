@@ -111,6 +111,11 @@ if ($runAll -or $OnlyA) {
         "cmd:head -c 64 /dev/random | wc", "wait:1",
         "cmd:stress 300 8", "until:240:stress: 300 processos",
         "cmd:unset GREETING", 'cmd:echo vazio[$GREETING]', "wait:1",
+        "cmd:true && echo e-ok", "cmd:false && echo NAO-DEVIA", "cmd:false || echo ou-ok",
+        "cmd:echo um ; echo dois", 'cmd:false ; echo status=$?',
+        "cmd:XV=abc printenv XV", "cmd:printenv XV || echo XV-sumiu",
+        "cmd:sleep 3 &", "cmd:jobs", "cmd:wait", "wait:1",
+        "cmd:sleep 2 & sleep 1 & jobs", "cmd:fg", "wait:3", "cmd:jobs", "wait:1",
         "key:0B", "cmd:heaptest", "wait:1", "cmd:preempt", "wait:2",
         "cmd:arp", "cmd:net",
         "cmd:dev", "cmd:pty", "cmd:mem"
@@ -169,6 +174,19 @@ if ($runAll -or $OnlyA) {
     Expect $a "Orion top   \d+ processo\(s\)   4 CPU\(s\)" "top mostrou o resumo do sistema"
     Expect $a "\n\s+2\s+1\s+2\s+\d+\s+rodando\s+sh" "top listou o sh"
     Expect $a "vazio\[\]" "unset apagou a variavel"
+    Expect $a "\ne-ok" "&& roda o segundo comando quando o primeiro da certo"
+    ExpectNot $a "\nNAO-DEVIA" "&& pula o segundo comando quando o primeiro falha"
+    Expect $a "\nou-ok" "|| roda o segundo comando quando o primeiro falha"
+    Expect $a "\num\r?\ndois" "; roda os dois comandos em sequencia"
+    Expect $a "\nstatus=1" "`$? tem o status do ultimo comando"
+    Expect $a "XV=abc printenv XV\s*\n\s*abc" "VAR=x cmd passa a variavel so para o comando"
+    Expect $a "\nXV-sumiu" "VAR=x cmd nao muda o ambiente do shell"
+    Expect $a "\[1\] \d+\s*\n" "cmd & devolve o numero do trabalho e o pid"
+    Expect $a "\[1\] rodando\s+sleep 3" "jobs lista o trabalho em segundo plano"
+    Expect $a "\[1\] pronto\s+sleep 3" "wait espera o trabalho terminar"
+    Expect $a "\[3\] rodando\s+sleep 1" "dois trabalhos em segundo plano ao mesmo tempo"
+    Expect $a "(?s)\$ fg\s*\nsleep 1" "fg traz o ultimo trabalho para o primeiro plano"
+    Expect $a "\[2\] pronto\s+sleep 2" "trabalho terminado e avisado no prompt seguinte"
     Expect $a "PID\s+PPID\s+PGID\s+PAGINAS\s+ESTADO\s+NOME" "ps -l mostrou o cabecalho"
     Expect $a "\n\s+\d+\s+\d+\s+\d+\s+\d+\s+rodando\s+ps" "ps -l listou a si mesmo"
     Expect $a "ligado ha \d\d:\d\d:\d\d, [1-9]\d* processo\(s\), 4 CPU\(s\)" "uptime contou processos e CPUs"
