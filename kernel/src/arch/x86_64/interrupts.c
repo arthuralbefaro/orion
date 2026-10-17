@@ -243,9 +243,11 @@ static void handle_exception(struct interrupt_frame *f)
                   p->pid, p->name, exception_name((uint8_t)f->int_no), f->rip, f->err_code,
                   cr2, signal_name(sig));
         uint64_t action = SIGACT(p, sig)->sa_handler;
-        if (action == SIG_DFL || action == SIG_IGN || (p->sig_blocked & SIGMASK(sig)))
+        if (action == SIG_DFL || action == SIG_IGN || (thread_current()->sig_blocked & SIGMASK(sig))) {
+            sti();
             process_exit_signal(sig);
-        signal_send(p, sig);
+        }
+        signal_send_thread(thread_current(), sig);
         return;
     }
 

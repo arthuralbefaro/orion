@@ -18,12 +18,16 @@
 #include <lib/random.h>
 #include <mm/uaccess.h>
 #include <mm/vma.h>
+#include <kernel/smp.h>
 #include <mm/pmm.h>
 #include <mm/heap.h>
 #include <mm/memory.h>
 #include <lib/string.h>
 
 extern void user_return(struct interrupt_frame *frame);
+
+static void kick_other_threads(struct process *p);
+static bool become_single_thread(struct process *p);
 
 static struct process *processes;
 static uint32_t next_pid = 1;
@@ -291,6 +295,8 @@ static struct process *process_alloc(const char *name)
         return NULL;
     }
     p->state = PROC_RUNNING;
+    spinlock_init(&p->tlock);
+    mutex_init_private(&p->mm_lock, "mm");
     signal_init_process(p);
     strlcpy(p->cwd, "/", sizeof(p->cwd));
     return p;
@@ -391,16 +397,39 @@ static void give_std_fds(struct process *p)
         p->fds[i] = file_open_tty();
 }
 
+static void link_thread(struct process *p, struct thread *t)
+{
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    t->proc_next = p->threads;
+    p->threads = t;
+    p->live_threads++;
+    __atomic_fetch_add(&p->thread_refs, 1, __ATOMIC_ACQ_REL);
+    if (p->group_exit || p->execing)
+        t->kill_me = true;
+    spin_unlock_irqrestore(&p->tlock, flags);
+}
+
+static uint32_t alloc_id(void)
+{
+    uint64_t flags = spin_lock_irqsave(&proc_lock);
+    uint32_t id = next_pid++;
+    spin_unlock_irqrestore(&proc_lock, flags);
+    return id;
+}
+
 static struct process *process_start(struct process *p, const char *name)
 {
     process_register(p);
-    p->thread = thread_create_for_process(name, user_thread_entry, p, p);
-    if (!p->thread) {
+    struct thread *t = thread_create_for_process_paused(name, user_thread_entry, p, p);
+    if (!t) {
         process_unregister(p);
         vmm_destroy_address_space(p->pml4_phys);
         process_free(p);
         return NULL;
     }
+    t->utid = p->pid;
+    link_thread(p, t);
+    thread_unblock(t);
     return p;
 }
 
@@ -508,16 +537,20 @@ int process_fd_alloc(struct process *p, struct file *f, int min, bool cloexec)
     int limit = process_fd_limit(p);
     if (min < 0)
         return -EINVAL;
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    int ret = -EMFILE;
     for (int i = min; i < limit; i++) {
         if (i >= p->fd_cap && !process_fd_reserve(p, i))
-            return -EMFILE;
+            break;
         if (!p->fds[i]) {
             p->fds[i] = f;
             p->fd_flags[i] = cloexec ? FD_CLOEXEC : 0;
-            return i;
+            ret = i;
+            break;
         }
     }
-    return -EMFILE;
+    spin_unlock_irqrestore(&p->tlock, flags);
+    return ret;
 }
 
 int process_fd_install(struct process *p, struct file *f)
@@ -527,11 +560,15 @@ int process_fd_install(struct process *p, struct file *f)
 
 int process_fd_replace(struct process *p, int fd, struct file *f, bool cloexec)
 {
-    if (!process_fd_reserve(p, fd))
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    if (!process_fd_reserve(p, fd)) {
+        spin_unlock_irqrestore(&p->tlock, flags);
         return -EBADF;
+    }
     struct file *old = p->fds[fd];
     p->fds[fd] = f;
     p->fd_flags[fd] = cloexec ? FD_CLOEXEC : 0;
+    spin_unlock_irqrestore(&p->tlock, flags);
     if (old)
         file_unref(old);
     return fd;
@@ -539,17 +576,22 @@ int process_fd_replace(struct process *p, int fd, struct file *f, bool cloexec)
 
 int process_fd_get_flags(struct process *p, int fd)
 {
-    if (!process_fd_get(p, fd))
-        return -EBADF;
-    return p->fd_flags[fd];
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    int ret = process_fd_get(p, fd) ? p->fd_flags[fd] : -EBADF;
+    spin_unlock_irqrestore(&p->tlock, flags);
+    return ret;
 }
 
-int process_fd_set_flags(struct process *p, int fd, int flags)
+int process_fd_set_flags(struct process *p, int fd, int value)
 {
-    if (!process_fd_get(p, fd))
-        return -EBADF;
-    p->fd_flags[fd] = (uint8_t)(flags & FD_CLOEXEC);
-    return 0;
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    int ret = -EBADF;
+    if (process_fd_get(p, fd)) {
+        p->fd_flags[fd] = (uint8_t)(value & FD_CLOEXEC);
+        ret = 0;
+    }
+    spin_unlock_irqrestore(&p->tlock, flags);
+    return ret;
 }
 
 static void close_on_exec(struct process *p)
@@ -568,11 +610,15 @@ struct file *process_fd_get(struct process *p, int fd)
 
 int process_fd_close(struct process *p, int fd)
 {
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
     struct file *f = process_fd_get(p, fd);
+    if (f) {
+        p->fds[fd] = NULL;
+        p->fd_flags[fd] = 0;
+    }
+    spin_unlock_irqrestore(&p->tlock, flags);
     if (!f)
         return -EBADF;
-    p->fds[fd] = NULL;
-    p->fd_flags[fd] = 0;
     file_unref(f);
     return 0;
 }
@@ -625,6 +671,10 @@ static void fork_child_entry(void *arg)
 {
     struct fork_start *st = arg;
     struct interrupt_frame frame = st->frame;
+    if (thread_current()->kill_me) {
+        kfree(st);
+        process_thread_leave();
+    }
     cli();
     fpu_restore(st->fpu);
     kfree(st);
@@ -633,6 +683,11 @@ static void fork_child_entry(void *arg)
 
 int process_fork(struct interrupt_frame *frame)
 {
+    return process_fork_stack(frame, 0);
+}
+
+int process_fork_stack(struct interrupt_frame *frame, uint64_t newsp)
+{
     struct process *parent = process_current();
     if ((uint64_t)process_count() >= parent->rlimits[RLIMIT_NPROC].cur)
         return -EAGAIN;
@@ -640,7 +695,11 @@ int process_fork(struct interrupt_frame *frame)
     if (!child)
         return -ENOMEM;
 
-    if (!vma_copy_all(child, parent) || !share_user_pages(child, parent)) {
+    mutex_lock(&parent->mm_lock);
+    bool copied = vma_copy_all(child, parent) && share_user_pages(child, parent);
+    process_mm_tlb_sync(parent);
+    mutex_unlock(&parent->mm_lock);
+    if (!copied) {
         vma_release_all(child);
         vmm_destroy_address_space(child->pml4_phys);
         process_free(child);
@@ -651,13 +710,13 @@ int process_fork(struct interrupt_frame *frame)
     child->brk_start = parent->brk_start;
     child->brk = parent->brk;
     child->pgid = parent->pgid;
-    child->sig_blocked = parent->sig_blocked;
     memcpy(child->sig_handlers, parent->sig_handlers, SIG_TABLE_SIZE);
     strlcpy(child->cwd, parent->cwd, sizeof(child->cwd));
     child->parent = parent;
-    child->thread = NULL;
     memcpy(child->rlimits, parent->rlimits, sizeof(child->rlimits));
+    uint64_t tflags = spin_lock_irqsave(&parent->tlock);
     if (!fd_table_resize(child, parent->fd_cap)) {
+        spin_unlock_irqrestore(&parent->tlock, tflags);
         vmm_destroy_address_space(child->pml4_phys);
         process_free(child);
         return -ENOMEM;
@@ -668,6 +727,7 @@ int process_fork(struct interrupt_frame *frame)
         if (child->fds[i])
             file_ref(child->fds[i]);
     }
+    spin_unlock_irqrestore(&parent->tlock, tflags);
 
     struct fork_start *copy = kmalloc(sizeof(*copy));
     if (!copy) {
@@ -680,24 +740,70 @@ int process_fork(struct interrupt_frame *frame)
     }
     copy->frame = *frame;
     copy->frame.rax = 0;
+    if (newsp)
+        copy->frame.rsp = newsp;
     fpu_save(copy->fpu);
 
     process_register(child);
-    child->thread = thread_create_for_process(child->name, fork_child_entry, copy, child);
-    if (!child->thread) {
+    struct thread *t = thread_create_for_process_paused(child->name, fork_child_entry, copy, child);
+    if (!t) {
         process_unregister(child);
         kfree(copy);
         vmm_destroy_address_space(child->pml4_phys);
         process_free(child);
         return -ENOMEM;
     }
+    struct thread *self = thread_current();
+    t->utid = child->pid;
+    t->sig_blocked = self->sig_blocked;
+    t->fs_base = self->fs_base;
+    link_thread(child, t);
+    thread_unblock(t);
     return (int)child->pid;
+}
+
+long process_clone(struct interrupt_frame *frame, uint64_t flags, uint64_t newsp, uint64_t ptid,
+                   uint64_t ctid, uint64_t tls)
+{
+    if (!(flags & CLONE_THREAD))
+        return process_fork_stack(frame, newsp);
+    if ((flags & (CLONE_VM | CLONE_SIGHAND)) != (CLONE_VM | CLONE_SIGHAND) || (flags & 0xFF))
+        return -EINVAL;
+    struct process *p = process_current();
+    struct thread *self = thread_current();
+    if (p->group_exit)
+        return -EAGAIN;
+    struct fork_start *st = kmalloc(sizeof(*st));
+    if (!st)
+        return -ENOMEM;
+    st->frame = *frame;
+    st->frame.rax = 0;
+    if (newsp)
+        st->frame.rsp = newsp;
+    fpu_save(st->fpu);
+    struct thread *t = thread_create_for_process_paused(self->name, fork_child_entry, st, p);
+    if (!t) {
+        kfree(st);
+        return -EAGAIN;
+    }
+    uint32_t tid = alloc_id();
+    t->utid = tid;
+    t->sig_blocked = self->sig_blocked;
+    t->fs_base = (flags & CLONE_SETTLS) ? tls : self->fs_base;
+    if (flags & CLONE_CHILD_CLEARTID)
+        t->clear_child_tid = ctid;
+    if (flags & CLONE_PARENT_SETTID)
+        copy_to_user((void *)ptid, &tid, sizeof(tid));
+    if (flags & CLONE_CHILD_SETTID)
+        copy_to_user((void *)ctid, &tid, sizeof(tid));
+    link_thread(p, t);
+    thread_unblock(t);
+    return (long)tid;
 }
 
 int process_execve(const char *path, char *const *argv, char *const *envp, struct interrupt_frame *frame)
 {
     struct process *p = process_current();
-
     char full[PROCESS_CWD_MAX];
     if (!process_resolve_path(p, path, full, sizeof(full)))
         return -ENOENT;
@@ -705,6 +811,10 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
     void *image = vfs_read_all(full, &size);
     if (!image)
         return -ENOENT;
+    if (!become_single_thread(p)) {
+        kfree(image);
+        return -EAGAIN;
+    }
     path = full;
 
     uint64_t old_pml4 = p->pml4_phys;
@@ -739,6 +849,7 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
         wrmsr(MSR_IA32_FS_BASE, 0);
         fpu_reset_current();
         thread_current()->clear_child_tid = 0;
+        thread_current()->utid = p->pid;
         close_on_exec(p);
         cli();
         p->pml4_phys = new_pml4;
@@ -799,7 +910,7 @@ int process_waitpid(int pid, int *status, int options)
             spin_unlock_irqrestore(&proc_lock, flags);
             return 0;
         }
-        wait_sleep(&child_exit_wq, &proc_lock);
+        wait_sleep_intr(&child_exit_wq, &proc_lock, 0);
         if (signal_pending_current()) {
             spin_unlock_irqrestore(&proc_lock, flags);
             return -EINTR;
@@ -807,25 +918,85 @@ int process_waitpid(int pid, int *status, int options)
     }
 }
 
-static NORETURN void process_terminate(int status)
+static void kick_other_threads(struct process *p)
+{
+    struct thread *self = thread_current();
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    for (struct thread *t = p->threads; t; t = t->proc_next) {
+        if (t == self)
+            continue;
+        t->kill_me = true;
+        sched_runq_lock();
+        wait_unlink(t);
+        sched_make_ready(t);
+        sched_runq_unlock();
+    }
+    spin_unlock_irqrestore(&p->tlock, flags);
+}
+
+static bool become_single_thread(struct process *p)
+{
+    if (__atomic_load_n(&p->thread_refs, __ATOMIC_ACQUIRE) <= 1)
+        return true;
+    struct thread *self = thread_current();
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    if (p->group_exit || p->execing || self->kill_me) {
+        spin_unlock_irqrestore(&p->tlock, flags);
+        return false;
+    }
+    p->execing = true;
+    spin_unlock_irqrestore(&p->tlock, flags);
+    kick_other_threads(p);
+    bool ok = true;
+    while (__atomic_load_n(&p->thread_refs, __ATOMIC_ACQUIRE) > 1) {
+        if (self->kill_me || p->group_exit) {
+            ok = false;
+            break;
+        }
+        thread_sleep_ms(1);
+    }
+    flags = spin_lock_irqsave(&p->tlock);
+    p->execing = false;
+    spin_unlock_irqrestore(&p->tlock, flags);
+    return ok;
+}
+
+static NORETURN void thread_leave(int status)
 {
     struct process *p = process_current();
     ASSERT(p);
-    p->exit_code = status;
-    p->alarm_at = 0;
     struct thread *self = thread_current();
     if (self->clear_child_tid) {
         int32_t zero = 0;
         copy_to_user((void *)self->clear_child_tid, &zero, sizeof(zero));
         self->clear_child_tid = 0;
     }
+    process_unpin_all();
+
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    struct thread **pp = &p->threads;
+    while (*pp && *pp != self)
+        pp = &(*pp)->proc_next;
+    if (*pp)
+        *pp = self->proc_next;
+    bool last = --p->live_threads == 0;
+    if (last && !p->group_exit) {
+        p->group_exit = true;
+        p->group_exit_status = status;
+    }
+    spin_unlock_irqrestore(&p->tlock, flags);
+    if (!last)
+        thread_exit();
+
+    p->exit_code = p->group_exit_status;
+    p->alarm_at = 0;
     for (int i = 0; i < p->fd_cap; i++)
         if (p->fds[i]) {
             file_unref(p->fds[i]);
             p->fds[i] = NULL;
         }
     vma_release_all(p);
-    uint64_t flags = spin_lock_irqsave(&proc_lock);
+    flags = spin_lock_irqsave(&proc_lock);
     p->state = PROC_ZOMBIE;
     orphan_children_locked(p);
     if (p->parent)
@@ -836,14 +1007,81 @@ static NORETURN void process_terminate(int status)
     thread_exit();
 }
 
+static NORETURN void exit_group(int status)
+{
+    struct process *p = process_current();
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    if (!p->group_exit) {
+        p->group_exit = true;
+        p->group_exit_status = status;
+    }
+    spin_unlock_irqrestore(&p->tlock, flags);
+    kick_other_threads(p);
+    thread_leave(status);
+}
+
+NORETURN void process_thread_leave(void)
+{
+    thread_leave(0);
+}
+
+NORETURN void process_exit_thread(int code)
+{
+    thread_leave((code & 0xFF) << 8);
+}
+
 NORETURN void process_exit(int code)
 {
-    process_terminate((code & 0xFF) << 8);
+    exit_group((code & 0xFF) << 8);
 }
 
 NORETURN void process_exit_signal(int sig)
 {
-    process_terminate(sig & 0x7F);
+    exit_group(sig & 0x7F);
+}
+
+struct file *process_fd_pin(int fd)
+{
+    struct thread *t = thread_current();
+    struct process *p = t->process;
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    struct file *f = process_fd_get(p, fd);
+    if (f) {
+        bool have = false;
+        for (int i = 0; i < t->npins; i++)
+            if (t->pins[i] == f)
+                have = true;
+        if (!have) {
+            if (t->npins >= THREAD_PINS) {
+                spin_unlock_irqrestore(&p->tlock, flags);
+                return NULL;
+            }
+            file_ref(f);
+            t->pins[t->npins++] = f;
+        }
+    }
+    spin_unlock_irqrestore(&p->tlock, flags);
+    return f;
+}
+
+void process_unpin_all(void)
+{
+    struct thread *t = thread_current();
+    while (t->npins > 0) {
+        struct file *f = t->pins[--t->npins];
+        t->pins[t->npins] = NULL;
+        file_unref(f);
+    }
+}
+
+void process_mm_tlb_sync(struct process *p)
+{
+    if (p->live_threads <= 1)
+        return;
+    if (interrupts_enabled())
+        smp_tlb_shootdown_sync();
+    else
+        smp_flush_tlb_others();
 }
 
 int process_kill(int pid, int sig)

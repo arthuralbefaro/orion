@@ -709,3 +709,81 @@ Uma linha por decisao, na ordem em que foram tomadas.
 - `sched_getaffinity` virou syscall de verdade: a musl a usa para contar CPUs.
 - A sequencia A ganhou uma verificacao negativa: nenhuma syscall desconhecida
   durante a sequencia inteira.
+
+## v2.0.0-a6 (threads: clone, exit_group, sinais por thread)
+
+- `clone(CLONE_THREAD)` cria uma thread no mesmo processo. Exige `CLONE_VM` e
+  `CLONE_SIGHAND`, como o Linux; o tid sai do mesmo contador dos pids e fica
+  em `thread->utid` (`gettid` e `set_tid_address` devolvem ele). Tratados:
+  `CLONE_SETTLS`, `CLONE_PARENT_SETTID`, `CLONE_CHILD_SETTID` e
+  `CLONE_CHILD_CLEARTID`. A thread nasce parada, recebe tid, TLS e mascara e
+  so entao entra na lista do processo e na fila, para nunca rodar meio pronta.
+- `clone` sem `CLONE_THREAD` e um fork que aceita pilha nova (e o que o
+  `posix_spawn` da musl usa); `CLONE_VM` sem thread vira copia com COW, o que
+  basta para quem faz `exec` logo em seguida. `vfork` e `fork`.
+- Mascara de sinais por thread; pendentes por processo e por thread. O envio
+  ao processo escolhe uma thread que nao bloqueia o sinal (de preferencia a
+  atual) e a acorda. O sigframe guarda a mascara da thread.
+- `exit` encerra so a thread; a ultima a sair encerra o processo com o status
+  dela. `exit_group` (e a morte por sinal) marca o grupo, liga `kill_me` nas
+  outras threads e as acorda; cada uma sai sozinha ao passar pelo
+  `signal_check` na volta ao usuario, e as esperas interrompiveis voltam com
+  `EINTR` porque `kill_me` conta como sinal pendente. So a ultima thread fecha
+  os descritores, solta as VMAs e vira zumbi; o espaco de enderecos e liberado
+  quando o ceifador recolhe essa thread (`last_of_process`).
+- `execve` com varias threads mata as outras, espera elas sairem e a que
+  ficou assume o pid como tid.
+- `fork` de um processo com threads copia so a thread que chamou. A copia do
+  espaco de enderecos segura o `mm_lock` do pai, e depois faz o shootdown de
+  TLB: as paginas do pai viraram COW so-leitura, e outra CPU rodando outra
+  thread do pai ainda podia ter a traducao gravavel no TLB.
+- `mm_lock` (mutex por processo, fora do registro de travas porque ha um por
+  processo) protege a lista de VMAs e as tabelas de paginas: mmap, munmap,
+  mprotect, madvise, brk e a falta de pagina. Com interrupcoes desligadas a
+  falta nao pode dormir, entao so tenta a trava e, se nao conseguir, a falta
+  falha e a tabela de excecoes devolve `EFAULT` (codigo do kernel que copia
+  de ou para o usuario segurando um spinlock fica sujeito a isso). Mudancas que tiram ou rebaixam
+  traducoes (munmap, mprotect, DONTNEED, brk encolhendo, COW) fazem shootdown
+  quando o processo tem mais de uma thread viva.
+- A tabela de descritores e protegida pelo `tlock` do processo. Cada syscall
+  "prende" os arquivos que usa (`process_fd_pin`: uma referencia a mais,
+  guardada na thread) e solta todos no fim da syscall; assim um `close` em
+  outra thread nao libera o arquivo no meio de um `read`. Sao ate 40 por
+  syscall, acima do maximo de 32 do `poll`.
+- Espera interrompivel (`wait_sleep_intr`): depois de entrar na fila e com a
+  trava da fila de prontos segurada, confere se ha sinal pendente e, se ha,
+  nao dorme. O envio de sinal marca o pendente antes de pegar essa trava para
+  acordar, entao o sinal que chega entre a verificacao do chamador e o sono
+  nao se perde mais. Pipe, terminal, pty e `waitpid` usam ela. `pause` virou
+  syscall de verdade.
+- Futex ainda nao existe (etapa 1.7): a musl cai num laco que tenta a syscall
+  de novo, o que funciona mas gasta CPU. A verificacao "nenhuma syscall
+  desconhecida" da sequencia A tolera a 202 ate la.
+- Depois de uma revisao do diff, antes do commit:
+  - O processo conta as structs de thread vivas (`thread_refs`), e o espaco
+    de enderecos so e destruido quando a ultima delas e liberada pelo
+    escalonador, ja fora da CPU. Antes valia a ultima thread a *sair*: uma
+    thread que saiu antes, mas ainda nao tinha trocado de contexto (ou foi
+    preemptada no caminho), podia voltar a rodar com o processo ja colhido.
+  - `execve` le o executavel antes de matar as outras threads (um `execvp`
+    que testa varios caminhos nao derruba as threads a cada falha) e espera
+    as structs serem liberadas, nao so as threads sairem. Durante a espera o
+    processo fica marcado (`execing`): um `clone` nesse meio nasce marcado
+    para sair, um segundo `execve` desiste com `EAGAIN` e sai junto com as
+    outras, e um `exit_group` de outra thread vence o `execve`.
+  - Todo acesso a tabela de descritores passa pelo `tlock`: `dup3`, a copia
+    no `fork` e `F_GETFD`/`F_SETFD` faltavam.
+  - O `signal_check` liga as interrupcoes quando ha sinal a entregar (ele so
+    roda na volta ao usuario, sem trava nenhuma segurada). Assim a falta de
+    pagina ao empurrar o quadro na pilha de uma thread nova pode esperar o
+    `mm_lock` em vez de matar o processo com `SIGSEGV`.
+  - Sinais de falta (`SIGSEGV`, `SIGFPE`, `SIGILL`) e o `SIGPIPE` vao para a
+    thread que os causou, nao para o processo.
+  - Duas threads nao entregam mais o mesmo sinal: quem pega o sinal e quem
+    efetivamente apagou o bit de pendente.
+  - Uma thread que passa a bloquear um sinal ja pendente no processo acorda
+    outra que o aceite.
+  - `MAP_FIXED` que falha faz o shootdown mesmo assim: o mapeamento antigo ja
+    foi desfeito.
+  - Escrita no lado escravo do pty e interrompivel; antes uma thread presa
+    ali segurava `exit_group` e `execve` para sempre.

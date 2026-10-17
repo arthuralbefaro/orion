@@ -183,7 +183,7 @@ int64_t ldisc_read(struct line_discipline *l, void *buf, uint64_t len)
             spin_unlock_irqrestore(&l->lock, flags);
             return 0;
         }
-        wait_sleep(&l->readers, &l->lock);
+        wait_sleep_intr(&l->readers, &l->lock, 0);
         if (signal_pending_current()) {
             spin_unlock_irqrestore(&l->lock, flags);
             return -EINTR;

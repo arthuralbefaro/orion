@@ -86,7 +86,7 @@ static int64_t master_read(struct file *f, void *buf, uint64_t len)
             spin_unlock_irqrestore(&p->lock, flags);
             return -EAGAIN;
         }
-        wait_sleep(&p->readers, &p->lock);
+        wait_sleep_intr(&p->readers, &p->lock, 0);
         if (signal_pending_current()) {
             spin_unlock_irqrestore(&p->lock, flags);
             return -EINTR;
@@ -210,16 +210,24 @@ static int64_t slave_write(struct file *f, const void *buf, uint64_t len)
     struct pty *p = f->priv;
     const uint8_t *in = buf;
     uint64_t done = 0;
+    bool interrupted = false;
     uint64_t flags = spin_lock_irqsave(&p->lock);
     while (done < len && p->masters > 0) {
         uint32_t n = out_push(p, in + done, (uint32_t)(len - done));
         done += n;
-        if (n)
+        if (n) {
             wake_up_all(&p->readers);
-        else
-            wait_sleep(&p->writers, &p->lock);
+        } else {
+            wait_sleep_intr(&p->writers, &p->lock, 0);
+            if (signal_pending_current()) {
+                interrupted = true;
+                break;
+            }
+        }
     }
     spin_unlock_irqrestore(&p->lock, flags);
+    if (interrupted)
+        return done ? (int64_t)done : -EINTR;
     return (int64_t)len;
 }
 

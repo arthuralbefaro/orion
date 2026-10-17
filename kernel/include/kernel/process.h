@@ -4,6 +4,8 @@
 #include <kernel/wait.h>
 #include <kernel/signal.h>
 #include <kernel/syscall.h>
+#include <kernel/spinlock.h>
+#include <kernel/mutex.h>
 
 #define PROCESS_NAME_MAX 32
 #define PROCESS_FD_INITIAL 32
@@ -48,11 +50,17 @@ struct process {
     int exit_code;
     uint32_t pgid;
     uint64_t sig_pending;
-    uint64_t sig_blocked;
     uint64_t alarm_at;
     struct user_sigaction *sig_handlers;
     bool autofree;
-    struct thread *thread;
+    struct thread *threads;
+    uint32_t live_threads;
+    uint32_t thread_refs;
+    bool execing;
+    bool group_exit;
+    int group_exit_status;
+    spinlock_t tlock;
+    struct mutex mm_lock;
     struct process *parent;
     struct file **fds;
     uint8_t *fd_flags;
@@ -67,9 +75,17 @@ struct process *process_current(void);
 struct process *process_find(uint32_t pid);
 
 int  process_fork(struct interrupt_frame *frame);
+int  process_fork_stack(struct interrupt_frame *frame, uint64_t newsp);
 int  process_execve(const char *path, char *const *argv, char *const *envp, struct interrupt_frame *frame);
 int  process_waitpid(int pid, int *status, int options);
 NORETURN void process_exit(int code);
+NORETURN void process_exit_thread(int code);
+NORETURN void process_thread_leave(void);
+long process_clone(struct interrupt_frame *frame, uint64_t flags, uint64_t newsp, uint64_t ptid,
+                   uint64_t ctid, uint64_t tls);
+struct file *process_fd_pin(int fd);
+void process_unpin_all(void);
+void process_mm_tlb_sync(struct process *p);
 NORETURN void process_exit_signal(int sig);
 int  process_kill(int pid, int sig);
 int  process_setpgid(int pid, int pgid);

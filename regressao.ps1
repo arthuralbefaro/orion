@@ -75,6 +75,7 @@ if ($runAll -or $OnlyA) {
         "cmd:fputest", "until:60:fputest: fim", "cmd:auxtest", "until:30:auxtest: fim",
         "cmd:sctest", "until:30:sctest: fim", "cmd:filetest", "until:60:filetest: fim",
         "cmd:mhello", "until:30:mhello: fim",
+        "cmd:mthreads", "until:120:mthreads: fim",
         "cmd:sleep 100", "wait:2", "key:03", "wait:2",
         "cmd:hello um dois", "wait:1",
         "cmd:date", "wait:1",
@@ -169,7 +170,17 @@ if ($runAll -or $OnlyA) {
     Expect $a "variavel __thread \(TLS\)\s+ok" "musl: TLS"
     Expect $a "printf com ponto flutuante\s+ok" "musl: printf com ponto flutuante (SSE)"
     Expect $a "mhello: fim, TUDO OK" "mhello: partida da musl completa"
-    ExpectNot $a "syscall \d+ desconhecida" "nenhuma syscall desconhecida na sequencia A"
+    Expect $a "pthread_create de 8 threads +ok" "mthreads: 8 threads da musl criadas"
+    Expect $a "8 threads somando num contador atomico +ok" "mthreads: contador atomico entre threads"
+    Expect $a "contador protegido por pthread_mutex +ok" "mthreads: pthread_mutex"
+    Expect $a "__thread separado por thread +ok" "mthreads: TLS por thread"
+    Expect $a "exit numa thread encerra o processo inteiro +ok" "mthreads: exit encerra todas as threads"
+    Expect $a "fork de processo com threads gera filho com uma thread +ok" "mthreads: fork com threads"
+    Expect $a "exit com outra thread presa num read +ok" "mthreads: exit acorda thread presa num read"
+    Expect $a "execve com outra thread presa num read +ok" "mthreads: execve com thread presa num read"
+    Expect $a "execve feito por uma thread que nao e a principal +ok" "mthreads: execve a partir de outra thread"
+    Expect $a "mthreads: fim, TUDO OK" "mthreads: threads da musl completas"
+    ExpectNot $a "syscall (?!202 )\d+ desconhecida" "nenhuma syscall desconhecida na sequencia A (futex fica para a 1.7)"
     Expect $a "flag NT ligada dentro do handler\s+ok" "flag NT do usuario nao derruba o iretq do rt_sigreturn"
     Expect $a "Copias de usuario: [1-9]\d* falta\(s\) recuperada\(s\)" "tabela de excecoes recuperou as faltas"
     Expect $a "morto por sinal 2" "Ctrl\+C matou o sleep com SIGINT"

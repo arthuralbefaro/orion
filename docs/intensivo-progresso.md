@@ -16,7 +16,7 @@ ou sinais), 5 vezes seguidas:
 
     .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
 
-Proxima etapa: 1.6.
+Proxima etapa: 1.7.
 
 ## Checklist
 
@@ -34,7 +34,7 @@ Proxima etapa: 1.6.
 | 1.3 | Arquivos no formato do Linux | [x] | 01:51 | 02:13 | (ver diario) |
 | 1.4 | Memoria do jeito Linux (VMAs, mmap) | [x] | 02:13 | 02:51 | (ver diario) |
 | 1.5 | Programas contra a musl com `zig cc` (plano B: musl pelo build.ps1) | [x] | 02:52 | 03:10 | (ver diario) |
-| 1.6 | Threads (clone) | [ ] | | | |
+| 1.6 | Threads (clone) | [x] | 03:10 | 03:50 | (ver diario) |
 | 1.7 | futex | [ ] | | | |
 | 1.8 | Tempo e sinais completos | [ ] | | | |
 | 1.9 | dash, lua, sbase | [ ] | | | |
@@ -330,3 +330,32 @@ flutuante, `malloc` pequeno e grande, `qsort`, `stat`, `opendir`/`readdir`,
 `sched_getaffinity`, agora implementada; a sequencia A ganhou uma verificacao
 de que nenhuma syscall desconhecida aparece. `third_party/LICENSES.md` criado.
 Regressao 149 -> 154.
+
+#### 1.6 Threads (clone) - 03:10 as 03:50 - FEITO
+`clone(CLONE_THREAD)` com TLS, `PARENT_SETTID`, `CHILD_SETTID` e
+`CHILD_CLEARTID`; `gettid` com tid por thread; `exit` encerra a thread e
+`exit_group` (e morte por sinal) encerra todas; mascara de sinais por thread e
+pendentes por processo e por thread; `execve` e `fork` com varias threads;
+`mm_lock` por processo em volta de VMAs e tabelas de paginas, com shootdown de
+TLB quando ha mais de uma thread; tabela de descritores sob o `tlock` e
+arquivos presos durante a syscall (`close` em outra thread nao libera um
+arquivo no meio de um `read`). Espera interrompivel nova (`wait_sleep_intr`)
+fecha a corrida antiga do sinal que chegava entre a verificacao e o sono;
+pipe, terminal, pty e `waitpid` usam ela, e `pause` virou syscall de verdade.
+Programa novo `mthreads` (contra a musl, 13 verificacoes: 8 threads com
+contador atomico e `pthread_mutex`, TLS, `gettid`, `pthread_exit`, sinal,
+`exit` numa thread, `fork` com threads, `exit` e `execve` com thread presa
+num `read`, `execve` a partir de outra thread).
+Uma revisao do diff antes do commit achou 9 problemas, corrigidos: thread que
+saia antes da ultima podia rodar de novo com o processo ja colhido (agora o
+processo conta as structs de thread); `execve` concorrente travava e um
+`execve` que falhava matava as threads; `dup3`, a copia de descritores do
+`fork` e `F_GETFD`/`F_SETFD` sem trava; quadro de sinal numa pilha nova
+falhando com interrupcoes desligadas; sinal de falta indo para outra thread;
+sinal entregue duas vezes; sinal bloqueado depois de escolhido sem outra
+thread acordada; `MAP_FIXED` com falha sem shootdown; escrita no pty sem
+interrupcao. `docs/SYSCALLS.md` tambem recebeu as syscalls da 1.3 e da 1.4
+que tinham ficado de fora da tabela.
+Regressao 154 -> 164, estresse 5x verde.
+Fica para a 1.7: sem `futex` a musl espera girando (a 202 aparece como
+desconhecida e a regressao a tolera so ate la).

@@ -204,7 +204,7 @@ long sys_socket(int domain, int type, int protocol)
 
 static struct socket *sock_from_fd(int fd, struct file **fout)
 {
-    struct file *f = process_fd_get(process_current(), fd);
+    struct file *f = process_fd_pin(fd);
     if (!f || f->ops != &socket_ops)
         return NULL;
     if (fout)

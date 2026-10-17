@@ -58,12 +58,14 @@ struct user_sigaction {
 };
 
 struct process;
+struct thread;
 struct interrupt_frame;
 
 void signal_init_process(struct process *p);
 void signal_reset_on_exec(struct process *p);
 
 int  signal_send(struct process *p, int sig);
+int  signal_send_thread(struct thread *t, int sig);
 bool signal_pending_current(void);
 void signal_check(struct interrupt_frame *f);
 

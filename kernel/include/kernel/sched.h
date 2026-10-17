@@ -6,6 +6,7 @@
 #define THREAD_STACK_SIZE (16 * 1024)
 #define SCHED_TIME_SLICE  10
 #define THREAD_STACK_CANARY 0x4F52494F4E535450ull
+#define THREAD_PINS 40
 
 enum thread_state {
     THREAD_READY,
@@ -16,6 +17,7 @@ enum thread_state {
 };
 
 struct process;
+struct file;
 struct wait_entry;
 
 typedef void (*thread_entry_t)(void *arg);
@@ -41,6 +43,13 @@ struct thread {
     bool     on_runq;
     void    *fpu;
     uint64_t clear_child_tid;
+    uint32_t utid;
+    bool     kill_me;
+    uint64_t sig_blocked;
+    uint64_t sig_pending;
+    struct thread *proc_next;
+    struct file *pins[THREAD_PINS];
+    int      npins;
     struct wait_entry *waits;
 
     struct thread *next;
@@ -52,6 +61,8 @@ void sched_init_ap(void);
 bool sched_enabled(void);
 
 struct thread *thread_create(const char *name, thread_entry_t entry, void *arg);
+struct thread *thread_create_for_process_paused(const char *name, thread_entry_t entry, void *arg,
+                                                struct process *process);
 struct thread *thread_create_for_process(const char *name, thread_entry_t entry, void *arg,
                                          struct process *process);
 struct thread *thread_current(void);

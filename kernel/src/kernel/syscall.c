@@ -43,7 +43,7 @@ static long resolve_at(int dirfd, const char *upath, char *full, size_t size)
             return -ENOENT;
         return process_resolve_path(p, kpath, full, size) ? 0 : -ENAMETOOLONG;
     }
-    struct file *dir = process_fd_get(p, dirfd);
+    struct file *dir = process_fd_pin(dirfd);
     if (!dir)
         return -EBADF;
     if (!dir->path || !dir->has_node || !dir->node.is_dir)
@@ -128,7 +128,7 @@ static long sys_proclist(struct user_procinfo *uout, int max)
 
 static long sys_read(int fd, void *ubuf, size_t len)
 {
-    struct file *f = process_fd_get(process_current(), fd);
+    struct file *f = process_fd_pin(fd);
     if (!f)
         return -EBADF;
     if (!user_range_ok((uint64_t)ubuf, len))
@@ -164,7 +164,7 @@ static long sys_read(int fd, void *ubuf, size_t len)
 
 static long sys_write(int fd, const void *ubuf, size_t len)
 {
-    struct file *f = process_fd_get(process_current(), fd);
+    struct file *f = process_fd_pin(fd);
     if (!f)
         return -EBADF;
     if (!user_range_ok((uint64_t)ubuf, len))
@@ -294,7 +294,7 @@ static long sys_rename(const char *ufrom, const char *uto)
 
 static long sys_ftruncate(int fd, uint64_t size)
 {
-    struct file *f = process_fd_get(process_current(), fd);
+    struct file *f = process_fd_pin(fd);
     if (!f)
         return -EBADF;
     if (!f->has_node)
@@ -366,7 +366,6 @@ static long sys_poll(struct user_pollfd *ufds, uint64_t nfds, int timeout)
     if (copy_from_user(fds, ufds, nfds * sizeof(*fds)) < 0)
         return -EFAULT;
 
-    struct process *p = process_current();
     struct poll_table *pt = kzalloc(sizeof(*pt));
     if (!pt)
         return -ENOMEM;
@@ -380,7 +379,7 @@ static long sys_poll(struct user_pollfd *ufds, uint64_t nfds, int timeout)
             fds[i].revents = 0;
             if (fds[i].fd < 0)
                 continue;
-            struct file *f = process_fd_get(p, fds[i].fd);
+            struct file *f = process_fd_pin(fds[i].fd);
             if (!f) {
                 fds[i].revents = POLLNVAL;
                 ready++;
@@ -425,7 +424,7 @@ static long sys_poll(struct user_pollfd *ufds, uint64_t nfds, int timeout)
 
 static long sys_fcntl(int fd, int cmd, uint64_t arg)
 {
-    struct file *f = process_fd_get(process_current(), fd);
+    struct file *f = process_fd_pin(fd);
     if (!f)
         return -EBADF;
     struct process *p = process_current();
@@ -517,7 +516,7 @@ static long sys_stat(const char *upath, struct user_stat *ust)
 
 static long sys_fstat(int fd, struct user_stat *ust)
 {
-    struct file *f = process_fd_get(process_current(), fd);
+    struct file *f = process_fd_pin(fd);
     if (!f)
         return -EBADF;
     struct user_stat st;
@@ -581,7 +580,7 @@ static uint8_t dirent_type(const struct vfs_node *n, bool in_dev)
 
 static long sys_getdents64(int fd, void *ubuf, uint64_t count)
 {
-    struct file *f = process_fd_get(process_current(), fd);
+    struct file *f = process_fd_pin(fd);
     if (!f)
         return -EBADF;
     if (!f->has_node || !f->node.is_dir)
@@ -622,7 +621,7 @@ static long sys_getdents64(int fd, void *ubuf, uint64_t count)
 
 static long sys_lseek(int fd, int64_t off, int whence)
 {
-    struct file *f = process_fd_get(process_current(), fd);
+    struct file *f = process_fd_pin(fd);
     if (!f)
         return -EBADF;
     if (!f->has_node)
@@ -652,7 +651,7 @@ static uint32_t prot_to_vma(int prot)
     return f;
 }
 
-static long sys_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t off)
+static long do_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t off)
 {
     struct process *p = process_current();
     int type = flags & MAP_TYPE;
@@ -669,7 +668,7 @@ static long sys_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, u
     struct file *f = NULL;
     uint32_t vflags = prot_to_vma(prot) | (type == MAP_SHARED ? VMA_SHARED : 0);
     if (!(flags & MAP_ANONYMOUS)) {
-        f = process_fd_get(p, fd);
+        f = process_fd_pin(fd);
         if (!f)
             return -EBADF;
         if (!f->ops->mmap) {
@@ -731,11 +730,27 @@ static long sys_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, u
     return (long)base;
 }
 
+static long sys_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t off)
+{
+    struct process *p = process_current();
+    mutex_lock(&p->mm_lock);
+    long r = do_mmap(addr, len, prot, flags, fd, off);
+    if (flags & MAP_FIXED)
+        process_mm_tlb_sync(p);
+    mutex_unlock(&p->mm_lock);
+    return r;
+}
+
 static long sys_munmap(uint64_t addr, uint64_t len)
 {
     if (!IS_ALIGNED(addr, PAGE_SIZE) || len == 0 || !user_range_ok(addr, len))
         return -EINVAL;
-    return vma_unmap(process_current(), addr, addr + PAGE_ALIGN_UP(len));
+    struct process *p = process_current();
+    mutex_lock(&p->mm_lock);
+    long r = vma_unmap(p, addr, addr + PAGE_ALIGN_UP(len));
+    process_mm_tlb_sync(p);
+    mutex_unlock(&p->mm_lock);
+    return r;
 }
 
 static long sys_mprotect(uint64_t addr, uint64_t len, int prot)
@@ -746,21 +761,31 @@ static long sys_mprotect(uint64_t addr, uint64_t len, int prot)
         return -EINVAL;
     if (len == 0)
         return 0;
-    return vma_protect(process_current(), addr, addr + PAGE_ALIGN_UP(len), prot_to_vma(prot));
+    struct process *p = process_current();
+    mutex_lock(&p->mm_lock);
+    long r = vma_protect(p, addr, addr + PAGE_ALIGN_UP(len), prot_to_vma(prot));
+    process_mm_tlb_sync(p);
+    mutex_unlock(&p->mm_lock);
+    return r;
 }
 
 static long sys_madvise(uint64_t addr, uint64_t len, int advice)
 {
     if (!IS_ALIGNED(addr, PAGE_SIZE) || !user_range_ok(addr, len))
         return -EINVAL;
-    if (advice == MADV_DONTNEED)
-        return vma_discard(process_current(), addr, addr + PAGE_ALIGN_UP(len));
-    return 0;
+    if (advice != MADV_DONTNEED)
+        return 0;
+    struct process *p = process_current();
+    mutex_lock(&p->mm_lock);
+    long r = vma_discard(p, addr, addr + PAGE_ALIGN_UP(len));
+    process_mm_tlb_sync(p);
+    mutex_unlock(&p->mm_lock);
+    return r;
 }
 
 static long sys_ioctl(int fd, uint64_t request, uint64_t arg)
 {
-    struct file *f = process_fd_get(process_current(), fd);
+    struct file *f = process_fd_pin(fd);
     if (!f)
         return -EBADF;
     return file_ioctl(f, request, arg);
@@ -769,7 +794,7 @@ static long sys_ioctl(int fd, uint64_t request, uint64_t arg)
 static long sys_dup(int oldfd)
 {
     struct process *p = process_current();
-    struct file *f = process_fd_get(p, oldfd);
+    struct file *f = process_fd_pin(oldfd);
     if (!f)
         return -EBADF;
     file_ref(f);
@@ -849,26 +874,27 @@ static long sys_dup3(int oldfd, int newfd, int flags)
     struct process *p = process_current();
     if (flags & ~O_CLOEXEC)
         return -EINVAL;
-    struct file *f = process_fd_get(p, oldfd);
-    if (!f || !process_fd_reserve(p, newfd))
+    struct file *f = process_fd_pin(oldfd);
+    if (!f)
         return -EBADF;
     if (oldfd == newfd)
         return -EINVAL;
     file_ref(f);
-    return process_fd_replace(p, newfd, f, (flags & O_CLOEXEC) != 0);
+    long r = process_fd_replace(p, newfd, f, (flags & O_CLOEXEC) != 0);
+    if (r < 0)
+        file_unref(f);
+    return r;
 }
 
 static long sys_dup2(int oldfd, int newfd)
 {
-    struct process *p = process_current();
     if (oldfd == newfd)
-        return process_fd_get(p, oldfd) ? newfd : -EBADF;
+        return process_fd_pin(oldfd) ? newfd : -EBADF;
     return sys_dup3(oldfd, newfd, 0);
 }
 
-static long sys_brk(uint64_t addr)
+static long do_brk(struct process *p, uint64_t addr)
 {
-    struct process *p = process_current();
     if (addr == 0 || addr < p->brk_start || addr > p->brk_start + USER_HEAP_MAX)
         return (long)p->brk;
     uint64_t old_end = PAGE_ALIGN_UP(p->brk);
@@ -885,9 +911,19 @@ static long sys_brk(uint64_t addr)
         }
     } else if (new_end < old_end) {
         vma_unmap(p, new_end, old_end);
+        process_mm_tlb_sync(p);
     }
     p->brk = addr;
     return (long)addr;
+}
+
+static long sys_brk(uint64_t addr)
+{
+    struct process *p = process_current();
+    mutex_lock(&p->mm_lock);
+    long r = do_brk(p, addr);
+    mutex_unlock(&p->mm_lock);
+    return r;
 }
 
 static long sys_nanosleep(const struct user_timespec *ureq)
@@ -989,7 +1025,7 @@ static long sys_wait4(int pid, int *ustatus, int options)
 
 static long sys_readdir(int fd, struct user_dirent *uout, uint64_t index)
 {
-    struct file *f = process_fd_get(process_current(), fd);
+    struct file *f = process_fd_pin(fd);
     if (!f)
         return -EBADF;
     if (!user_range_ok((uint64_t)uout, sizeof(*uout)))
@@ -1116,6 +1152,17 @@ static long sys_sched_getaffinity(int pid, uint64_t size, void *umask)
     return sizeof(mask);
 }
 
+static long sys_pause(void)
+{
+    static spinlock_t lock = SPINLOCK_INIT;
+    struct waitqueue wq = WAITQUEUE_INIT;
+    uint64_t flags = spin_lock_irqsave(&lock);
+    while (!signal_pending_current())
+        wait_sleep_intr(&wq, &lock, 0);
+    spin_unlock_irqrestore(&lock, flags);
+    return -EINTR;
+}
+
 #define SS_DISABLE 2
 
 struct user_stack_t {
@@ -1173,7 +1220,7 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_GETPID:      ret = process_current()->pid; break;
     case SYS_FORK:        ret = process_fork(f); break;
     case SYS_EXECVE:      ret = sys_execve((const char *)f->rdi, (char *const *)f->rsi, (char *const *)f->rdx, f); break;
-    case SYS_EXIT:        process_exit((int)f->rdi);
+    case SYS_EXIT:        process_exit_thread((int)f->rdi);
     case SYS_WAIT4:       ret = sys_wait4((int)f->rdi, (int *)f->rsi, (int)f->rdx); break;
     case SYS_READDIR:     ret = sys_readdir((int)f->rdi, (struct user_dirent *)f->rsi, f->rdx); break;
     case SYS_OPENPTY:     ret = sys_openpty((int *)f->rdi); break;
@@ -1202,8 +1249,11 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_GETGID:
     case SYS_GETEUID:
     case SYS_GETEGID:     ret = 0; break;
-    case SYS_GETTID:      ret = process_current()->pid; break;
-    case SYS_SET_TID_ADDRESS: thread_current()->clear_child_tid = f->rdi; ret = process_current()->pid; break;
+    case SYS_GETTID:      ret = thread_current()->utid; break;
+    case SYS_SET_TID_ADDRESS: thread_current()->clear_child_tid = f->rdi; ret = thread_current()->utid; break;
+    case SYS_CLONE:       ret = process_clone(f, f->rdi, f->rsi, f->rdx, f->r10, f->r8); break;
+    case SYS_VFORK:       ret = process_fork(f); break;
+    case SYS_PAUSE:       ret = sys_pause(); break;
     case SYS_EXIT_GROUP:  process_exit((int)f->rdi);
     case SYS_SCHED_GETAFFINITY: ret = sys_sched_getaffinity((int)f->rdi, f->rsi, (void *)f->rdx); break;
     case SYS_SIGALTSTACK: ret = sys_sigaltstack((const struct user_stack_t *)f->rdi, (struct user_stack_t *)f->rsi); break;
@@ -1234,6 +1284,7 @@ bool syscall_dispatch(struct interrupt_frame *f)
         break;
     }
     f->rax = (uint64_t)ret;
+    process_unpin_all();
     signal_check(f);
     return full_restore;
 }

@@ -90,7 +90,7 @@ static void free_thread(struct thread *z)
 {
     if (!z)
         return;
-    if (z->process)
+    if (z->process && __atomic_sub_fetch(&z->process->thread_refs, 1, __ATOMIC_ACQ_REL) == 0)
         process_thread_reaped(z->process);
     kfree(z->stack);
     kfree(z->fpu);
@@ -113,8 +113,8 @@ static struct thread *thread_alloc(const char *name)
     return t;
 }
 
-struct thread *thread_create_for_process(const char *name, thread_entry_t entry, void *arg,
-                                         struct process *process)
+static struct thread *thread_create_common(const char *name, thread_entry_t entry, void *arg,
+                                           struct process *process, bool start)
 {
     struct thread *t = thread_alloc(name);
     if (!t)
@@ -155,10 +155,26 @@ struct thread *thread_create_for_process(const char *name, thread_entry_t entry,
         fpu_init_state(t->fpu);
 
     uint64_t flags = spin_lock_irqsave(&runq_lock);
-    t->state = THREAD_READY;
-    ready_enqueue(t);
+    if (start) {
+        t->state = THREAD_READY;
+        ready_enqueue(t);
+    } else {
+        t->state = THREAD_BLOCKED;
+    }
     spin_unlock_irqrestore(&runq_lock, flags);
     return t;
+}
+
+struct thread *thread_create_for_process(const char *name, thread_entry_t entry, void *arg,
+                                         struct process *process)
+{
+    return thread_create_common(name, entry, arg, process, true);
+}
+
+struct thread *thread_create_for_process_paused(const char *name, thread_entry_t entry, void *arg,
+                                                struct process *process)
+{
+    return thread_create_common(name, entry, arg, process, false);
 }
 
 struct thread *thread_create(const char *name, thread_entry_t entry, void *arg)

@@ -15,14 +15,16 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 |---|---|---|---|
 | 0 | read | completa | buffer intermediario no kernel; arquivos regulares em pedacos de ate 64 KiB |
 | 1 | write | completa | idem |
-| 2 | open | parcial | `O_CREAT`, `O_TRUNC`, `O_APPEND`, `O_NONBLOCK`; sem modo de permissao |
+| 2 | open | parcial | `O_CREAT`, `O_EXCL`, `O_TRUNC`, `O_APPEND`, `O_NONBLOCK`, `O_DIRECTORY`, `O_CLOEXEC`; sem modo de permissao |
 | 3 | close | completa | |
-| 4 | stat | parcial | `struct stat` ainda no formato proprio (o do Linux chega na 1.3) |
-| 5 | fstat | parcial | idem |
+| 4 | stat | completa | `struct stat` do Linux (144 bytes); datas sao a hora do boot ate a 2.1 |
+| 5 | fstat | completa | idem |
+| 6 | lstat | completa | igual ao `stat` (ainda nao ha links simbolicos) |
 | 7 | poll | completa | ate 32 descritores; `EINTR` com sinal |
 | 8 | lseek | completa | `SEEK_SET`, `SEEK_CUR`, `SEEK_END` |
-| 9 | mmap | parcial | anonimo e de dispositivo (`/dev/fb0`); sem `MAP_FIXED` nem arquivo (1.4) |
-| 11 | munmap | parcial | so na faixa do `mmap` |
+| 9 | mmap | parcial | anonimo, `MAP_FIXED`, arquivo `MAP_PRIVATE`, `MAP_SHARED` anonimo e de arquivo so leitura, dispositivo (`/dev/fb0`); `MAP_SHARED` de arquivo com escrita da `ENODEV` (2.4) |
+| 10 | mprotect | completa | divide areas; `PROT_NONE` preserva paginas populadas |
+| 11 | munmap | completa | qualquer faixa alinhada; shootdown de TLB com varias threads |
 | 12 | brk | completa | ate 64 MiB |
 | 13 | rt_sigaction | completa | `sa_restorer` obrigatorio; `SA_RESTART` aceito e ignorado; `sigsetsize` = 8 |
 | 14 | rt_sigprocmask | completa | mascara no formato Linux (bit `sig-1`), 64 sinais; `sigsetsize` = 8 |
@@ -30,10 +32,13 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 16 | ioctl | parcial | `TCGETS`, `TCSETS`/`W`/`F`, `TIOCGWINSZ`, `TIOCSWINSZ`, `TIOCGPGRP`, `TIOCSPGRP`, `TIOCINQ`, framebuffer, input e rede |
 | 19 | readv | completa | ate 1024 pedacos |
 | 20 | writev | completa | ate 1024 pedacos |
+| 21 | access | parcial | so confere a existencia (permissoes na 4.1) |
 | 22 | pipe | completa | |
 | 24 | sched_yield | completa | |
+| 28 | madvise | parcial | `MADV_DONTNEED` descarta paginas privadas; as outras dicas sao aceitas sem efeito |
 | 32 | dup | completa | |
 | 33 | dup2 | completa | ate o `RLIMIT_NOFILE` |
+| 34 | pause | completa | dorme ate chegar um sinal nao bloqueado e devolve `EINTR` |
 | 35 | nanosleep | parcial | resolucao de 1 ms; nao devolve o tempo restante |
 | 37 | alarm | completa | |
 | 39 | getpid | completa | |
@@ -42,13 +47,15 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 44 | sendto | parcial | so UDP e ICMP |
 | 45 | recvfrom | parcial | idem |
 | 49 | bind | parcial | idem |
+| 56 | clone | parcial | `CLONE_THREAD` (com `CLONE_VM` e `CLONE_SIGHAND`), `CLONE_SETTLS`, `CLONE_PARENT_SETTID`, `CLONE_CHILD_SETTID`, `CLONE_CHILD_CLEARTID`; sem `CLONE_THREAD` e um fork com pilha opcional (sem `CLONE_VM` de verdade) |
 | 57 | fork | completa | copy-on-write; respeita `RLIMIT_NPROC` |
+| 58 | vfork | parcial | igual ao `fork` (copy-on-write) |
 | 59 | execve | completa | pilha inicial do Linux com `auxv` (1.1); so `ET_EXEC` |
-| 60 | exit | completa | |
+| 60 | exit | completa | encerra so a thread; a ultima encerra o processo |
 | 61 | wait4 | parcial | `WNOHANG`; sem `rusage` |
 | 62 | kill | completa | pid, grupo (`-pgid`) e 0 |
 | 63 | uname | completa | |
-| 72 | fcntl | parcial | `F_GETFL`/`F_SETFL` (`O_NONBLOCK`); o resto chega na 1.3 |
+| 72 | fcntl | parcial | `F_GETFL`/`F_SETFL` (`O_NONBLOCK`), `F_DUPFD`, `F_DUPFD_CLOEXEC`, `F_GETFD`, `F_SETFD`; sem travas de arquivo |
 | 74 | fsync | parcial | descarrega tudo (`sync`) |
 | 77 | ftruncate | completa | |
 | 79 | getcwd | completa | |
@@ -57,6 +64,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 83 | mkdir | parcial | sem modo de permissao |
 | 84 | rmdir | completa | |
 | 87 | unlink | completa | |
+| 89 | readlink | parcial | sem links simbolicos: `EINVAL` para o que existe, `ENOENT` para o que nao existe |
 | 97 | getrlimit | completa | `RLIMIT_NOFILE`, `RLIMIT_NPROC`, `RLIMIT_STACK`; os outros sao infinitos |
 | 102 | getuid | stub | sempre 0 ate a 4.1 (plano: "todos 0 por enquanto") |
 | 104 | getgid | stub | idem |
@@ -69,13 +77,23 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 158 | arch_prctl | parcial | `ARCH_SET_FS` e `ARCH_GET_FS` |
 | 160 | setrlimit | completa | subir o maximo da `EPERM` |
 | 162 | sync | completa | |
-| 186 | gettid | parcial | igual ao pid enquanto cada processo tem uma thread so (1.6) |
+| 186 | gettid | completa | tid de cada thread; a principal tem o pid |
 | 204 | sched_getaffinity | completa | mascara com todas as CPUs online (a musl usa para contar CPUs) |
-| 218 | set_tid_address | parcial | guarda o endereco e zera a palavra na saida; o `futex` wake chega na 1.7 |
+| 217 | getdents64 | completa | `d_type` preenchido; `lseek(fd, 0, SEEK_SET)` recomeca |
+| 218 | set_tid_address | parcial | guarda o endereco e zera a palavra na saida da thread; o `futex` wake chega na 1.7 |
 | 228 | clock_gettime | parcial | `CLOCK_REALTIME` e `CLOCK_MONOTONIC` (o resto na 1.8) |
-| 231 | exit_group | completa | igual ao `exit` enquanto ha uma thread por processo |
+| 231 | exit_group | completa | encerra todas as threads do processo |
+| 257 | openat | completa | `AT_FDCWD` ou descritor de diretorio |
+| 258 | mkdirat | parcial | idem; sem modo de permissao |
+| 262 | newfstatat | completa | `AT_EMPTY_PATH` e `AT_SYMLINK_NOFOLLOW` aceitos |
+| 263 | unlinkat | completa | `AT_REMOVEDIR` |
+| 264 | renameat | completa | |
+| 267 | readlinkat | parcial | como o `readlink` |
+| 269 | faccessat | parcial | como o `access` |
+| 292 | dup3 | completa | `O_CLOEXEC` |
+| 293 | pipe2 | completa | `O_CLOEXEC`, `O_NONBLOCK` |
 | 302 | prlimit64 | parcial | so para o proprio processo |
-| 1000 | readdir | propria | uma entrada por chamada (o `getdents64` chega na 1.3) |
+| 1000 | readdir | propria | uma entrada por chamada; a libc usa o `getdents64` |
 | 1001 | openpty | propria | |
 | 1002 | sysinfo | propria | sai na 2.3 (`/proc`) |
 | 1003 | proclist | propria | sai na 2.3 (`/proc`) |

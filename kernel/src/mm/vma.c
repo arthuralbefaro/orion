@@ -9,6 +9,7 @@
 #include <lib/string.h>
 #include <fs/vfs.h>
 #include <arch/x86_64/cpu.h>
+#include <kernel/mutex.h>
 
 uint64_t vma_pte_flags(uint32_t flags)
 {
@@ -268,7 +269,20 @@ void vma_release_all(struct process *p)
     }
 }
 
+static bool fault_locked(struct process *p, uint64_t addr, uint64_t err);
+
 bool vma_fault(struct process *p, uint64_t addr, uint64_t err)
+{
+    if (interrupts_enabled())
+        mutex_lock(&p->mm_lock);
+    else if (!mutex_trylock(&p->mm_lock))
+        return false;
+    bool ok = fault_locked(p, addr, err);
+    mutex_unlock(&p->mm_lock);
+    return ok;
+}
+
+static bool fault_locked(struct process *p, uint64_t addr, uint64_t err)
 {
     struct vma *v = vma_find(p, addr);
     if (!v || !vma_accessible(v->flags) || (v->flags & VMA_NOFREE))
@@ -283,8 +297,16 @@ bool vma_fault(struct process *p, uint64_t addr, uint64_t err)
 
     uint64_t page = PAGE_ALIGN_DOWN(addr);
     uint64_t pte = vmm_get_pte_in(p->pml4_phys, page);
-    if (present)
-        return write && (pte & PTE_COW) && vmm_cow_fault(p->pml4_phys, page);
+    if ((pte & PTE_PRESENT) && (!write || (pte & PTE_WRITABLE)) && (!fetch || !(pte & PTE_NX))) {
+        invlpg(page);
+        return true;
+    }
+    if (present) {
+        if (!write || !(pte & PTE_COW) || !vmm_cow_fault(p->pml4_phys, page))
+            return false;
+        process_mm_tlb_sync(p);
+        return true;
+    }
     if (pte & PTE_PROTNONE)
         return false;
     if ((v->flags & VMA_FILE) && !interrupts_enabled())

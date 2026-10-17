@@ -51,7 +51,7 @@ void wait_unlink(struct thread *t)
         entry_detach(t->waits);
 }
 
-bool wait_sleep_timeout(struct waitqueue *wq, spinlock_t *lock, uint64_t ms)
+static bool sleep_on(struct waitqueue *wq, spinlock_t *lock, uint64_t ms, bool interruptible)
 {
     struct wait_entry e;
     uint64_t flags = irq_save();
@@ -60,7 +60,10 @@ bool wait_sleep_timeout(struct waitqueue *wq, spinlock_t *lock, uint64_t ms)
     entry_attach(&e, wq, thread_current());
     if (lock)
         spin_unlock(lock);
-    sched_block_switch(ms ? sched_deadline(ms) : 0);
+    if (interruptible && signal_pending_current())
+        sched_runq_unlock();
+    else
+        sched_block_switch(ms ? sched_deadline(ms) : 0);
 
     sched_runq_lock();
     bool woken = e.woken;
@@ -73,9 +76,19 @@ bool wait_sleep_timeout(struct waitqueue *wq, spinlock_t *lock, uint64_t ms)
     return woken;
 }
 
+bool wait_sleep_timeout(struct waitqueue *wq, spinlock_t *lock, uint64_t ms)
+{
+    return sleep_on(wq, lock, ms, false);
+}
+
 bool wait_sleep(struct waitqueue *wq, spinlock_t *lock)
 {
-    return wait_sleep_timeout(wq, lock, 0);
+    return sleep_on(wq, lock, 0, false);
+}
+
+bool wait_sleep_intr(struct waitqueue *wq, spinlock_t *lock, uint64_t ms)
+{
+    return sleep_on(wq, lock, ms, true);
 }
 
 void wake_up_all_locked(struct waitqueue *wq)

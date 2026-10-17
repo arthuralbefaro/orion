@@ -263,7 +263,7 @@ static int64_t pipe_read(struct file *f, void *buf, uint64_t len)
             n = (uint64_t)-EAGAIN;
             break;
         }
-        wait_sleep(&p->rq, &p->lock);
+        wait_sleep_intr(&p->rq, &p->lock, 0);
         if (signal_pending_current() && !n) {
             n = (uint64_t)-EINTR;
             break;
@@ -284,7 +284,7 @@ static int64_t pipe_write(struct file *f, const void *buf, uint64_t len)
         if (p->readers == 0) {
             ret = n ? (int64_t)n : -EPIPE;
             if (!n)
-                signal_send(process_current(), SIGPIPE);
+                signal_send_thread(thread_current(), SIGPIPE);
             break;
         }
         uint64_t before = n;
@@ -302,7 +302,7 @@ static int64_t pipe_write(struct file *f, const void *buf, uint64_t len)
             ret = n ? (int64_t)n : -EAGAIN;
             break;
         }
-        wait_sleep(&p->wq, &p->lock);
+        wait_sleep_intr(&p->wq, &p->lock, 0);
         if (signal_pending_current()) {
             ret = n ? (int64_t)n : -EINTR;
             break;

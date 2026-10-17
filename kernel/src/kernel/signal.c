@@ -53,7 +53,6 @@ static bool default_ignores(int sig)
 void signal_init_process(struct process *p)
 {
     p->sig_pending = 0;
-    p->sig_blocked = 0;
     p->alarm_at = 0;
     memset(p->sig_handlers, 0, SIG_TABLE_SIZE);
 }
@@ -68,51 +67,88 @@ void signal_reset_on_exec(struct process *p)
     }
 }
 
+static bool ignored(struct process *p, int sig)
+{
+    if (sig == SIGKILL)
+        return false;
+    uint64_t action = SIGACT(p, sig)->sa_handler;
+    return action == SIG_IGN || (action == SIG_DFL && default_ignores(sig));
+}
+
+static void wake_thread(struct thread *t)
+{
+    uint64_t flags = irq_save();
+    sched_runq_lock();
+    wait_unlink(t);
+    sched_make_ready(t);
+    sched_runq_unlock();
+    irq_restore(flags);
+}
+
+static void wake_receiver(struct process *p, int sig)
+{
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    struct thread *target = NULL;
+    struct thread *me = thread_current();
+    for (struct thread *t = p->threads; t; t = t->proc_next) {
+        if (t->sig_blocked & SIGMASK(sig))
+            continue;
+        if (!target || t == me)
+            target = t;
+    }
+    if (!target)
+        target = p->threads;
+    if (target)
+        wake_thread(target);
+    spin_unlock_irqrestore(&p->tlock, flags);
+}
+
 int signal_send(struct process *p, int sig)
 {
     if (sig <= 0 || sig >= NSIG)
         return -EINVAL;
-    if (p->state == PROC_ZOMBIE)
+    if (p->state == PROC_ZOMBIE || ignored(p, sig))
         return 0;
 
-    uint64_t action = SIGACT(p, sig)->sa_handler;
-    if (sig != SIGKILL) {
-        if (action == SIG_IGN)
-            return 0;
-        if (action == SIG_DFL && default_ignores(sig))
-            return 0;
-    }
-
-    uint64_t flags = irq_save();
     __atomic_fetch_or(&p->sig_pending, SIGMASK(sig), __ATOMIC_SEQ_CST);
-    struct thread *t = p->thread;
-    if (t) {
-        sched_runq_lock();
-        wait_unlink(t);
-        sched_make_ready(t);
-        sched_runq_unlock();
-    }
-    irq_restore(flags);
+    wake_receiver(p, sig);
+    return 0;
+}
+
+int signal_send_thread(struct thread *t, int sig)
+{
+    struct process *p = t->process;
+    if (sig <= 0 || sig >= NSIG)
+        return -EINVAL;
+    if (!p || p->state == PROC_ZOMBIE || ignored(p, sig))
+        return 0;
+    __atomic_fetch_or(&t->sig_pending, SIGMASK(sig), __ATOMIC_SEQ_CST);
+    wake_thread(t);
     return 0;
 }
 
 bool signal_pending_current(void)
 {
-    struct process *p = process_current();
+    struct thread *t = thread_current();
+    struct process *p = t ? t->process : NULL;
     if (!p)
         return false;
-    return (p->sig_pending & ~p->sig_blocked) != 0;
+    if (t->kill_me)
+        return true;
+    return ((p->sig_pending | t->sig_pending) & ~t->sig_blocked) != 0;
 }
 
-static int next_pending(struct process *p)
+static int next_pending(struct process *p, struct thread *t)
 {
-    uint64_t ready = p->sig_pending & ~p->sig_blocked;
-    if (ready & SIGMASK(SIGKILL))
-        return SIGKILL;
-    for (int i = 1; i < NSIG; i++)
-        if (ready & SIGMASK(i))
-            return i;
-    return 0;
+    for (;;) {
+        uint64_t ready = (t->sig_pending | p->sig_pending) & ~t->sig_blocked;
+        if (!ready)
+            return 0;
+        int sig = (ready & SIGMASK(SIGKILL)) ? SIGKILL : __builtin_ctzll(ready) + 1;
+        uint64_t *set = (t->sig_pending & SIGMASK(sig)) ? &t->sig_pending : &p->sig_pending;
+        if (__atomic_fetch_and(set, ~SIGMASK(sig), __ATOMIC_SEQ_CST) & SIGMASK(sig))
+            return sig;
+    }
 }
 
 #define USER_RFLAGS_MASK 0xCD5ull
@@ -136,33 +172,29 @@ static bool push_sigframe(struct process *p, struct interrupt_frame *f, int sig)
     struct sigframe sf;
     sf.restorer = sa->sa_restorer;
     sf.magic = SIGFRAME_MAGIC;
-    sf.mask = p->sig_blocked;
+    struct thread *self = thread_current();
+    sf.mask = self->sig_blocked;
     sf.ctx = *f;
     fpu_save(sf.fpu);
     if (copy_to_user((void *)sp, &sf, sizeof(sf)) < 0)
         return false;
 
-    p->sig_blocked |= sa->sa_mask | SIGMASK(sig);
-    p->sig_blocked &= ~SIG_UNBLOCKABLE;
+    self->sig_blocked |= sa->sa_mask | SIGMASK(sig);
+    self->sig_blocked &= ~SIG_UNBLOCKABLE;
     f->rsp = sp;
     f->rip = sa->sa_handler;
     f->rdi = (uint64_t)sig;
     return true;
 }
 
-void signal_check(struct interrupt_frame *f)
+static void deliver(struct process *p, struct thread *self, struct interrupt_frame *f)
 {
-    if ((f->cs & 3) != 3)
-        return;
-    struct process *p = process_current();
-    if (!p)
-        return;
-
     for (;;) {
-        int sig = next_pending(p);
+        if (self->kill_me || p->group_exit)
+            process_thread_leave();
+        int sig = next_pending(p, self);
         if (!sig)
             return;
-        __atomic_fetch_and(&p->sig_pending, ~SIGMASK(sig), __ATOMIC_SEQ_CST);
 
         uint64_t action = SIGACT(p, sig)->sa_handler;
         if (sig == SIGKILL)
@@ -184,6 +216,24 @@ void signal_check(struct interrupt_frame *f)
     }
 }
 
+void signal_check(struct interrupt_frame *f)
+{
+    if ((f->cs & 3) != 3)
+        return;
+    struct process *p = process_current();
+    if (!p)
+        return;
+    struct thread *self = thread_current();
+    if (!self->kill_me && !p->group_exit && !((p->sig_pending | self->sig_pending) & ~self->sig_blocked))
+        return;
+    bool was_on = interrupts_enabled();
+    if (!was_on)
+        sti();
+    deliver(p, self, f);
+    if (!was_on)
+        cli();
+}
+
 long signal_sigaction(int sig, const struct user_sigaction *act, struct user_sigaction *old)
 {
     if (sig <= 0 || sig >= NSIG || sig == SIGKILL || sig == SIGSTOP)
@@ -201,17 +251,24 @@ long signal_sigaction(int sig, const struct user_sigaction *act, struct user_sig
 
 long signal_procmask(int how, const uint64_t *set, uint64_t *old)
 {
-    struct process *p = process_current();
+    struct thread *self = thread_current();
     if (old)
-        *old = p->sig_blocked;
+        *old = self->sig_blocked;
     if (!set)
         return 0;
     uint64_t v = *set & ~SIG_UNBLOCKABLE;
+    uint64_t before = self->sig_blocked;
     switch (how) {
-    case SIG_BLOCK:   p->sig_blocked |= v; break;
-    case SIG_UNBLOCK: p->sig_blocked &= ~v; break;
-    case SIG_SETMASK: p->sig_blocked = v; break;
+    case SIG_BLOCK:   self->sig_blocked |= v; break;
+    case SIG_UNBLOCK: self->sig_blocked &= ~v; break;
+    case SIG_SETMASK: self->sig_blocked = v; break;
     default: return -EINVAL;
+    }
+    struct process *p = self->process;
+    uint64_t moved = p ? __atomic_load_n(&p->sig_pending, __ATOMIC_SEQ_CST) & self->sig_blocked & ~before : 0;
+    while (moved) {
+        wake_receiver(p, __builtin_ctzll(moved) + 1);
+        moved &= moved - 1;
     }
     return 0;
 }
@@ -228,7 +285,7 @@ long signal_sigreturn(struct interrupt_frame *f)
     }
 
     struct interrupt_frame saved = sf.ctx;
-    p->sig_blocked = sf.mask & ~SIG_UNBLOCKABLE;
+    thread_current()->sig_blocked = sf.mask & ~SIG_UNBLOCKABLE;
     fpu_sanitize(sf.fpu);
     fpu_restore(sf.fpu);
 
