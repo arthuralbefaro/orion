@@ -28,6 +28,7 @@
 #include <mm/heap.h>
 #include <mm/memory.h>
 #include <mm/uaccess.h>
+#include <kernel/mutex.h>
 #include <lib/string.h>
 
 #define LINE_MAX 128
@@ -106,6 +107,12 @@ static void cmd_heap(const char *args)
 {
     (void)args;
     heap_dump();
+}
+
+static void cmd_mutex(const char *args)
+{
+    (void)args;
+    mutex_dump();
 }
 
 static void cmd_heaptest(const char *args)
@@ -562,6 +569,7 @@ static const struct command commands[] = {
     { "alloc",  "testa o alocador de paginas",          cmd_alloc },
     { "heap",   "estatisticas do kmalloc",              cmd_heap },
     { "heaptest", "auto-teste do kmalloc/kfree",        cmd_heaptest },
+    { "mutex",  "mutexes: aquisicoes, contencao, espera", cmd_mutex },
     { "cpu",    "informacoes da CPU",                   cmd_cpu },
     { "uptime", "tempo desde o boot",                   cmd_uptime },
     { "irq",    "contadores de interrupcao",            cmd_irq },

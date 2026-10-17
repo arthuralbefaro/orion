@@ -229,7 +229,7 @@ if ($runAll -or $OnlyC) {
         "key:13", "wait:3", "key:18", "wait:4",
         "cmd:cat /mnt/nota.txt", "wait:2", "cmd:rm /mnt/nota.txt",
         "cmd:sync", "cmd:ls /mnt", "wait:1",
-        "key:0B", "cmd:mem", "cmd:lsblk"
+        "key:0B", "cmd:mem", "cmd:lsblk", "cmd:mutex"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -NoBuild -Disk -LogPath "out\reg-c.log" `
         -Script $stepsC -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
@@ -250,6 +250,8 @@ if ($runAll -or $OnlyC) {
     Expect $c "/mnt/nota\.txt salvo \(2 linha\(s\)\)" "edit salvou com Ctrl\+S"
     Expect $c "edit: pronto" "edit saiu com Ctrl\+X"
     Expect $c "(?s)cat /mnt/nota\.txt.{0,40}?linha um\s+linha dois" "cat mostra o que o edit gravou"
+    Expect $c "mutex\s+pegou\s+contencao\s+espera ms\s+max ms\s+dono" "comando mutex mostra a tabela de contencao"
+    Expect $c "\n\s+ahci0\s+[1-9]\d*\s+\d+\s+\d+\s+\d+\s+-" "AHCI usa mutex (pego e livre no fim)"
     Test-MemDelta $c "memoria estavel na sequencia C" 24
 }
 

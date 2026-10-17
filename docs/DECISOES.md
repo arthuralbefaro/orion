@@ -432,3 +432,25 @@ Uma linha por decisao, na ordem em que foram tomadas.
 - `poll_table_sleep` nao dorme se houver sinal pendente. Um `signal_send` no
   meio do registro das filas desfazia as entradas sem acordar a thread, que
   depois dormia sem estar em fila nenhuma.
+
+## v1.9.2 (mutex que dorme)
+
+- `struct mutex` (`kernel/mutex.{h,c}`): dono, fila de espera e um spinlock
+  interno que so protege o proprio mutex. Quem encontra o mutex ocupado dorme
+  na fila (`wait_sleep_timeout`) em vez de girar; quem solta acorda um.
+- O mutex guarda estatisticas (aquisicoes, quantas encontraram o mutex ocupado,
+  tempo total e maximo de espera) e se registra numa lista global na primeira
+  vez que e usado. O comando `mutex` do shell do kernel mostra a tabela.
+- Pegar de novo um mutex que a propria thread segura vira panico na hora, com
+  o endereco de onde ele foi pego. Esperar mais de 5 s imprime um aviso com o
+  dono, a cada 5 s, em vez de travar em silencio.
+- Antes do escalonador existir o dono e uma marca especial (`boot`); disputa
+  nessa fase e panico, porque nao ha como dormir.
+- Disputa com interrupcoes desligadas tambem e panico: dormir com interrupcoes
+  desligadas significa que quem chamou segura um spinlock, e a outra thread
+  nunca conseguiria avancar. Ate a 0.4 o AHCI e chamado de dentro da trava do
+  cache de blocos (spinlock com interrupcoes desligadas), entao o mutex do AHCI
+  nunca e disputado; a 0.4 troca essa trava por mutex.
+- Cada porta AHCI tem o seu mutex (`ahci0`, `ahci1`...). A espera pelo fim do
+  comando cede a CPU (`thread_yield`) quando as interrupcoes estao ligadas, em
+  vez de girar com `pause`.

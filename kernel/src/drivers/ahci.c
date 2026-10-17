@@ -4,10 +4,13 @@
 #include <kernel/log.h>
 #include <kernel/time.h>
 #include <kernel/spinlock.h>
+#include <kernel/mutex.h>
+#include <kernel/sched.h>
 #include <mm/vmm.h>
 #include <mm/pmm.h>
 #include <mm/memory.h>
 #include <lib/string.h>
+#include <lib/printf.h>
 
 #define HBA_CAP   0x00
 #define HBA_GHC   0x04
@@ -82,7 +85,8 @@ struct ahci_port {
     uint8_t *dma_buf;
     uint64_t sectors;
     char model[41];
-    spinlock_t lock;
+    char lock_name[12];
+    struct mutex lock;
 };
 
 static volatile uint8_t *abar;
@@ -168,7 +172,10 @@ static bool port_command(struct ahci_port *p, uint8_t ata_cmd, uint64_t lba, uin
             return false;
         if (time_now_us() > end)
             return false;
-        pause();
+        if (interrupts_enabled() && sched_enabled())
+            thread_yield();
+        else
+            pause();
     }
     bool ok = !(rd(p->regs, PX_TFD) & TFD_ERR);
     wr(p->regs, PX_IS, 0xFFFFFFFF);
@@ -180,11 +187,11 @@ static bool ahci_read(struct blockdev *dev, uint64_t lba, uint32_t count, void *
 {
     struct ahci_port *p = dev->priv;
     uint8_t *out = buf;
-    spin_lock(&p->lock);
+    mutex_lock(&p->lock);
     while (count) {
         uint32_t n = count > MAX_SECTORS_PER_CMD ? MAX_SECTORS_PER_CMD : count;
         if (!port_command(p, ATA_READ_DMA_EXT, lba, (uint16_t)n, n * 512, false)) {
-            spin_unlock(&p->lock);
+            mutex_unlock(&p->lock);
             log_error("ahci", "porta %u: erro lendo LBA %lu", p->index, lba);
             return false;
         }
@@ -193,7 +200,7 @@ static bool ahci_read(struct blockdev *dev, uint64_t lba, uint32_t count, void *
         lba += n;
         count -= n;
     }
-    spin_unlock(&p->lock);
+    mutex_unlock(&p->lock);
     return true;
 }
 
@@ -201,12 +208,12 @@ static bool ahci_write(struct blockdev *dev, uint64_t lba, uint32_t count, const
 {
     struct ahci_port *p = dev->priv;
     const uint8_t *in = buf;
-    spin_lock(&p->lock);
+    mutex_lock(&p->lock);
     while (count) {
         uint32_t n = count > MAX_SECTORS_PER_CMD ? MAX_SECTORS_PER_CMD : count;
         memcpy(p->dma_buf, in, n * 512);
         if (!port_command(p, ATA_WRITE_DMA_EXT, lba, (uint16_t)n, n * 512, true)) {
-            spin_unlock(&p->lock);
+            mutex_unlock(&p->lock);
             log_error("ahci", "porta %u: erro escrevendo LBA %lu", p->index, lba);
             return false;
         }
@@ -215,7 +222,7 @@ static bool ahci_write(struct blockdev *dev, uint64_t lba, uint32_t count, const
         count -= n;
     }
     port_command(p, ATA_FLUSH_CACHE_EXT, 0, 0, 512, false);
-    spin_unlock(&p->lock);
+    mutex_unlock(&p->lock);
     return true;
 }
 
@@ -246,7 +253,8 @@ static void port_init(uint32_t index)
     struct ahci_port *p = &ports[port_count];
     p->index = index;
     p->regs = abar + HBA_PORTS + index * PORT_SIZE;
-    spinlock_init(&p->lock);
+    ksnprintf(p->lock_name, sizeof(p->lock_name), "ahci%u", index);
+    mutex_init(&p->lock, p->lock_name);
 
     port_stop(p);
 

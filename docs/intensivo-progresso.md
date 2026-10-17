@@ -16,15 +16,15 @@ ou sinais), 5 vezes seguidas:
 
     .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
 
-Proxima etapa: 0.1.
+Proxima etapa: 0.3.
 
 ## Checklist
 
 | # | Etapa | Estado | Inicio | Fim | Commit |
 | --- | --- | --- | --- | --- | --- |
 | 0.1 | Commit da v1.9 e dos programas novos | [x] | 19:22 | 20:20 | `58bb747` |
-| 0.2 | Copia segura de memoria de usuario | [~] | 20:22 | | |
-| 0.3 | Mutex que dorme, AHCI | [ ] | | | |
+| 0.2 | Copia segura de memoria de usuario | [x] | 20:22 | 22:20 | `8b3d171` |
+| 0.3 | Mutex que dorme, AHCI | [~] | 22:25 | | |
 | 0.4 | FAT e cache de blocos com mutex | [ ] | | | |
 | 0.5 | Harness em Python e CI | [ ] | | | |
 | 0.6 | Shell: `&`, jobs, fg, wait, `VAR=x cmd`, `&&`, `\|\|`, `;` | [ ] | | | |
@@ -33,7 +33,7 @@ Proxima etapa: 0.1.
 | 1.2 | Syscalls de partida da musl | [ ] | | | |
 | 1.3 | Arquivos no formato do Linux | [ ] | | | |
 | 1.4 | Memoria do jeito Linux (VMAs, mmap) | [ ] | | | |
-| 1.5 | Construir a musl | [ ] | | | |
+| 1.5 | Programas contra a musl com `zig cc` (plano B: musl pelo build.ps1) | [ ] | | | |
 | 1.6 | Threads (clone) | [ ] | | | |
 | 1.7 | futex | [ ] | | | |
 | 1.8 | Tempo e sinais completos | [ ] | | | |
@@ -45,7 +45,7 @@ Proxima etapa: 0.1.
 | 2.2 | tmpfs | [ ] | | | |
 | 2.3 | procfs | [ ] | | | |
 | 2.4 | Cache de paginas unificado | [ ] | | | |
-| 2.5 | ext2 leitura | [ ] | | | |
+| 2.5 | ext2 leitura, piloto em Rust | [ ] | | | |
 | 2.6 | ext2 escrita, mkfs.ext2, fsck | [ ] | | | |
 | 2.7 | Links simbolicos, chmod, chown, utime | [ ] | | | |
 | 2.8 | GPT e raiz em ext2 | [ ] | | | |
@@ -87,6 +87,7 @@ Proxima etapa: 0.1.
 | 8.4 | OOM | [ ] | | | |
 | 8.5 | Perfilador | [ ] | | | |
 | 8.6 | Pilhas do kernel medidas | [ ] | | | |
+| 8.7 | memcpy/memset/memmove do kernel em assembly (rep movsb/stosb) | [ ] | | | |
 
 ## Diario
 
@@ -121,7 +122,7 @@ outros escrevem no pipe); o criterio usado e a linha visivel com
 `0 falha(s) ok`, o eco de um marcador depois do pipeline e nenhum
 `PANIC`/`EXCECAO`/`deadlock` no log.
 
-#### 0.2 Copia segura de memoria de usuario - 20:22 as 22:20 - FEITO
+#### 0.2 Copia segura de memoria de usuario - 20:22 as 22:20 - commit 8b3d171 - FEITO
 `copy_from_user`, `copy_to_user` e `strncpy_from_user` com tabela de excecoes
 (`.ex_table` no `linker.ld`, `arch/x86_64/uaccess.S`, `mm/uaccess.c`); o
 handler de `#PF`/`#GP` em ring 0 desvia para a retomada. Todas as syscalls que
@@ -174,3 +175,8 @@ hora em que o pai termina), `execve` publicando o espaco novo antes de trocar
 o CR3 (uma preempcao no meio deixava a thread no espaco em construcao), `poll`
 dormindo sem fila nenhuma quando um sinal chegava durante o registro, e
 `getppid` lendo `parent` sem a trava.
+Regressao: 92 -> 97 verificacoes. Estresse 5x verde na versao final (e 25/25
+logo antes, com as correcoes de concorrencia). Observacao: o commit `8b3d171`
+levou junto as edicoes que o dono fez durante a sessao no arquivo local de regras (regra de
+comentarios para todas as linguagens) e em `docs/PLANO.md` (secao "Linguagens",
+1.5 com `zig cc`, piloto Rust no ext2 em 2.5, etapa nova 8.7).
