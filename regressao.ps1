@@ -125,6 +125,7 @@ if ($runAll -or $OnlyA) {
         "cmd:vfstest /tmp", "until:200:falha(s))",
         "cmd:cat /proc/self/maps", "wait:1", "cmd:cat /proc/mounts", "wait:1",
         "cmd:proctest um dois", "until:60:falha(s))",
+        "cmd:pctest", "until:120:falha(s))",
         "cmd:polltest", "wait:6",
         "cmd:fbtest 2", "wait:1", "shot:out\shots\reg-fbtest.ppm", "wait:2",
         "cmd:evtest 10", "wait:0.8", "mon:sendkey a", "mon:sendkey ctrl", "mon:sendkey up", "mon:mouse_move 10 5", "until:20:evento(s)",
@@ -306,6 +307,10 @@ if ($runAll -or $OnlyA) {
     Expect $a "cmdline tem argv separado por NUL\s+ok" "proctest: cmdline"
     Expect $a "e le o caminho dele\s+ok" "proctest: /proc/self/fd"
     Expect $a "proctest: TUDO OK" "proctest: procfs completo"
+    Expect $a "leituras do disco sda: (\d+) antes, \1 depois da segunda" "cache de paginas: a segunda leitura nao vai ao disco"
+    Expect $a "o mmap mostra o mesmo conteudo do read\s+ok" "cache de paginas: mmap usa as mesmas paginas"
+    Expect $a "escrever no mmap nao muda o arquivo\s+ok" "cache de paginas: MAP_PRIVATE copia na escrita"
+    Expect $a "pctest: TUDO OK" "pctest: cache de paginas completo"
     Expect $a "sda" "ls /dev listou o disco"
     Expect $a "polltest: TUDO OK" "polltest TUDO OK"
     Expect $a "fbtest: gradiente \+ retangulo desenhados" "fbtest desenhou"
@@ -441,6 +446,8 @@ if ($runAll -or $OnlyC) {
         "cmd:grep TUDO /mnt/f1.txt", "wait:1",
         "cmd:sync", "cmd:ls /mnt", "wait:1",
         "cmd:vfstest /mnt", "until:120:falha(s))",
+        "cmd:cp /bin/tcc /mnt/pc.bin", "wait:3", "cmd:pctest -d sdb -w /mnt /mnt/pc.bin", "until:120:falha(s))",
+        "cmd:rm /mnt/pc.bin",
         "cmd:cd /mnt", "cmd:umount /mnt", "cmd:cd /", "cmd:umount /mnt", "cmd:ls /mnt", "wait:1",
         "cmd:mount -r /dev/sdb /mnt", "cmd:cat /mnt/f1.txt | grep TUDO | wc", "cmd:echo x > /mnt/ro.txt",
         "cmd:umount /mnt", "cmd:mount /dev/sdb /mnt",
@@ -485,6 +492,10 @@ if ($runAll -or $OnlyC) {
     Expect $c "rename que so muda maiusculas\s+ok" "vfstest: rename so de maiusculas no FAT"
     Expect $c "O_APPEND em dois processos nao perde escrita\s+ok" "vfstest: O_APPEND atomico"
     Expect $c "apagar durante o readdir nao pula entradas\s+ok" "vfstest: getdents64 com posicao estavel"
+    Expect $c "leituras do disco sdb: (\d+) antes, \1 depois da segunda" "cache de paginas no disco cru"
+    Expect $c "o mmap ja feito ve o pwrite\s+ok" "cache de paginas: escrita aparece no mmap ja feito"
+    Expect $c "ftruncate de volta para 9000 le zeros\s+ok" "cache de paginas: truncate coerente"
+    Expect $c "pctest: TUDO OK" "pctest no disco cru"
     Expect $c "umount: /mnt: Recurso ocupado" "umount com o cwd dentro da EBUSY"
     Expect $c "/dev/sdb desmontado de /mnt" "umount desmontou o segundo disco"
     Expect $c "/dev/sdb montado em /mnt \(vfat, somente leitura\)" "mount -r monta so leitura"

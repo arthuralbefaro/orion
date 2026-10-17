@@ -22,11 +22,16 @@ struct blockdev {
     blockdev_write_fn write;
     void *priv;
     uint8_t part_type;
+    uint64_t rd_ios;
+    uint64_t rd_sectors;
+    uint64_t wr_ios;
+    uint64_t wr_sectors;
 };
 
 struct blockdev *blockdev_register(const char *name, uint32_t sector_size, uint64_t sector_count,
                                    blockdev_read_fn read, blockdev_write_fn write, void *priv);
 bool blockdev_read(struct blockdev *dev, uint64_t lba, uint32_t count, void *buf);
+bool blockdev_read_cached(struct blockdev *dev, uint64_t lba, uint32_t count, void *buf);
 bool blockdev_write(struct blockdev *dev, uint64_t lba, uint32_t count, const void *buf);
 bool blockdev_sync(void);
 void blockdev_cache_init(void);

@@ -8,6 +8,7 @@
 #include <kernel/syscall.h>
 #include <lib/string.h>
 #include <fs/vfs.h>
+#include <fs/pcache.h>
 #include <arch/x86_64/cpu.h>
 #include <kernel/mutex.h>
 
@@ -356,7 +357,10 @@ static bool fault_locked(struct process *p, uint64_t addr, uint64_t err)
     }
     if (present) {
         uint64_t old = 0;
-        if (!write || !(pte & PTE_COW) || !vmm_cow_fault(p->pml4_phys, page, &old))
+        if (!write || !(pte & PTE_COW))
+            return false;
+        if (!vmm_cow_fault(p->pml4_phys, page, &old) &&
+            (!vfs_cache_reclaim(16) || !vmm_cow_fault(p->pml4_phys, page, &old)))
             return false;
         if (old)
             process_defer_free(p, old);
@@ -368,7 +372,28 @@ static bool fault_locked(struct process *p, uint64_t addr, uint64_t err)
     if ((v->flags & VMA_FILE) && !interrupts_enabled())
         return false;
 
+    if (v->flags & VMA_FILE) {
+        uint64_t off = v->offset + (page - v->start);
+        struct vnode *vn = v->file->vn;
+        if (off < v->file_size && pcache_enabled(vn)) {
+            int err = 0;
+            struct pmm_stats mem;
+            pmm_get_stats(&mem);
+            if (mem.free_pages < 16)
+                vfs_cache_reclaim(16);
+            uint64_t cached = pcache_get(vn, off / PAGE_SIZE, &err);
+            if (!cached)
+                return false;
+            uint64_t flags = (vma_pte_flags(v->flags) & ~PTE_WRITABLE) | PTE_COW;
+            vmm_map_page_in(p->pml4_phys, page, cached, flags);
+            p->pages++;
+            return true;
+        }
+    }
+
     uint64_t phys = pmm_alloc_page();
+    if (!phys && vfs_cache_reclaim(16))
+        phys = pmm_alloc_page();
     if (!phys)
         return false;
     uint8_t *mem = phys_to_virt(phys);

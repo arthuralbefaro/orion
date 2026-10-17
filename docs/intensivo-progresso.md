@@ -22,7 +22,7 @@ na primeira vez, com SHA-256 conferido. Os programas ficam em `user/musl/<nome>`
 em `user/include/orion.h`. A regressao demora uns 20 minutos; o estresse 5x,
 outros 10.
 
-Proxima etapa: 2.4.
+Proxima etapa: 2.5.
 
 ## Checklist
 
@@ -49,8 +49,8 @@ Proxima etapa: 2.4.
 | 1.12 | Programas na musl, aposentar a libc propria | [x] | 07:54 | 08:50 | 171ba11 |
 | 2.1 | VFS com inodes | [x] | 08:51 | 11:05 | 9f729b3 |
 | 2.2 | tmpfs | [x] | 11:06 | 11:47 | 3b80cdc |
-| 2.3 | procfs | [x] | 11:48 | 12:52 | (ver diario) |
-| 2.4 | Cache de paginas unificado | [ ] | | | |
+| 2.3 | procfs | [x] | 11:48 | 12:52 | b0a87e9 |
+| 2.4 | Cache de paginas unificado | [x] | 12:53 | 14:55 | (ver diario) |
 | 2.5 | ext2 leitura, piloto em Rust | [ ] | | | |
 | 2.6 | ext2 escrita, mkfs.ext2, fsck | [ ] | | | |
 | 2.7 | Links simbolicos, chmod, chown, utime | [ ] | | | |
@@ -561,3 +561,23 @@ de revisao: 6 problemas reais na primeira (uso depois de liberar no
 no `open`, ordem do `ps`...), 2 na segunda (lista com mais de 256 processos,
 nome de executavel forjando campos).
 Regressao 254 -> 263, estresse 5x verde. Versao 2.1.0-a3.
+
+#### 2.4 Cache de paginas unificado - 12:53 as 14:55 - FEITO
+Cada vnode tem um cache de paginas (radix de paginas fisicas); o FAT oferece
+`readpage` e passa a ser lido so por ele: `read`, o carregamento do ELF no
+`exec` e o `mmap` de arquivo usam as mesmas paginas (o `mmap` mapeia a pagina
+do cache com copia na escrita). Escrita e truncate atualizam o cache dentro da
+trava do FAT. Vnodes com cache ficam numa LRU depois do ultimo `close` (ate
+512 ou 1/4 da RAM), despejados sob pressao de memoria e no `umount`.
+`/proc/diskstats` conta as leituras reais de cada disco; o `pctest` le o
+mesmo arquivo duas vezes e confere que a segunda nao vai ao disco (para isso
+os clusters de diretorio passaram a usar o cache de blocos). O `mem` do shell
+do kernel mostra as paginas usadas sem o cache. Quatro rodadas de revisao: 8
+problemas reais na primeira (contador de referencia de 16 bits estourando
+com 65536 `mmap`, atualizacao do cache fora da trava do FAT, umount com
+`EBUSY` a toa...), 4 na segunda (o `fork` ainda estourava o contador, que
+virou de 32 bits), 2 na terceira e 1 na quarta (desempenho).
+Regressao 263 -> 271, estresse 5x verde. Versao 2.1.0-a4.
+Observado: numa rodada do estresse o QEMU demorou mais de 60 s para mostrar o
+prompt e o harness digitou o comando antes de o shell ler (os bytes se
+perderam); o boot terminou normal e a rodada repetida passou inteira.

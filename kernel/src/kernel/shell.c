@@ -62,8 +62,10 @@ static void cmd_mem(const char *args)
     (void)args;
     struct pmm_stats st;
     pmm_get_stats(&st);
+    uint64_t cached = pcache_total_pages();
     kprintf("Paginas: %lu total, %lu usadas, %lu livres\n",
-            st.total_pages, st.used_pages, st.free_pages);
+            st.total_pages, st.used_pages - cached, st.free_pages);
+    kprintf("Cache de paginas: %lu pagina(s), %lu reaproveitavel(is)\n", cached, vfs_cache_reclaimable());
     kprintf("RAM utilizavel: %lu MiB (livre: %lu MiB), bitmap: %lu KiB\n",
             st.total_pages * PAGE_SIZE / MiB(1), st.free_pages * PAGE_SIZE / MiB(1),
             st.bitmap_bytes / 1024);

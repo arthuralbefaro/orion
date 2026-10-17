@@ -1,7 +1,3 @@
-/*
- * pmm.c - alocador físico por bitmap, alimentado pelo mapa de memória do
- * bootloader.
- */
 #include <mm/pmm.h>
 #include <mm/memory.h>
 #include <boot/bootinfo.h>
@@ -11,15 +7,15 @@
 #include <kernel/spinlock.h>
 #include <limine.h>
 
-static uint8_t  *bitmap;        /* ponteiro virtual (HHDM) */
+static uint8_t  *bitmap;
 static uint64_t  bitmap_phys;
 static uint64_t  bitmap_bytes;
-static uint64_t  page_count;    /* nº de páginas cobertas pelo bitmap */
-static uint64_t  total_pages;   /* páginas utilizáveis */
+static uint64_t  page_count;
+static uint64_t  total_pages;
 static uint64_t  used_pages;
 static uint64_t  highest_addr;
-static uint64_t  search_hint;   /* índice a partir do qual procurar livre */
-static uint16_t *refcount;      /* referências extras por página; 0 = dono único */
+static uint64_t  search_hint;
+static uint32_t *refcount;
 static uint64_t  shared_pages;
 static spinlock_t pmm_lock = SPINLOCK_INIT;
 
@@ -59,7 +55,6 @@ void pmm_init(void)
 {
     struct limine_memmap_response *mm = boot_info.memmap;
 
-    /* 1. Até onde vai a RAM utilizável? */
     highest_addr = 0;
     for (uint64_t i = 0; i < mm->entry_count; i++) {
         struct limine_memmap_entry *e = mm->entries[i];
@@ -75,7 +70,6 @@ void pmm_init(void)
     page_count   = highest_addr / PAGE_SIZE;
     bitmap_bytes = PAGE_ALIGN_UP(DIV_ROUND_UP(page_count, 8));
 
-    /* 2. Acha uma região utilizável grande o bastante para o bitmap. */
     bitmap = NULL;
     for (uint64_t i = 0; i < mm->entry_count; i++) {
         struct limine_memmap_entry *e = mm->entries[i];
@@ -88,7 +82,6 @@ void pmm_init(void)
     if (!bitmap)
         panic("pmm: sem espaco para o bitmap (%lu bytes)", bitmap_bytes);
 
-    /* 3. Começa com tudo ocupado e libera só o que é utilizável. */
     memset(bitmap, 0xFF, bitmap_bytes);
     total_pages = 0;
     for (uint64_t i = 0; i < mm->entry_count; i++) {
@@ -101,7 +94,6 @@ void pmm_init(void)
         }
     }
 
-    /* 4. Reserva o próprio bitmap e a página 0 (0 é o nosso "NULL físico"). */
     used_pages = 0;
     for (uint64_t p = bitmap_phys; p < bitmap_phys + bitmap_bytes; p += PAGE_SIZE) {
         bit_set(p / PAGE_SIZE);
@@ -114,7 +106,7 @@ void pmm_init(void)
 
     search_hint = bitmap_phys / PAGE_SIZE;
 
-    uint64_t ref_bytes = ALIGN_UP(page_count * sizeof(uint16_t), PAGE_SIZE);
+    uint64_t ref_bytes = ALIGN_UP(page_count * sizeof(uint32_t), PAGE_SIZE);
     uint64_t ref_phys = pmm_alloc_pages(ref_bytes / PAGE_SIZE);
     if (!ref_phys)
         panic("pmm: sem memoria para a tabela de referencias");
@@ -125,14 +117,13 @@ void pmm_init(void)
              total_pages * PAGE_SIZE / MiB(1), total_pages, bitmap_bytes / 1024, bitmap_phys);
 }
 
-/* Procura `count` páginas livres consecutivas a partir de `start`. */
 static uint64_t find_free_run(uint64_t start, size_t count)
 {
     uint64_t run_start = 0;
     size_t run = 0;
 
     for (uint64_t i = start; i < page_count; i++) {
-        /* Pula palavras inteiras ocupadas (acelera muito em RAM grande). */
+
         if (run == 0 && (i & 63) == 0 && i + 64 <= page_count) {
             uint64_t word;
             memcpy(&word, &bitmap[i >> 3], sizeof(word));
@@ -162,7 +153,7 @@ uint64_t pmm_alloc_pages(size_t count)
 
     uint64_t idx = find_free_run(search_hint, count);
     if (idx == (uint64_t)-1)
-        idx = find_free_run(1, count); /* volta ao início (pula a página 0) */
+        idx = find_free_run(1, count);
 
     if (idx == (uint64_t)-1) {
         spin_unlock_irqrestore(&pmm_lock, flags);
@@ -212,7 +203,7 @@ void pmm_ref_inc(uint64_t phys)
     uint64_t idx = phys / PAGE_SIZE;
     ASSERT(idx < page_count);
     uint64_t flags = spin_lock_irqsave(&pmm_lock);
-    if (refcount[idx] == UINT16_MAX)
+    if (refcount[idx] == UINT32_MAX)
         panic("pmm: contador de referencias estourou na pagina %016lx", phys);
     if (refcount[idx]++ == 0)
         shared_pages++;

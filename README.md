@@ -2,7 +2,8 @@
 
 Sistema operacional x86_64 escrito do zero em C (gnu11), bootado pelo Limine.
 Kernel com SMP, memoria virtual com areas (VMAs) e paginas sob demanda, fork
-copy-on-write, threads, futex, sinais no formato do Linux, VFS com vnodes e
+copy-on-write, threads, futex, sinais no formato do Linux, cache de paginas
+unificado (read, exec e mmap de arquivo), VFS com vnodes e
 montagens (`mount`/`umount`; FAT com leitura e escrita na raiz e em `/mnt`,
 devfs em `/dev`, tmpfs em `/tmp` e `/run`, procfs em `/proc`), rede IPv4 (UDP/ICMP) e um compositor de janelas em espaco de
 usuario.
@@ -118,7 +119,7 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
     ifconfig ping nslookup dhcp mkfs mount umount
-    testes: memtest fstest vfstest tmptest proctest polltest forktest ptytest limtest stress sctest filetest
+    testes: memtest fstest vfstest tmptest proctest pctest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
 
@@ -146,7 +147,7 @@ na fase 3. O `test.ps1` grava o trafego em `out\net.pcap`.
 
 ## /proc
     /proc/<pid>/status cmdline maps stat fd/   cada processo (self = o proprio)
-    /proc/meminfo cpuinfo uptime loadavg mounts version
+    /proc/meminfo cpuinfo uptime loadavg mounts version diskstats
 O `ps`, o `top`, o `free`, o `uptime` e a janela de processos do `wm` leem
 daqui. `/proc/<pid>/fd/N` ainda e um arquivo com o caminho (vira link
 simbolico na 2.7).

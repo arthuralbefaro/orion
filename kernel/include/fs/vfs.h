@@ -3,6 +3,7 @@
 #include <kernel/compiler.h>
 #include <kernel/mutex.h>
 #include <kernel/syscall.h>
+#include <fs/pcache.h>
 
 #define VFS_NAME_MAX   256
 #define VFS_PATH_MAX   512
@@ -34,6 +35,7 @@ struct fs_type {
     int (*lookup)(struct vnode *dir, const char *name, struct vnode **out);
     int (*readdir)(struct vnode *dir, uint64_t *pos, vfs_dir_cb cb, void *ctx);
     int64_t (*read)(struct vnode *v, uint64_t offset, void *buf, uint64_t len);
+    int (*readpage)(struct vnode *v, uint64_t idx, uint64_t *page);
     int64_t (*write)(struct vnode *v, uint64_t *offset, const void *buf, uint64_t len, bool append);
     int (*truncate)(struct vnode *v, uint64_t size);
     int (*create)(struct vnode *dir, const char *name, uint32_t mode, struct vnode **out);
@@ -54,8 +56,14 @@ struct vnode {
     bool hashed;
     bool unlinked;
     bool displaced;
+    bool inactive;
+    bool evicting;
+    uint64_t lru_pages;
     struct vnode *hnext;
     struct vnode *dnext;
+    struct vnode *lru_prev;
+    struct vnode *lru_next;
+    struct pcache pc;
     struct mount *covered_by;
     struct mutex io_lock;
     void *priv;
@@ -73,6 +81,7 @@ struct mount {
     uint32_t id;
     uint32_t nvnodes;
     struct vnode *displaced;
+    uint32_t evicting;
     char source[VFS_SOURCE_MAX];
     char point[VFS_PATH_MAX];
     struct mutex ns_lock;
@@ -101,6 +110,9 @@ void vcache_rekey(struct vnode *v, uint64_t key);
 void vcache_unhash(struct vnode *v);
 void vnode_get(struct vnode *v);
 void vnode_put(struct vnode *v);
+void vfs_cache_shrink(void);
+uint64_t vfs_cache_reclaim(uint64_t want);
+uint64_t vfs_cache_reclaimable(void);
 struct vnode *vfs_root(void);
 
 int vfs_walk(struct vnode *start, const char *path, struct vnode **out);

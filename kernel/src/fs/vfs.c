@@ -12,6 +12,7 @@
 #include <lib/string.h>
 
 #define VCACHE_BUCKETS 256
+#define VFS_MAX_INACTIVE 512
 
 struct nameidata {
     struct vnode *dir;
@@ -25,6 +26,10 @@ static struct mutex mount_lock;
 static struct mount *mounts;
 static struct mount *root_mount;
 static uint32_t next_mount_id = 1;
+static struct vnode *lru_head;
+static struct vnode *lru_tail;
+static uint32_t inactive_count;
+static uint64_t inactive_pages;
 
 static const struct fs_type *const fs_types[] = { &fat_fs_type, &devfs_type, &tmpfs_type, &procfs_type };
 
@@ -101,6 +106,7 @@ struct vnode *vnode_new(struct mount *m, uint64_t key, uint32_t mode)
     v->ino = key;
     v->mode = mode;
     v->refs = 1;
+    spinlock_init(&v->pc.lock);
     mutex_init_private(&v->io_lock, "vnode-io");
     uint64_t fl = spin_lock_irqsave(&vfs_lock);
     m->nvnodes++;
@@ -152,15 +158,57 @@ static void unhash_locked(struct vnode *v)
     v->hashed = false;
 }
 
+static void lru_add_locked(struct vnode *v)
+{
+    v->inactive = true;
+    v->lru_prev = NULL;
+    v->lru_next = lru_head;
+    if (lru_head)
+        lru_head->lru_prev = v;
+    lru_head = v;
+    if (!lru_tail)
+        lru_tail = v;
+    inactive_count++;
+    v->lru_pages = v->pc.npages;
+    inactive_pages += v->lru_pages;
+}
+
+static void lru_remove_locked(struct vnode *v)
+{
+    if (!v->inactive)
+        return;
+    if (v->lru_prev)
+        v->lru_prev->lru_next = v->lru_next;
+    else
+        lru_head = v->lru_next;
+    if (v->lru_next)
+        v->lru_next->lru_prev = v->lru_prev;
+    else
+        lru_tail = v->lru_prev;
+    v->lru_prev = v->lru_next = NULL;
+    v->inactive = false;
+    inactive_count--;
+    inactive_pages -= v->lru_pages;
+    v->lru_pages = 0;
+}
+
+uint64_t vfs_cache_reclaimable(void)
+{
+    return __atomic_load_n(&inactive_pages, __ATOMIC_RELAXED);
+}
+
 static void free_vnode(struct vnode *v)
 {
     struct mount *m = v->mnt;
     uint64_t fl = spin_lock_irqsave(&vfs_lock);
     undisplace_locked(v);
     spin_unlock_irqrestore(&vfs_lock, fl);
+    pcache_drop(v);
     if (m->type->release)
         m->type->release(v);
     fl = spin_lock_irqsave(&vfs_lock);
+    if (v->evicting)
+        m->evicting--;
     m->nvnodes--;
     spin_unlock_irqrestore(&vfs_lock, fl);
     kfree(v);
@@ -170,8 +218,10 @@ struct vnode *vcache_find(struct mount *m, uint64_t key)
 {
     uint64_t fl = spin_lock_irqsave(&vfs_lock);
     struct vnode *v = find_locked(m, key);
-    if (v)
+    if (v) {
+        lru_remove_locked(v);
         v->refs++;
+    }
     spin_unlock_irqrestore(&vfs_lock, fl);
     return v;
 }
@@ -181,6 +231,7 @@ struct vnode *vcache_insert(struct vnode *v)
     uint64_t fl = spin_lock_irqsave(&vfs_lock);
     struct vnode *old = find_locked(v->mnt, v->key);
     if (old) {
+        lru_remove_locked(old);
         old->refs++;
         spin_unlock_irqrestore(&vfs_lock, fl);
         free_vnode(v);
@@ -225,11 +276,83 @@ void vnode_put(struct vnode *v)
         return;
     uint64_t fl = spin_lock_irqsave(&vfs_lock);
     bool last = --v->refs == 0;
-    if (last)
+    bool keep = last && v->hashed && !v->unlinked && v->pc.npages > 0;
+    if (keep)
+        lru_add_locked(v);
+    else if (last)
         unhash_locked(v);
+    bool shrink = inactive_count > VFS_MAX_INACTIVE ||
+                  (keep && pcache_over_budget() && inactive_pages > v->lru_pages);
     spin_unlock_irqrestore(&vfs_lock, fl);
-    if (last)
+    if (last && !keep)
         free_vnode(v);
+    if (shrink)
+        vfs_cache_shrink();
+}
+
+static void evict_locked(struct vnode *v)
+{
+    lru_remove_locked(v);
+    unhash_locked(v);
+    v->evicting = true;
+    v->mnt->evicting++;
+}
+
+void vfs_cache_shrink(void)
+{
+    uint64_t total = pcache_total_pages(), budget = pcache_budget_pages();
+    uint64_t want = total > budget ? total - budget + 1 : 0, freed = 0;
+    for (;;) {
+        uint64_t fl = spin_lock_irqsave(&vfs_lock);
+        struct vnode *v = lru_tail;
+        if (!v || (inactive_count <= VFS_MAX_INACTIVE && freed >= want)) {
+            spin_unlock_irqrestore(&vfs_lock, fl);
+            return;
+        }
+        freed += v->lru_pages;
+        evict_locked(v);
+        spin_unlock_irqrestore(&vfs_lock, fl);
+        free_vnode(v);
+    }
+}
+
+uint64_t vfs_cache_reclaim(uint64_t want)
+{
+    uint64_t freed = 0;
+    while (freed < want) {
+        uint64_t fl = spin_lock_irqsave(&vfs_lock);
+        struct vnode *v = lru_tail;
+        if (v) {
+            freed += v->lru_pages;
+            evict_locked(v);
+        }
+        spin_unlock_irqrestore(&vfs_lock, fl);
+        if (!v)
+            break;
+        free_vnode(v);
+    }
+    return freed;
+}
+
+static void evict_mount(struct mount *m)
+{
+    for (;;) {
+        uint64_t fl = spin_lock_irqsave(&vfs_lock);
+        struct vnode *v = lru_head;
+        while (v && v->mnt != m)
+            v = v->lru_next;
+        if (v)
+            evict_locked(v);
+        bool busy = m->evicting > 0;
+        spin_unlock_irqrestore(&vfs_lock, fl);
+        if (v) {
+            free_vnode(v);
+            continue;
+        }
+        if (!busy)
+            return;
+        thread_sleep_ms(1);
+    }
 }
 
 struct vnode *vfs_root(void)
@@ -694,6 +817,8 @@ int64_t vfs_read(struct vnode *v, uint64_t offset, void *buf, uint64_t len)
 {
     if (vnode_is_dir(v))
         return -EISDIR;
+    if (pcache_enabled(v))
+        return pcache_read(v, offset, buf, len);
     if (!v->mnt->type->read)
         return -EINVAL;
     return v->mnt->type->read(v, offset, buf, len);
@@ -950,6 +1075,7 @@ int vfs_umount(struct vnode *root)
     if (root != m->root || !m->covered) {
         r = -EINVAL;
     } else {
+        evict_mount(m);
         uint64_t fl = spin_lock_irqsave(&vfs_lock);
         if (root->refs != 2 || m->nvnodes != 1)
             r = -EBUSY;
@@ -1070,6 +1196,7 @@ void vfs_init(void)
 {
     spinlock_init(&vfs_lock);
     mutex_init(&mount_lock, "vfs-mount");
+    pcache_init();
     for (uint32_t i = 0; i < blockdev_count(); i++) {
         struct blockdev *dev = blockdev_at(i);
         if (!dev->parent)

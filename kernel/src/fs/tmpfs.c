@@ -57,8 +57,12 @@ static bool take_page(struct tmpfs *t, uint64_t *slot)
     uint64_t reserve = st.total_pages / 16;
     if (reserve < TMPFS_RESERVE_MIN)
         reserve = TMPFS_RESERVE_MIN;
-    if (st.free_pages <= reserve)
-        return false;
+    if (st.free_pages <= reserve) {
+        vfs_cache_reclaim(reserve - st.free_pages + 1);
+        pmm_get_stats(&st);
+        if (st.free_pages <= reserve)
+            return false;
+    }
     uint64_t p = pmm_alloc_page();
     if (!p)
         return false;

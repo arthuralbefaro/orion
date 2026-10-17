@@ -1452,3 +1452,83 @@ Uma linha por decisao, na ordem em que foram tomadas.
   mais velhos (le todo o `/proc` e guarda os mais novos agora); e um nome de
   executavel com quebra de linha forjava campos no `/proc/<pid>/status`
   (o `exec` troca controles e parenteses do nome por `?`).
+
+## v2.1.0-a4 (cache de paginas unificado)
+
+- Cada vnode tem um cache de paginas (`struct pcache`: arvore radix de ate 4
+  niveis de 512 entradas com paginas fisicas, protegida por um spinlock do
+  proprio vnode). Sistema de arquivos que oferece `readpage` (por enquanto o
+  FAT) passa a ser lido so pelo cache: `read`, o carregamento do ELF no `exec`
+  e o `mmap` de arquivo usam as mesmas paginas. tmpfs, devfs e proc nao usam
+  (o tmpfs ja guarda as paginas dele; os outros nao tem dado em disco).
+- Referencias: o cache tem a referencia base de cada pagina; quem le copia com
+  uma referencia extra e solta depois; o `mmap` mapeia a propria pagina do
+  cache com uma referencia extra, sempre com `PTE_COW` e sem escrita (mesmo
+  em area so leitura, para um `mprotect` posterior nao liberar escrita na
+  pagina do cache). Escrever num `MAP_PRIVATE` copia a pagina como no `fork`.
+  Tirar a pagina do cache (truncate, despejo) so solta a referencia base: um
+  processo que ainda a mapeia continua com ela.
+- Escrita e write-through: o FAT grava no disco como antes e depois o VFS
+  copia o trecho para as paginas que estiverem no cache; `truncate` tira as
+  paginas alem do fim e zera o resto da ultima. Um contador de geracao por
+  vnode impede que uma leitura do disco que comecou antes de uma escrita
+  ponha uma pagina velha no cache (ela tenta de novo).
+- Para a segunda leitura nao ir ao disco o cache precisa sobreviver ao
+  `close`: vnode com paginas no cache, quando a ultima referencia cai, vai
+  para uma lista LRU de inativos em vez de ser liberado (continua no cache de
+  vnodes; achar de novo o reativa). Despejo pelo fim da LRU quando ha mais de
+  512 inativos ou quando o cache passa de 1/4 da RAM (acima disso a leitura
+  usa uma pagina que nao fica no cache). O `umount` despeja os inativos da
+  montagem antes de conferir se esta ocupada. `MemAvailable` soma o cache, e
+  `Cached` no `/proc/meminfo` mostra o tamanho.
+- A abertura de `/bin/doom` ainda ia ao disco: diretorio FAT que nao e a raiz
+  fixa era lido em clusters inteiros direto do disco (o cache de blocos so
+  guarda leitura de setor unico). Clusters de diretorio agora passam pelo
+  cache de blocos setor a setor (`blockdev_read_cached`).
+- `/proc/diskstats` (formato do Linux, so leituras e escritas e setores por
+  disco) mostra quantas vezes cada disco foi lido de verdade; o `pctest` le o
+  arquivo duas vezes e confere que o contador nao mexeu na segunda, que o
+  `mmap` ve o mesmo conteudo sem ir ao disco, e (com `-w` num diretorio
+  gravavel) que `pwrite` aparece no `read` e num `mmap` ja feito e que
+  `ftruncate` fica coerente.
+- Revisao adversarial, corrigido: o contador de referencias de pagina do pmm
+  e de 16 bits, e 65536 `mmap` da mesma pagina de um arquivo estouravam o
+  contador e derrubavam o kernel (agora, perto do limite, o cache entrega uma
+  copia particular). A atualizacao do cache depois de escrever e de truncar
+  acontecia fora da trava do FAT: duas escritas podiam deixar o cache numa
+  ordem e o disco em outra, quem lia via o tamanho novo antes dos bytes, e um
+  erro no meio pulava a atualizacao. Agora o FAT atualiza o cache dentro da
+  propria trava, no lugar exato em que muda dados e tamanho, e publica o
+  tamanho depois dos dados. Uma leitura do disco que vinha curta (erro no
+  meio da pagina) entrava no cache com zeros; agora da `EIO`. Faltava
+  devolver memoria sob pressao: quando o alocador de paginas falha numa falta
+  de pagina ou no proprio cache, os vnodes inativos mais antigos sao
+  despejados e a alocacao tenta de novo; `MemAvailable` conta so o que e
+  reaproveitavel. E o `umount` podia dar `EBUSY` a toa enquanto outra CPU
+  despejava um vnode da montagem (agora espera o despejo terminar).
+- O comando `mem` do shell do kernel mostra as paginas usadas sem o cache de
+  paginas (e uma linha a parte com o tamanho do cache): a regressao confere
+  que a memoria volta ao mesmo ponto no fim de cada sequencia, e o cache, que
+  agora guarda os arquivos lidos, fazia essa conta parecer vazamento.
+- Segunda rodada: limitar as referencias so no cache nao bastava, porque o
+  `fork` de um processo com milhares de mapeamentos da mesma pagina ainda
+  estourava o contador de 16 bits. O contador do pmm passou a ser de 32 bits
+  (os comentarios do `pmm.c` sairam junto, pela regra do repositorio), e a
+  copia particular perto do limite deixou de ser necessaria. O `readpage` do
+  FAT media o tamanho e lia em duas posses da trava (um `truncate` no meio
+  virava `EIO` falso); agora e uma so. A falta de COW tambem despeja cache
+  inativo e tenta de novo, e o `fork` despeja cache quando a memoria livre
+  cai abaixo de 1/16 da RAM.
+- Terceira rodada: toda escrita invalidava o preenchimento em andamento de
+  qualquer pagina do arquivo (o contador de geracao era do arquivo inteiro), e
+  um arquivo que alguem esta acrescentando era relido ate 9 vezes por pagina
+  sem nunca entrar no cache. O contador saiu: o `readpage` do FAT poe a pagina
+  no cache (`pcache_install`) ainda com a trava do FAT, a mesma sob a qual as
+  escritas atualizam o cache, entao preenchimento e escrita nunca se cruzam.
+  E o tmpfs, ao chegar na reserva de memoria, primeiro despeja cache inativo
+  antes de dar `ENOSPC` (senao o cache do FAT, contado como disponivel,
+  roubava espaco do `/tmp`).
+- Quarta rodada: quando arquivos abertos sozinhos ja enchiam o orcamento do
+  cache, cada falta no cache esvaziava a LRU inteira (a condicao de parada
+  contava paginas que a LRU nao pode devolver). O despejo agora so tira o
+  suficiente para cobrir o excesso, e so roda se ha algo reaproveitavel.

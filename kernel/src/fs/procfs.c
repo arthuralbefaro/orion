@@ -1,5 +1,6 @@
 #include <fs/procfs.h>
 #include <fs/vfs.h>
+#include <fs/block.h>
 #include <kernel/file.h>
 #include <kernel/process.h>
 #include <kernel/sched.h>
@@ -25,6 +26,7 @@ enum pkind {
     P_MOUNTS,
     P_LOADAVG,
     P_VERSION,
+    P_DISKSTATS,
     P_PIDDIR = 16,
     P_STATUS,
     P_CMDLINE,
@@ -42,6 +44,7 @@ struct pent {
 static const struct pent root_ents[] = {
     { "meminfo", P_MEMINFO }, { "cpuinfo", P_CPUINFO }, { "uptime", P_UPTIME },
     { "mounts", P_MOUNTS },   { "loadavg", P_LOADAVG }, { "version", P_VERSION },
+    { "diskstats", P_DISKSTATS },
 };
 
 static const struct pent pid_ents[] = {
@@ -330,9 +333,9 @@ static void gen_meminfo(struct pbuf *b)
     uint64_t kb = PAGE_SIZE / 1024;
     pb_printf(b, "MemTotal:       %8lu kB\n", st.total_pages * kb);
     pb_printf(b, "MemFree:        %8lu kB\n", st.free_pages * kb);
-    pb_printf(b, "MemAvailable:   %8lu kB\n", st.free_pages * kb);
+    pb_printf(b, "MemAvailable:   %8lu kB\n", (st.free_pages + vfs_cache_reclaimable()) * kb);
     pb_printf(b, "Buffers:        %8lu kB\n", 0ul);
-    pb_printf(b, "Cached:         %8lu kB\n", 0ul);
+    pb_printf(b, "Cached:         %8lu kB\n", pcache_total_pages() * kb);
     pb_printf(b, "SwapTotal:      %8lu kB\n", 0ul);
     pb_printf(b, "SwapFree:       %8lu kB\n", 0ul);
     pb_printf(b, "KernelHeap:     %8lu kB\n", (hs.slab_bytes_used + hs.large_bytes_used) / 1024);
@@ -382,6 +385,15 @@ static void gen_loadavg(struct pbuf *b)
 static void gen_version(struct pbuf *b)
 {
     pb_printf(b, "%s version %s (%s)\n", KERNEL_NAME, KERNEL_VERSION, KERNEL_ARCH);
+}
+
+static void gen_diskstats(struct pbuf *b)
+{
+    for (uint32_t i = 0; i < blockdev_count(); i++) {
+        struct blockdev *d = blockdev_at(i);
+        pb_printf(b, "%4u %7u %s %lu 0 %lu 0 %lu 0 %lu 0 0 0 0\n", 8u, i, d->name, d->rd_ios, d->rd_sectors,
+                  d->wr_ios, d->wr_sectors);
+    }
 }
 
 static void mount_line(const struct mount *m, void *ctx)
@@ -547,6 +559,7 @@ static int proc_open(struct vnode *v, int flags, struct file **out)
     case P_MOUNTS:  gen_mounts(&b); break;
     case P_LOADAVG: gen_loadavg(&b); break;
     case P_VERSION: gen_version(&b); break;
+    case P_DISKSTATS: gen_diskstats(&b); break;
     case P_STATUS:  gen_status(&b, p); break;
     case P_STAT:    gen_stat(&b, p); break;
     case P_CMDLINE: gen_cmdline(&b, p); break;

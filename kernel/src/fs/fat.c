@@ -1,9 +1,11 @@
 #include <fs/fat.h>
 #include <fs/vfs.h>
+#include <fs/pcache.h>
 #include <fs/block.h>
 #include <kernel/log.h>
 #include <kernel/mutex.h>
 #include <mm/heap.h>
+#include <mm/memory.h>
 #include <lib/string.h>
 #include <drivers/rtc.h>
 
@@ -114,6 +116,13 @@ static bool read_cluster(struct fat_fs *fs, uint32_t cluster, void *buf)
     if (!cluster_ok(fs, cluster))
         return false;
     return blockdev_read(fs->dev, cluster_lba(fs, cluster), fs->sectors_per_cluster, buf);
+}
+
+static bool read_dir_cluster(struct fat_fs *fs, uint32_t cluster, void *buf)
+{
+    if (!cluster_ok(fs, cluster))
+        return false;
+    return blockdev_read_cached(fs->dev, cluster_lba(fs, cluster), fs->sectors_per_cluster, buf);
 }
 
 static uint32_t ent_cluster(struct fat_fs *f, const struct fat_dirent *d)
@@ -252,7 +261,7 @@ static bool iterate_dir(struct fat_fs *f, uint32_t dirc, dirent_cb cb, void *ctx
         uint32_t c = dirc == 0 ? f->root_cluster : dirc;
         uint32_t guard = 0, base = 0;
         while (c != 0xFFFFFFFF && !stop && guard++ < f->total_clusters && base < FAT_DIR_MAX) {
-            if (!read_cluster(f, c, f->cluster_buf))
+            if (!read_dir_cluster(f, c, f->cluster_buf))
                 break;
             found = scan_block(f, f->cluster_buf, f->cluster_size, &lfn, cb, ctx, &stop, base);
             base += f->cluster_size;
@@ -415,16 +424,12 @@ static int fat_readdir(struct vnode *dir, uint64_t *pos, vfs_dir_cb cb, void *ct
     return 0;
 }
 
-static int64_t fat_read(struct vnode *v, uint64_t offset, void *buf, uint64_t len)
+static int64_t fat_read_locked(struct fat_fs *f, struct vnode *v, uint64_t offset, void *buf, uint64_t len)
 {
-    struct fat_fs *f = v->mnt->priv;
     struct fat_node *n = v->priv;
-    mutex_lock(&f->lock);
     uint64_t size = v->size;
-    if (offset >= size) {
-        mutex_unlock(&f->lock);
+    if (offset >= size)
         return 0;
-    }
     if (len > size - offset)
         len = size - offset;
 
@@ -450,8 +455,30 @@ static int64_t fat_read(struct vnode *v, uint64_t offset, void *buf, uint64_t le
         in_cluster = 0;
         c = chain_next(f, c);
     }
-    mutex_unlock(&f->lock);
     return done ? (int64_t)done : err;
+}
+
+static int64_t fat_read(struct vnode *v, uint64_t offset, void *buf, uint64_t len)
+{
+    struct fat_fs *f = v->mnt->priv;
+    mutex_lock(&f->lock);
+    int64_t r = fat_read_locked(f, v, offset, buf, len);
+    mutex_unlock(&f->lock);
+    return r;
+}
+
+static int fat_readpage(struct vnode *v, uint64_t idx, uint64_t *page)
+{
+    struct fat_fs *f = v->mnt->priv;
+    mutex_lock(&f->lock);
+    uint64_t size = v->size, start = idx * PAGE_SIZE;
+    uint64_t expect = start >= size ? 0 : (size - start < PAGE_SIZE ? size - start : PAGE_SIZE);
+    int64_t r = fat_read_locked(f, v, start, phys_to_virt(*page), PAGE_SIZE);
+    int err = r < 0 ? (int)r : ((uint64_t)r < expect ? -EIO : 0);
+    if (err == 0)
+        pcache_install(v, idx, page);
+    mutex_unlock(&f->lock);
+    return err;
 }
 
 static void fat_mark_dirty(struct fat_fs *f, uint32_t byte_off)
@@ -1043,8 +1070,10 @@ static int64_t write_locked(struct fat_fs *f, struct vnode *v, uint64_t offset, 
         done += chunk;
     }
 
+    if (done)
+        pcache_write(v, offset, in, done);
     if (offset + done > v->size)
-        v->size = offset + done;
+        __atomic_store_n(&v->size, offset + done, __ATOMIC_RELEASE);
     return done ? (int64_t)done : err;
 }
 
@@ -1102,6 +1131,7 @@ static int fat_truncate(struct vnode *v, uint64_t size)
         if (cluster_ok(f, n->first))
             fat_free_chain(f, n->first);
         n->first = 0;
+        pcache_truncate(v, 0);
         v->size = 0;
     } else if (size < v->size) {
         uint32_t keep = (uint32_t)((size + f->cluster_size - 1) / f->cluster_size);
@@ -1112,6 +1142,7 @@ static int fat_truncate(struct vnode *v, uint64_t size)
             if (rest != 0xFFFFFFFF)
                 fat_free_chain(f, rest);
         }
+        pcache_truncate(v, size);
         v->size = size;
     }
     if (!update_entry_size(f, v) && r == 0)
@@ -1503,6 +1534,7 @@ const struct fs_type fat_fs_type = {
     .lookup = fat_lookup,
     .readdir = fat_readdir,
     .read = fat_read,
+    .readpage = fat_readpage,
     .write = fat_write,
     .truncate = fat_truncate,
     .create = fat_create,

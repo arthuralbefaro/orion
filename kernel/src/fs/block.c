@@ -49,11 +49,15 @@ static struct blockdev *resolve(struct blockdev *dev, uint64_t *lba)
 
 static bool raw_read(struct blockdev *base, uint64_t lba, uint32_t count, void *buf)
 {
+    __atomic_add_fetch(&base->rd_ios, 1, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&base->rd_sectors, count, __ATOMIC_RELAXED);
     return base->read && base->read(base, lba, count, buf);
 }
 
 static bool raw_write(struct blockdev *base, uint64_t lba, uint32_t count, const void *buf)
 {
+    __atomic_add_fetch(&base->wr_ios, 1, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&base->wr_sectors, count, __ATOMIC_RELAXED);
     return base->write && base->write(base, lba, count, buf);
 }
 
@@ -134,6 +138,22 @@ bool blockdev_read(struct blockdev *dev, uint64_t lba, uint32_t count, void *buf
         for (uint32_t i = 0; i < count && ok; i++)
             ok = cached_sector_read(base, abs + i, (uint8_t *)buf + i * BLOCK_SECTOR);
     }
+    mutex_unlock(&cache_lock);
+    return ok;
+}
+
+bool blockdev_read_cached(struct blockdev *dev, uint64_t lba, uint32_t count, void *buf)
+{
+    if (lba + count > dev->sector_count)
+        return false;
+    uint64_t abs = lba;
+    struct blockdev *base = resolve(dev, &abs);
+    if (base->sector_size != BLOCK_SECTOR || !cache)
+        return raw_read(base, abs, count, buf);
+    mutex_lock(&cache_lock);
+    bool ok = true;
+    for (uint32_t i = 0; i < count && ok; i++)
+        ok = cached_sector_read(base, abs + i, (uint8_t *)buf + i * BLOCK_SECTOR);
     mutex_unlock(&cache_lock);
     return ok;
 }

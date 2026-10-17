@@ -863,6 +863,10 @@ int process_fork_stack(struct interrupt_frame *frame, uint64_t newsp)
     struct process *parent = process_current();
     if ((uint64_t)process_count() >= parent->rlimits[RLIMIT_NPROC].cur)
         return -EAGAIN;
+    struct pmm_stats mem;
+    pmm_get_stats(&mem);
+    if (mem.free_pages < mem.total_pages / 16)
+        vfs_cache_reclaim(mem.total_pages / 16);
     struct process *child = process_alloc(parent->name);
     if (!child)
         return -ENOMEM;
