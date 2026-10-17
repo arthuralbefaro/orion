@@ -7,16 +7,22 @@ Este arquivo manda: uma sessao nova retoma da primeira etapa que nao esta `[x]`.
 ## Como retomar
 
     cd C:\dev\orion
-    .\check.ps1          # precisa terminar com "Nenhum erro ou warning."
-    .\regressao.ps1      # A (texto e rede), B (grafica), C (disco), D (GUI)
     git log --oneline -10
+    .\check.ps1                                   # precisa terminar com "Nenhum erro ou warning."
+    .\regressao.ps1                               # A (texto, rede, musl, dash, lua, tcc), B (grafica, Doom),
+                                                  # C (disco), D (GUI), E (estresse); exit 0 = verde
+    .\regressao.ps1 -NoBuild -OnlyE -StressRuns 5 # estresse 5x seguidas (etapas de trava, memoria,
+                                                  # processos, threads e sinais)
+    python tools\regress.py ABCDE                 # a mesma regressao em Python (Linux e CI)
 
-Estresse (etapas que mexem em trava, escalonador, memoria, processos, threads
-ou sinais), 5 vezes seguidas:
+O build precisa de Python 3 (`tools\python.ps1` acha; `setup.ps1` instala) e
+baixa sozinho o Zig 0.16.0 (`tools\zig.ps1`) e o Freedoom (`tools\freedoom.ps1`)
+na primeira vez, com SHA-256 conferido. Os programas ficam em `user/musl/<nome>`
+(um `main.c` e/ou um `build.txt`); a interface propria do Orion para eles esta
+em `user/include/orion.h`. A regressao demora uns 20 minutos; o estresse 5x,
+outros 10.
 
-    .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
-
-Proxima etapa: 1.12.
+Proxima etapa: 2.1.
 
 ## Checklist
 
@@ -27,20 +33,20 @@ Proxima etapa: 1.12.
 | 0.3 | Mutex que dorme, AHCI | [x] | 22:16 | 22:41 | `4d55e72` |
 | 0.4 | FAT e cache de blocos com mutex | [x] | 22:42 | 23:08 | `076285d` |
 | 0.5 | Harness em Python e CI | [x] | 23:09 | 23:39 | `bc9a8e0` |
-| 0.6 | Shell: `&`, jobs, fg, wait, `VAR=x cmd`, `&&`, `\|\|`, `;` | [x] | 23:40 | 00:00 | (ver diario) |
-| 0.7 | Limites: 256 fds, 256 processos, ulimit | [x] | 00:00 | 01:09 | (ver diario) |
-| 1.1 | Pilha inicial do Linux (auxv) | [x] | 00:55 | 01:29 | (ver diario) |
-| 1.2 | Syscalls de partida da musl | [x] | 01:29 | 01:51 | (ver diario) |
-| 1.3 | Arquivos no formato do Linux | [x] | 01:51 | 02:13 | (ver diario) |
-| 1.4 | Memoria do jeito Linux (VMAs, mmap) | [x] | 02:13 | 02:51 | (ver diario) |
-| 1.5 | Programas contra a musl com `zig cc` (plano B: musl pelo build.ps1) | [x] | 02:52 | 03:10 | (ver diario) |
-| 1.6 | Threads (clone) | [x] | 03:10 | 03:50 | (ver diario) |
-| 1.7 | futex | [x] | 03:50 | 04:28 | (ver diario) |
-| 1.8 | Tempo e sinais completos | [x] | 04:28 | 05:37 | (ver diario) |
-| 1.9 | dash, lua, sbase | [x] | 05:37 | 06:28 | (ver diario) |
-| 1.10 | Doom | [x] | 06:28 | 07:10 | (ver diario) |
-| 1.11 | tcc dentro do Orion | [x] | 07:10 | 07:54 | (ver diario) |
-| 1.12 | Programas na musl, aposentar a libc propria | [ ] | | | |
+| 0.6 | Shell: `&`, jobs, fg, wait, `VAR=x cmd`, `&&`, `\|\|`, `;` | [x] | 23:40 | 00:00 | `d924ee2` |
+| 0.7 | Limites: 256 fds, 256 processos, ulimit | [x] | 00:00 | 01:09 | `0af3cc4` |
+| 1.1 | Pilha inicial do Linux (auxv) | [x] | 00:55 | 01:29 | `88ce390` |
+| 1.2 | Syscalls de partida da musl | [x] | 01:29 | 01:51 | `e809b3a` |
+| 1.3 | Arquivos no formato do Linux | [x] | 01:51 | 02:13 | `dd00ea2` |
+| 1.4 | Memoria do jeito Linux (VMAs, mmap) | [x] | 02:13 | 02:51 | `0edfa7e` |
+| 1.5 | Programas contra a musl com `zig cc` (plano B: musl pelo build.ps1) | [x] | 02:52 | 03:10 | `a37486a` |
+| 1.6 | Threads (clone) | [x] | 03:10 | 03:50 | `5871386` |
+| 1.7 | futex | [x] | 03:50 | 04:28 | `f40fab9` |
+| 1.8 | Tempo e sinais completos | [x] | 04:28 | 05:37 | `a75d6ab` |
+| 1.9 | dash, lua, sbase | [x] | 05:37 | 06:28 | `7208886` |
+| 1.10 | Doom | [x] | 06:28 | 07:10 | `fe72b5e` |
+| 1.11 | tcc dentro do Orion | [x] | 07:10 | 07:54 | `4f1b270` |
+| 1.12 | Programas na musl, aposentar a libc propria | [x] | 07:54 | 08:50 | (ver diario) |
 | 2.1 | VFS com inodes | [ ] | | | |
 | 2.2 | tmpfs | [ ] | | | |
 | 2.3 | procfs | [ ] | | | |
@@ -480,3 +486,22 @@ Zig com espacos, `install` que nao apagava sobras...).
 Regressao 213 -> 218, estresse 5x verde.
 Pendente: `mremap` com `MREMAP_FIXED` ou em area de arquivo; panico sem
 memoria para tabela de pagina (8.4).
+
+#### 1.12 Programas proprios na musl - 07:54 as 08:50 - FEITO (fecha o M1)
+Os 53 programas de `user/progs` foram para `user/musl` e a libc propria
+(`user/lib`) e o `user/linker.ld` sairam do repositorio, do `build.ps1`, do
+`check.ps1`, do `Makefile` e do CI. A conversao rodou em seis subagentes em
+paralelo (shell, wm, testes de syscall, testes de processo e dispositivo, rede
+e sistema, utilitarios), cada um compilando o seu lote contra a musl sem
+nenhum aviso; a integracao e a regressao foram feitas depois. A interface
+propria do Orion virou `user/include/orion.h` (framebuffer, `/dev/input`,
+`sysinfo_orion`/`proclist_orion`, `orion_openpty`, ioctls de rede, IP em ordem
+de host e as mensagens de erro em portugues da libc antiga). A regressao
+inteira passou na primeira rodada com os programas novos. A revisao achou 5
+problemas, corrigidos: dois testes do `filetest` que a musl emulava sozinha
+(passariam com o kernel quebrado) agora usam syscall crua, o `forktest` ganhou
+um teste do heap do `brk` atraves do `fork`, e mudar o `orion.h` recompila os
+programas.
+Regressao 218 -> 218 (mesmas verificacoes, agora sobre a musl), estresse 5x
+verde. Versao 2.0.0 e tag `v2.0`: fases 0 e 1 completas, marco M1 ("rodar
+`dash`, `lua`, `tcc` e Doom compilados para Linux, sem mudar uma linha deles").

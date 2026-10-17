@@ -1156,3 +1156,36 @@ Uma linha por decisao, na ordem em que foram tomadas.
     memoria livre ainda entra em panico, como a falta de pagina (etapa 8.4); e
     um `mremap` de faixa que atravessa duas areas vizinhas iguais da `EFAULT`
     (o Orion nao funde areas vizinhas; o Linux funde).
+
+## v2.0.0-a12 (programas proprios na musl, libc propria aposentada)
+
+- Os 53 programas de `user/progs` foram para `user/musl` e compilam contra a
+  musl; `user/lib` (a libc propria, 1313 linhas) e o `user/linker.ld` sairam.
+  A conversao foi feita por seis subagentes em paralelo, um lote de programas
+  cada (shell, wm, testes de syscall, testes de processo e dispositivo, rede e
+  sistema, utilitarios), com a regra de manter cada texto que a regressao
+  confere; a integracao, a regressao e a revisao foram feitas depois.
+- O que e do Orion e nao existe no Linux fica num cabecalho so,
+  `user/include/orion.h`, que todo programa da musl enxerga: framebuffer e
+  `/dev/input`, `sysinfo_orion`/`proclist_orion` (syscalls proprias 1002 e
+  1003), `orion_openpty` (o `openpty` da musl abriria `/dev/ptmx`, que o Orion
+  nao tem), os ioctls de rede e `orion_inet_aton`/`orion_inet_ntoa` (IP em
+  ordem de host, como a libc propria fazia).
+- As mensagens de erro continuam em portugues: `orion_strerror` e
+  `orion_perror` tem a tabela da libc propria (a musl so tem ingles). O `sh`
+  e o `kill` guardam a tabela de nomes de sinais em portugues.
+- Diferencas da musl tratadas na conversao: o `sh` e o `wm` deixam o stdout
+  sem buffer, como a libc propria (a ordem entre `printf` e `write` direto no
+  terminal importa no editor de linha); os outros seguem o padrao da musl
+  (linha no terminal, bloco em pipe e arquivo), entao, redirecionados para o
+  mesmo arquivo, saida e erro podem aparecer em outra ordem. `fflush` antes de
+  `fork`. O `edit` refaz o modo cru da libc propria (so `ICANON` e `ECHO`),
+  porque o `cfmakeraw` da musl tambem desligaria o Ctrl+C. Testes que
+  conferem o kernel (`badptr`, `sctest`, `filetest`, `memtest`, `fputest`)
+  chamam as syscalls cruas, para a musl nao validar nem emular antes.
+- Depois de uma revisao, antes do commit: dois testes do `filetest`
+  (`open` com `O_CLOEXEC` e `F_DUPFD_CLOEXEC`) passaram a usar syscall crua,
+  porque a musl emula os dois sozinha e o teste passaria com o kernel
+  quebrado; o `forktest` ganhou um teste do heap do `brk` atraves do `fork`
+  (o `malloc` da musl usa `mmap`, e o teste de heap antigo deixou de exercitar
+  o `brk`); mudar o `orion.h` recompila os programas que o usam.

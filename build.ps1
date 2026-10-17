@@ -86,56 +86,13 @@ Write-Host "  LD   out\$Kernel.elf"
 & $Lld @LdFlags -o $KernelElf @objects
 if ($LASTEXITCODE -ne 0) { throw "Erro no link do kernel" }
 
-$UCFlags = @(
-    "--target=x86_64-unknown-none-elf", "-std=gnu11", "-O2", "-g", "-Wall", "-Wextra",
-    "-ffreestanding", "-nostdlibinc", "-fno-stack-protector", "-fno-pic", "-fno-pie",
-    "-mno-sse", "-mno-sse2", "-mno-mmx", "-mno-80387", "-Wno-unused-parameter", "-I$UserDir\lib"
-)
-$ULdFlags = @(
-    "-m", "elf_x86_64", "-nostdlib", "-static", "-z", "max-page-size=0x1000",
-    "-z", "noexecstack", "-T", (Join-Path $UserDir "linker.ld")
-)
-$ulibSrcs = @(Get-ChildItem (Join-Path $UserDir "lib") -Filter *.c)
-$ulibHeaders = @(Get-ChildItem (Join-Path $UserDir "lib") -Recurse -Filter *.h)
-$newestUlibHeader = ($ulibHeaders | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
-
 $userBins = @{}
-foreach ($prog in Get-ChildItem (Join-Path $UserDir "progs") -Directory) {
-    $uobjDir = Join-Path $BuildDir "user\$($prog.Name)"
-    New-Item -ItemType Directory -Path $uobjDir -Force | Out-Null
-    $uobjs = @()
-    $progHeaders = @(Get-ChildItem $prog.FullName -Filter *.h -ErrorAction SilentlyContinue)
-    $newestProgHeader = $newestUlibHeader
-    if ($progHeaders.Count -gt 0) {
-        $h = ($progHeaders | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
-        if ($h -gt $newestProgHeader) { $newestProgHeader = $h }
-    }
-    foreach ($usrc in ($ulibSrcs + @(Get-ChildItem $prog.FullName -Filter *.c))) {
-        $uobj = Join-Path $uobjDir ($usrc.Name + ".o")
-        $ustale = -not (Test-Path $uobj)
-        if (-not $ustale) {
-            $uobjTime = (Get-Item $uobj).LastWriteTime
-            $ustale = ($uobjTime -lt $usrc.LastWriteTime) -or ($uobjTime -lt $newestProgHeader)
-        }
-        if ($ustale) {
-            Write-Host "  UCC  $($prog.Name)\$($usrc.Name)"
-            & $Clang @UCFlags -c $usrc.FullName -o $uobj
-            if ($LASTEXITCODE -ne 0) { throw "Erro compilando $($prog.Name)\$($usrc.Name)" }
-        }
-        $uobjs += $uobj
-    }
-    $uelf = Join-Path $OutDir "$($prog.Name).elf"
-    Write-Host "  ULD  out\$($prog.Name).elf"
-    & $Lld @ULdFlags -o $uelf @uobjs
-    if ($LASTEXITCODE -ne 0) { throw "Erro no link de $($prog.Name)" }
-    $userBins[$prog.Name] = $uelf
-}
 
 $MuslDir = Join-Path $UserDir "musl"
 if (Test-Path $MuslDir) {
     $Zig = & (Join-Path $Root "tools\zig.ps1")
     $MuslFlags = @("cc", "-target", "x86_64-linux-musl", "-static", "-O2", "-s", "-Wall", "-Wextra",
-                   "-Wno-unused-parameter")
+                   "-Wno-unused-parameter", ("-I" + (Join-Path $UserDir "include")))
     $muslLinks = @{}
     $muslInstalls = @()
     $PyCmd = $null
@@ -188,6 +145,7 @@ if (Test-Path $MuslDir) {
         }
         $msrcs += @(Get-ChildItem $prog.FullName -Filter *.c -File)
         $mdeps += @(Get-ChildItem $prog.FullName -Filter *.h -File)
+        $mdeps += @(Get-ChildItem (Join-Path $UserDir "include") -Filter *.h -File -ErrorAction SilentlyContinue)
         if (Test-Path $genDir) { $mdeps += @(Get-ChildItem $genDir -Filter *.h -File) }
         $mdeps += Get-Item $spec -ErrorAction SilentlyContinue
         $newest = ($msrcs + $mdeps | Where-Object { $_ } | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
@@ -207,6 +165,9 @@ New-Item -ItemType Directory -Force -Path (Join-Path $EspDir "EFI\BOOT"), (Join-
 Copy-Item (Join-Path $LimineDir "BOOTX64.EFI") (Join-Path $EspDir "EFI\BOOT\BOOTX64.EFI") -Force
 Copy-Item $KernelElf (Join-Path $EspDir "boot\$Kernel.elf") -Force
 foreach ($name in $userBins.Keys) { Copy-Item $userBins[$name] (Join-Path $EspDir "bin\$name") -Force }
+foreach ($old in Get-ChildItem (Join-Path $EspDir "bin") -File) {
+    if (-not $userBins.ContainsKey($old.Name)) { Remove-Item $old.FullName -Force }
+}
 foreach ($inst in $muslInstalls) {
     $from = (Resolve-Path $inst[0]).Path
     $to = if ($inst[1] -eq ".") { $EspDir } else { Join-Path $EspDir $inst[1] }

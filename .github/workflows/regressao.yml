@@ -25,7 +25,7 @@ jobs:
           tar -xJf zig.tar.xz -C third_party/zig --strip-components=1
 
       - name: Build
-        run: make -j"$(nproc)" && python3 tools/musl_build.py
+        run: make -j"$(nproc)"
 
       - name: Regressao A a E
         run: python3 tools/regress.py ABCDE

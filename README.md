@@ -1,13 +1,21 @@
 # Orion
 
 Sistema operacional x86_64 escrito do zero em C (gnu11), bootado pelo Limine.
-Kernel com SMP, memoria virtual, processos, sinais, filas de espera, fork
-copy-on-write, FAT com leitura e escrita, e um compositor de janelas em espaco
-de usuario.
+Kernel com SMP, memoria virtual com areas (VMAs) e paginas sob demanda, fork
+copy-on-write, threads, futex, sinais no formato do Linux, FAT com leitura e
+escrita, rede IPv4 (UDP/ICMP) e um compositor de janelas em espaco de usuario.
+
+Desde a versao 2.0 o espaco de usuario e Linux: os programas sao binarios
+estaticos x86_64 ligados contra a musl, e o Orion roda software de terceiros
+sem mudar uma linha dele: `dash`, `lua`, o `sbase`, o `tcc` (que compila C
+dentro do proprio sistema) e o Doom.
 
 ## Requisitos (Windows)
-`.\setup.ps1` instala tudo via winget: LLVM (clang + ld.lld), QEMU e Git,
-e baixa o Limine 12.8.0 para `third_party\limine`.
+`.\setup.ps1` instala via winget o LLVM (clang + ld.lld), o QEMU, o Git e o
+Python 3, e baixa o Limine 12.8.0 para `third_party\limine` e o Zig 0.16.0
+(que traz a musl) para `third_party\zig`. O primeiro build que tem o `doom`
+baixa o Freedoom (`tools\freedoom.ps1`). Todos os downloads tem o SHA-256
+conferido; versoes e origens estao em `third_party\LICENSES.md`.
 
 ## Uso
     .\build.ps1                    # compila (incremental)
@@ -15,25 +23,40 @@ e baixa o Limine 12.8.0 para `third_party\limine`.
     .\build.ps1 -Run -Smp 4 -Disk  # idem, com um segundo disco cru de 64 MiB
     .\build.ps1 -Run -Smp 4 -Gui   # boota direto na interface grafica
     .\build.ps1 -Clean             # limpa
-    .\check.ps1                    # so analise sintatica (erros e warnings)
-    .\regressao.ps1                # bateria de testes automatica (exit 0 = verde)
+    .\check.ps1                    # analise do kernel e dos programas (erros e warnings)
+    .\regressao.ps1                # bateria automatica (exit 0 = verde)
 
 No QEMU a serial aparece no terminal. A entrada da serial e do teclado vao para
 o mesmo shell; `Ctrl+K` alterna entre o shell de usuario (`/bin/sh`) e o shell
 de diagnostico do kernel (`orion>`), que tem `help`.
 
-### Shell
+### Shell (`/bin/sh`)
     ls /bin | grep test | sort | wc     pipelines de ate 8 estagios
     echo oi > a.txt                     redireciona a saida (>, >>, <, 2>)
-    setas, Home, End, Delete            edicao da linha
-    setas cima/baixo                    historico (ultimos 50), builtin `history`
-    Ctrl+C                              interrompe o programa em primeiro plano
-    Ctrl+L                              limpa a tela
-    Ctrl+D                              sai
-    NOME=valor                          variavel de ambiente
-    echo $NOME  ou  echo ${NOME}        expansao
-    PATH=/bin                           onde procurar os programas
-    builtins: cd, pwd, sync, clear, history, export, unset, exit, help
+    cmd1 ; cmd2   cmd1 && cmd2   cmd1 || cmd2
+    cmd &   jobs   fg   wait            trabalhos em segundo plano
+    VAR=x cmd                           variavel so para o comando
+    echo $? $NOME ${NOME}               status do ultimo comando e expansao
+    ulimit -a / -n / -u / -s            limites do processo
+    sh -c 'linha'                       o que o system() e o popen() da musl usam
+    setas, Home, End, Delete            edicao da linha; setas cima/baixo: historico
+    Ctrl+C / Ctrl+L / Ctrl+D            interrompe / limpa a tela / sai
+    builtins: cd, pwd, sync, clear, history, export, unset, jobs, fg, wait, ulimit, exit, help
+
+Para um shell POSIX completo (aspas, funcoes, `case`, `while`, here-doc...)
+use o `dash`.
+
+### Software portado
+    dash        shell POSIX (dash 0.5.13.5)
+    lua         Lua 5.4.9 (lua -e 'print(2^10)', os.execute, io.popen)
+    tcc         TinyCC: tcc /lib/tcc/hello.c -o /oi && /oi
+    doom        doom -iwad /doom/freedoom1.wad -nogui   (Ctrl atira, espaco usa, setas andam)
+    sbase-box   97 utilitarios do sbase; 29 deles tambem em /bin (find, xargs, seq, tr, cut,
+                expr, od, printf, test, ...); os outros: sbase-box <nome> ...
+
+As fontes estao em `third_party/` como vieram. O que o `configure`/`make`
+deles geraria sai de geradores em `tools/` (`dash_gen.py`, `sbase_box.py`,
+`tcc_gen.py`), chamados pelo `build.txt` de cada programa.
 
 ### Interface grafica
 No `/bin/sh`, o comando `wm` inicia o compositor: uma janela de terminal com o
@@ -42,16 +65,11 @@ No `/bin/sh`, o comando `wm` inicia o compositor: uma janela de terminal com o
     Ctrl+T       novo terminal
     Ctrl+Q       fecha a janela focada
     Ctrl+Alt+X   encerra o wm e devolve o teclado ao TTY
-
     Ctrl+P       janela de processos
     Ctrl+F       navegador de arquivos
 
-Clicar em "Orion 1.0" na barra de topo abre o menu (terminal, processos,
-arquivos, sobre, encerrar). A barra mostra o IP, a memoria usada e o relogio.
-
 Arraste pela barra de titulo para mover; clique para focar; o `x` fecha.
-O terminal grafico entende as sequencias ANSI de cursor, apagamento e cores
-(16 cores), o que faz o `edit` e o historico do `sh` funcionarem igual ao TTY.
+O terminal grafico entende as sequencias ANSI de cursor, apagamento e cores.
 
 ### Boot direto na interface grafica
 O `init` le `/etc/autostart` no boot: uma linha por comando, `#` e comentario, e
@@ -60,16 +78,15 @@ O `init` le `/etc/autostart` no boot: uma linha por comando, `#` e comentario, e
 sobe direto no `wm`.
 
 ### Disco de escrita
-O `out\esp` que o QEMU expoe com `fat:rw:` **nao** aguenta escrita de verdade
-(o driver vvfat do proprio QEMU aborta). Para exercitar o FAT com escrita use um
-disco cru:
+O `out\esp` que o QEMU expoe com `fat:rw:` aguenta pouca escrita (o vvfat do
+QEMU). Para exercitar o FAT de verdade use um disco cru:
 
     .\build.ps1 -Run -Smp 4 -Disk    # cria out\disk.img (64 MiB, zerado)
     mkfs /dev/sdb ORION              # formata em FAT16, dentro do Orion
     Ctrl+K -> mount -> Ctrl+K        # monta em /mnt
     fstest -a /mnt                   # bateria completa de escrita
 
-### Testes sem janela grafica
+### Testes
 `test.ps1` roda o QEMU com `-display none`, serial em TCP 4444 e monitor em
 TCP 4445. Ele envia comandos ao shell, injeta teclado e mouse pelo monitor,
 tira screenshots (PPM convertido para PNG) e salva o log da serial.
@@ -78,40 +95,31 @@ tira screenshots (PPM convertido para PNG) e salva o log da serial.
     .\test.ps1 -Smp 4 -Screenshot out\shots\tela.ppm
     .\test.ps1 -Smp 4 -Disk -Script @("cmd:mkfs /dev/sdb","wait:10")
 
-Passos aceitos em `-Script`: `cmd:<linha>` (envia ao shell), `raw:<texto>`,
-`key:<hex>` (um byte cru; `key:0B` e o Ctrl+K), `mon:<comando do monitor>`,
-`wait:<segundos>`, `shot:<arquivo.ppm>`.
+Passos aceitos em `-Script`: `cmd:<linha>`, `raw:<texto>`, `key:<hex>` (um
+byte cru; `key:0B` e o Ctrl+K), `keys:<hex>`, `mon:<comando do monitor>`,
+`wait:<segundos>`, `until:<segundos>:<texto>` (espera o texto aparecer depois
+do ultimo comando) e `shot:<arquivo.ppm>`.
 
-`regressao.ps1` roda quatro sequencias e falha se algum marcador esperado sumir:
-A (texto e rede), B (grafica, com screenshots), C (disco cru, escrita e shell) e
-D (boot direto na interface grafica).
+`regressao.ps1` roda cinco sequencias e falha se algum marcador esperado sumir:
+A (texto, rede, musl, threads, dash, lua, tcc), B (grafica e Doom, com
+screenshots), C (disco cru e escrita), D (boot direto na interface grafica) e
+E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
 
-## Programas em /bin
-    sh       shell com pipelines, redirecionamentos, historico e edicao de linha
-    init     primeiro processo, mantem o sh vivo
-    ls cat echo wc date sleep hello         utilitarios basicos
-    cp mv rm mkdir touch head tail          arquivos
-    grep sort uniq tee                      texto
-    edit     editor de tela cheia (Ctrl+S salva, Ctrl+X sai)
-    ifconfig mostra ou configura a rede (ifconfig dhcp pede endereco)
-    ping     manda ICMP echo (ping 10.0.2.2 4)
-    nslookup consulta um registro A no DNS
-    dhcp     pede endereco, mascara, gateway e DNS
-    mkfs     formata um disco em FAT16 (ex.: mkfs /dev/sdb ORION)
-    top      processos, memoria e copy-on-write, atualizando a cada segundo
-    env      mostra o ambiente ou roda um comando com variaveis novas
-    printenv imprime uma ou todas as variaveis
-    clear    limpa a tela
-    memtest  auto-teste de mmap, malloc, stat, snprintf
-    fstest   auto-teste do sistema de arquivos (-a inclui 300 arquivos e 3 MiB)
-    polltest auto-teste de poll, pipes e O_NONBLOCK
-    sigtest  auto-teste de sinais, mascaras e alarm
-    forktest auto-teste do fork copy-on-write (-s deixa 8 filhos vivos)
-    ptytest  abre um pty, roda o sh nele e injeta comandos
-    crash    escreve em memoria do kernel (testa a protecao de ring 3)
-    fbtest   pinta um gradiente e um retangulo em /dev/fb0
-    evtest   imprime eventos de /dev/input por alguns segundos
-    wm       compositor de janelas
+    .\regressao.ps1 -OnlyA          # so uma sequencia (OnlyA..OnlyE)
+    .\regressao.ps1 -NoBuild -OnlyE -StressRuns 5    # o estresse 5 vezes seguidas
+    python tools\regress.py ABCDE   # a mesma regressao em Python (Linux e CI)
+
+## Programas proprios em /bin
+    sh init edit wm top ps free uptime time kill env printenv clear
+    ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
+    ifconfig ping nslookup dhcp mkfs
+    testes: memtest fstest polltest forktest ptytest limtest stress sctest filetest
+            auxtest fputest badptr crash fbtest evtest
+    testes da musl: mhello mthreads mfutex sigtest
+
+Sao programas da musl como os portados (`user/musl/<nome>`); o que e proprio do
+Orion (framebuffer, `/dev/input`, pty, informacoes de processo e de rede) esta
+em `user/include/orion.h`.
 
 ### Rede
 O QEMU sobe uma e1000 com a rede de usuario (SLIRP): 10.0.2.15 para o Orion,
@@ -119,41 +127,42 @@ O QEMU sobe uma e1000 com a rede de usuario (SLIRP): 10.0.2.15 para o Orion,
 
     dhcp                      pega endereco, mascara, gateway e DNS
     ifconfig                  mostra a interface e os contadores da placa
-    ifconfig 10.0.2.15 255.255.255.0 10.0.2.2 10.0.2.3     configura a mao
     ping 10.0.2.2 4           ICMP echo
     nslookup example.com      consulta A no DNS
-    Ctrl+K -> net, arp        estado da pilha e cache ARP
 
-A pilha faz ARP, IPv4, ICMP e UDP; sockets sao `SOCK_DGRAM` e `SOCK_RAW`
-(socket, bind, connect, sendto, recvfrom). Nao tem TCP. O `test.ps1` grava todo
-o trafego em `out\net.pcap`.
+A pilha faz ARP, IPv4, ICMP e UDP; sockets `SOCK_DGRAM` e `SOCK_RAW`. TCP vem
+na fase 3. O `test.ps1` grava o trafego em `out\net.pcap`.
 
 ## Dispositivos em /dev
     /dev/fb0        framebuffer: ioctl FBIOGET_INFO / FBIOREDRAW, mmap
-    /dev/input      eventos de teclado e mouse (captura exclusiva enquanto aberto)
+    /dev/input      eventos de teclado (todas as teclas, inclusive modificadoras) e mouse
     /dev/tty        terminal fisico (serial + console)
-    /dev/sda /dev/sdb ...   discos e particoes, leitura e escrita por deslocamento
+    /dev/sda /dev/sdb ...   discos e particoes
 
 ## Chamadas de sistema
-Numeros do Linux onde existe equivalente: read, write, open, close, stat, fstat,
-poll, lseek, mmap, munmap, brk, ioctl, pipe, dup, dup2, nanosleep, getpid, fork,
-execve, exit, wait4, getcwd, chdir, getppid, arch_prctl, clock_gettime, fcntl,
-kill, rt_sigaction, rt_sigprocmask, rt_sigreturn, alarm, setpgid, getpgid,
-rename, mkdir, rmdir, unlink, fsync, ftruncate, sync, socket, bind, connect,
-sendto, recvfrom; e quatro proprios:
+Numeros e estruturas do Linux x86_64: arquivos (`openat` e os `*at`,
+`getdents64`, `stat` de 144 bytes), memoria (`mmap` com arquivo e
+`MAP_FIXED`, `mprotect`, `madvise`, `mremap`), processos e threads (`clone`,
+`futex`, `exit_group`, `set_tid_address`), sinais com 64 sinais, `SA_RESTART`
+e quadro `rt_sigframe`, tempo (`clock_gettime` com todos os relogios,
+`clock_nanosleep`, `setitimer`, `getrusage`). A lista completa, com o que e
+parcial, esta em `docs/SYSCALLS.md`. Quatro numeros sao proprios do Orion:
 readdir (1000), openpty (1001), sysinfo (1002) e proclist (1003).
 
 ## Layout
     kernel/include/   headers (kernel/, lib/, drivers/, arch/x86_64/, mm/, fs/, boot/)
     kernel/src/       fontes, mesma divisao
-    user/lib/         libc propria (headers padrao) + fonte 8x8
-    user/progs/       um diretorio por programa
-    third_party/      Limine (bootloader) - baixado pelo setup.ps1
-    linker.ld         layout do ELF (higher half, 0xffffffff80000000)
+    user/musl/        um diretorio por programa (main.c e/ou build.txt)
+    user/include/     orion.h: a interface propria do Orion para os programas
+    third_party/      Limine, dash, lua, sbase, doomgeneric, tinycc (como vieram);
+                      Zig e Freedoom sao baixados (fora do git)
+    tools/            Zig, Freedoom e Python; geradores de build; harness em Python
+    linker.ld         layout do ELF do kernel (higher half, 0xffffffff80000000)
     limine.conf       configuracao do bootloader
-    docs/             decisoes de arquitetura, relatorios e diario do turno
+    docs/             plano, decisoes, chamadas de sistema, diario e relatorios
     build/ out/       gerados (out/esp = pasta que o QEMU boota como disco FAT)
 
 ## Toolchain
-clang/lld como cross-compiler (`--target=x86_64-unknown-none-elf`), sem libc,
-sem SSE/x87 no kernel, red zone desligada, modelo de codigo "kernel".
+Kernel: clang/lld como cross-compiler (`--target=x86_64-unknown-none-elf`), sem
+libc, sem SSE/x87 no kernel, red zone desligada, modelo de codigo "kernel".
+Programas: `zig cc -target x86_64-linux-musl -static`.

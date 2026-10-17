@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 FLAGS = ["cc", "-target", "x86_64-linux-musl", "-static", "-O2", "-s", "-Wall", "-Wextra",
-         "-Wno-unused-parameter"]
+         "-Wno-unused-parameter", "-I" + str(ROOT / "user" / "include")]
 
 
 def find_zig():
@@ -63,6 +63,7 @@ def program_spec(prog, zig):
                 installs.append((gen / src, dst))
     srcs += sorted(prog.glob("*.c"))
     deps += sorted(prog.glob("*.h"))
+    deps += sorted((ROOT / "user" / "include").glob("*.h"))
     if gen.exists():
         deps += sorted(gen.glob("*.h"))
     return srcs, extra, deps, links, installs
