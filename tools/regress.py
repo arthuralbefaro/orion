@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+import argparse
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import qrun
+
+ROOT = qrun.ROOT
+PS1 = ROOT / "regressao.ps1"
+
+STRING = re.compile(r'"((?:[^"`]|`.)*)"|\'((?:[^\']|\'\')*)\'')
+
+
+def ps_string(m):
+    if m.group(1) is not None:
+        s = m.group(1)
+        return re.sub(r"`(.)", lambda e: {"n": "\n", "r": "\r", "t": "\t", "0": "\0"}.get(e.group(1), e.group(1)), s)
+    return m.group(2).replace("''", "'")
+
+
+def parse_sequences():
+    src = PS1.read_text(encoding="utf-8")
+    seqs = {}
+    blocks = re.split(r"^if \(\$runAll -or \$Only([A-Z])\) \{\s*$", src, flags=re.M)
+    for i in range(1, len(blocks), 2):
+        name = blocks[i]
+        body = blocks[i + 1]
+        end = re.search(r"^\}\s*$", body, flags=re.M)
+        if end:
+            body = body[:end.start()]
+        seq = {"name": name, "steps": [], "expect": [], "memdelta": None, "disk": False, "gui": False,
+               "delay": 1.0, "boot": 60.0, "remove_disk": False, "log": f"out/reg-{name.lower()}.log",
+               "stress": None}
+        m = re.search(r"\$steps" + name + r"\s*=\s*@\((.*?)^\s*\)\s*$", body, flags=re.S | re.M)
+        if m:
+            seq["steps"] = [ps_string(s) for s in STRING.finditer(m.group(1))]
+        call = re.search(r'test\.ps1"\)(.*?)\|\s*Out-Null', body, flags=re.S)
+        if call:
+            c = call.group(1)
+            seq["disk"] = "-Disk" in c
+            seq["gui"] = "-Gui" in c
+            d = re.search(r"-CommandDelay\s+([\d.]+)", c)
+            if d:
+                seq["delay"] = float(d.group(1))
+            b = re.search(r"-BootTimeout\s+([\d.]+)", c)
+            if b:
+                seq["boot"] = float(b.group(1))
+            lp = re.search(r'-LogPath\s+"([^"]+)"', c)
+            if lp:
+                seq["log"] = lp.group(1).replace("\\", "/")
+        seq["remove_disk"] = bool(re.search(r'Remove-Item \(Join-Path \$Root "out\\disk\.img"\)', body))
+        for e in re.finditer(r'^\s*Expect \$\w+ ("(?:[^"`]|`.)*"|\'(?:[^\']|\'\')*\') ("(?:[^"`]|`.)*"|\'(?:[^\']|\'\')*\')\s*$',
+                             body, flags=re.M):
+            pat = ps_string(STRING.match(e.group(1)))
+            desc = ps_string(STRING.match(e.group(2)))
+            seq["expect"].append((pat, desc))
+        md = re.search(r'^\s*Test-MemDelta \$\w+ "([^"]+)" (\d+)\s*$', body, flags=re.M)
+        if md:
+            seq["memdelta"] = (md.group(1), int(md.group(2)))
+        st = re.search(r"\$stressCmd\s*=\s*\"([^\"]+)\"", body)
+        if st:
+            seq["stress"] = st.group(1)
+        seqs[name] = seq
+    return seqs
+
+
+class Report:
+    def __init__(self):
+        self.checks = 0
+        self.failures = []
+
+    def expect(self, log, pattern, desc):
+        self.checks += 1
+        if re.search(pattern, log, flags=re.I):
+            print(f"  [ok]    {desc}")
+        else:
+            print(f"  [FALHA] {desc}   (padrao: {pattern})")
+            self.failures.append(desc)
+
+    def memdelta(self, log, desc, limit):
+        self.checks += 1
+        m = re.findall(r"Paginas: \d+ total, (\d+) usadas", log)
+        if len(m) < 2:
+            print(f"  [FALHA] {desc}   (precisa de dois 'mem', achei {len(m)})")
+            self.failures.append(desc)
+            return
+        a, b = int(m[0]), int(m[-1])
+        d = abs(b - a)
+        if d <= limit:
+            print(f"  [ok]    {desc} ({a} -> {b}, delta {d})")
+        else:
+            print(f"  [FALHA] {desc} ({a} -> {b}, delta {d} > {limit})")
+            self.failures.append(desc)
+
+
+def run_stress(seq, rep, runs, smp):
+    cmd = seq["stress"]
+    for i in range(1, runs + 1):
+        log_path = f"out/reg-e-{i}.log"
+        _, log = qrun.run([f"cmd:{cmd}", "cmd:echo FIM$X-ESTRESSE", "until:1200:FIM-ESTRESSE"], smp=smp,
+                          no_build=True, log_path=log_path)
+        rep.expect(log, r"\nFIM-ESTRESSE", f"estresse rodada {i}: pipeline terminou")
+        rep.expect(log, r"stress: \d+ processos, 0 falha\(s\) ok", f"estresse rodada {i}: 0 falhas")
+        rep.checks += 1
+        if re.search(r"PANIC|EXCECAO|deadlock|watchdog|FALHA|fork devolveu 0", log):
+            print(f"  [FALHA] estresse rodada {i}: panico, deadlock ou falha no log ({log_path})")
+            rep.failures.append(f"estresse rodada {i}: log limpo")
+        else:
+            print(f"  [ok]    estresse rodada {i}: sem panico, deadlock ou falha")
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Regressao do Orion (le os passos do regressao.ps1)")
+    ap.add_argument("which", nargs="?", default="ABCDE", help="sequencias, ex.: ABCDE ou AC")
+    ap.add_argument("--smp", type=int, default=4)
+    ap.add_argument("--no-build", action="store_true")
+    ap.add_argument("--stress-runs", type=int, default=1)
+    ap.add_argument("--verbose", action="store_true")
+    a = ap.parse_args()
+
+    seqs = parse_sequences()
+    rep = Report()
+    built = a.no_build
+    for name in a.which.upper():
+        seq = seqs.get(name)
+        if not seq:
+            print(f"sequencia {name} nao existe no regressao.ps1")
+            rep.failures.append(f"sequencia {name}")
+            continue
+        print(f"== Sequencia {name} ==")
+        if seq["stress"]:
+            if not built:
+                qrun.build(False)
+                built = True
+            run_stress(seq, rep, a.stress_runs, a.smp)
+            continue
+        if seq["remove_disk"]:
+            (ROOT / "out" / "disk.img").unlink(missing_ok=True)
+        no_build = built and not seq["gui"]
+        if seq["gui"] and a.no_build:
+            no_build = True
+        _, log = qrun.run(seq["steps"], smp=a.smp, disk=seq["disk"], gui=seq["gui"], no_build=no_build,
+                          boot_timeout=seq["boot"], command_delay=seq["delay"], log_path=seq["log"])
+        built = built or not seq["gui"]
+        if seq["gui"]:
+            qrun.write_autostart(False)
+        if a.verbose:
+            print(log)
+        for pat, desc in seq["expect"]:
+            rep.expect(log, pat, desc)
+        if seq["memdelta"]:
+            rep.memdelta(log, *seq["memdelta"])
+
+    print()
+    if not rep.failures:
+        print(f"REGRESSAO VERDE ({rep.checks} verificacoes)")
+        sys.exit(0)
+    print(f"REGRESSAO VERMELHA: {len(rep.failures)} de {rep.checks} falharam")
+    for f in rep.failures:
+        print(f"  - {f}")
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

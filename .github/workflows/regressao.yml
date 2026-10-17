@@ -1,0 +1,33 @@
+name: regressao
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  regressao:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ferramentas
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld llvm make qemu-system-x86 ovmf python3-pil
+
+      - name: Build
+        run: make -j"$(nproc)"
+
+      - name: Regressao A a E
+        run: python3 tools/regress.py ABCDE
+
+      - name: Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: |
+            out/*.log
+            out/shots/*.png

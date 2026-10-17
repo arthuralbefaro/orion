@@ -16,7 +16,7 @@ ou sinais), 5 vezes seguidas:
 
     .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
 
-Proxima etapa: 0.4.
+Proxima etapa: 0.6.
 
 ## Checklist
 
@@ -25,8 +25,8 @@ Proxima etapa: 0.4.
 | 0.1 | Commit da v1.9 e dos programas novos | [x] | 19:22 | 20:20 | `58bb747` |
 | 0.2 | Copia segura de memoria de usuario | [x] | 20:22 | 22:20 | `8b3d171` |
 | 0.3 | Mutex que dorme, AHCI | [x] | 22:25 | 23:05 | `4d55e72` |
-| 0.4 | FAT e cache de blocos com mutex | [x] | 23:05 | 23:45 | (este commit) |
-| 0.5 | Harness em Python e CI | [ ] | | | |
+| 0.4 | FAT e cache de blocos com mutex | [x] | 23:05 | 23:50 | `076285d` |
+| 0.5 | Harness em Python e CI | [x] | 23:55 | 00:50 | (ver diario) |
 | 0.6 | Shell: `&`, jobs, fg, wait, `VAR=x cmd`, `&&`, `\|\|`, `;` | [ ] | | | |
 | 0.7 | Limites: 256 fds, 256 processos, ulimit | [ ] | | | |
 | 1.1 | Pilha inicial do Linux (auxv) | [ ] | | | |
@@ -194,3 +194,30 @@ blocos, entao a contencao do `ahci*` fica em 0; quem disputa de verdade e o
 cache, que a 0.4 troca por mutex.
 A partir desta etapa, antes de cada commit roda o comando do dono que procura
 `//` e `/*` nos arquivos de codigo staged.
+
+#### 0.4 FAT e cache de blocos com mutex - 23:05 as 23:50 - commit 076285d - FEITO
+A trava do cache de setores (`bcache`) e a de cada FAT (`fat-sda1`,
+`fat-sdb`) viraram mutex; ordem `fat-*` -> `bcache` -> `ahci*`. A sequencia C
+roda duas `fstest -a` ao mesmo tempo (diretorios /mnt/p1 e /mnt/p2), as duas
+passam, e a tabela do `mutex` mostra disputa com espera dormindo (numa rodada:
+`fat-sdb` 17 disputas, `bcache` 14). Regressao 99 -> 102, estresse 5x verde.
+Como o `&` so chega na 0.6, o paralelismo usa um pipeline com a saida da
+primeira instancia redirecionada para arquivo.
+Ao commitar, o comando do dono que procura comentarios pegou quatro
+comentarios antigos no `fat.c` (de antes do intensivo); removidos, o porque
+deles ja estava no DECISOES (v1.3). Tambem tirei um BOM que um
+`Set-Content -Encoding utf8` colocou no diario.
+
+#### 0.5 Harness em Python e CI - 23:55 as 00:50 - FEITO
+`tools/qrun.py` (equivalente ao `test.ps1`, com os mesmos passos) e
+`tools/regress.py`, que le os passos e as verificacoes do proprio
+`regressao.ps1` em vez de manter uma segunda copia. Sequencia nova E no
+`regressao.ps1` (estresse, `-OnlyE`, `-StressRuns N`); o estresse 5x das
+proximas etapas passa a ser `.\regressao.ps1 -OnlyE -StressRuns 5`.
+`python tools/regress.py ABCDE` verde no Windows (105 verificacoes, iguais as
+do `.\regressao.ps1`). Workflow `.github/workflows/regressao.yml` (Ubuntu
+24.04: `make` + `tools/regress.py ABCDE`).
+O que faltou: o workflow so roda quando o dono fizer push, e nesta maquina nao
+ha Linux para conferir o caminho do `make` (o WSL so tem a distro do Docker e
+o daemon do Docker estava parado). O `qrun.py` foi escrito para os dois
+sistemas, mas so o caminho do Windows foi exercitado.

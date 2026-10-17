@@ -468,3 +468,25 @@ Uma linha por decisao, na ordem em que foram tomadas.
 - A sequencia C da regressao roda duas `fstest -a` ao mesmo tempo (um pipeline
   com a saida da primeira redirecionada para arquivo, enquanto o shell ainda nao
   tem `&`) e confere na tabela do `mutex` que houve disputa e espera dormindo.
+
+## v1.9.4 (harness em Python e CI)
+
+- `tools/qrun.py` faz o que o `test.ps1` faz (QEMU sem janela, serial e
+  monitor por TCP, os mesmos passos `cmd:`, `raw:`, `key:`, `keys:`, `mon:`,
+  `wait:`, `until:`, `shot:`) e roda em Linux, WSL, GitHub Actions e Windows.
+  O firmware UEFI vem do diretorio do QEMU (Windows) ou do pacote `ovmf`.
+- `tools/regress.py` nao tem uma copia dos passos: ele le o `regressao.ps1`
+  (listas `$stepsX`, linhas `Expect` e `Test-MemDelta`, opcoes da chamada ao
+  `test.ps1`) e executa. Duas listas para manter em sincronia acabariam
+  divergindo; assim o `regressao.ps1` continua sendo a fonte unica e o dono
+  segue usando os mesmos comandos. As regex sao avaliadas sem diferenciar
+  maiusculas, como o `-match` do PowerShell.
+- No Linux o build e o `make` (o `Makefile` ja existia); o autostart, que o
+  `build.ps1` grava, e gravado pelo `qrun.py`.
+- Sequencia nova E na regressao: o estresse do plano
+  (`stress 3000 16` x4 em pipeline), uma rodada por padrao;
+  `.\regressao.ps1 -OnlyE -StressRuns 5` e o estresse 5x das etapas que mexem
+  em trava, escalonador, memoria, processos, threads ou sinais.
+- `.github/workflows/regressao.yml` roda `make` e `tools/regress.py ABCDE` num
+  Ubuntu 24.04 a cada push. Ele so roda quando o dono fizer push; daqui nao da
+  para verificar (o intensivo nao faz push).

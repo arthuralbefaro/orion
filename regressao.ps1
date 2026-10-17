@@ -5,6 +5,8 @@ param(
     [switch]$OnlyB,
     [switch]$OnlyC,
     [switch]$OnlyD,
+    [switch]$OnlyE,
+    [int]$StressRuns = 1,
     [switch]$Verbose
 )
 
@@ -12,7 +14,7 @@ $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 $failures = @()
 $checks = 0
-$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD)
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -24,6 +26,16 @@ function Expect([string]$log, [string]$pattern, [string]$what) {
         Write-Host ("  [ok]    " + $what) -ForegroundColor Green
     } else {
         Write-Host ("  [FALHA] " + $what + "   (padrao: " + $pattern + ")") -ForegroundColor Red
+        $script:failures += $what
+    }
+}
+
+function ExpectNot([string]$log, [string]$pattern, [string]$what) {
+    $script:checks++
+    if ($log -notmatch $pattern) {
+        Write-Host ("  [ok]    " + $what) -ForegroundColor Green
+    } else {
+        Write-Host ("  [FALHA] " + $what + "   (achou: " + $Matches[0] + ")") -ForegroundColor Red
         $script:failures += $what
     }
 }
@@ -288,6 +300,23 @@ if ($runAll -or $OnlyD) {
     Expect $d "wm: janela de arquivos em /" "Ctrl\+F abriu a janela de arquivos"
     Expect $d "wm: encerrando" "Ctrl\+Alt\+X encerrou o wm"
     Expect $d "init: /bin/wm terminou" "init percebeu a saida do wm"
+}
+
+# ---------------- Sequencia E: estresse de processos ----------------
+if ($runAll -or $OnlyE) {
+    Write-Host "== Sequencia E (estresse) ==" -ForegroundColor Cyan
+    $stressCmd = "stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16"
+    for ($i = 1; $i -le $StressRuns; $i++) {
+        $stepsE = @("cmd:$stressCmd", 'cmd:echo FIM$X-ESTRESSE', "until:1200:FIM-ESTRESSE",
+                    "key:0B", "cmd:procs", "cmd:ps", "wait:1")
+        & (Join-Path $Root "test.ps1") -Smp $Smp -NoBuild -LogPath "out\reg-e-$i.log" `
+            -Script $stepsE -CommandDelay 1.0 -BootTimeout 60 -NoPrint | Out-Null
+        $e = Get-Log "out\reg-e-$i.log"
+        if ($Verbose) { Write-Output $e }
+        Expect $e "\nFIM-ESTRESSE" "estresse $i`: o pipeline terminou"
+        Expect $e "stress: \d+ processos, 0 falha\(s\) ok" "estresse $i`: 0 falhas"
+        ExpectNot $e "PANIC|EXCECAO|deadlock|watchdog|stress \d+: |fork devolveu 0" "estresse $i`: sem panico, deadlock ou erro do stress"
+    }
 }
 
 Write-Host ""
