@@ -94,43 +94,6 @@ static long walk_user(int dirfd, const char *upath, struct vnode **out, struct u
     return r;
 }
 
-static long sys_sysinfo(struct user_sysinfo *uout)
-{
-    struct user_sysinfo out;
-    memset(&out, 0, sizeof(out));
-    struct pmm_stats st;
-    pmm_get_stats(&st);
-    uint64_t faults, copies;
-    vmm_cow_stats(&faults, &copies);
-    out.total_pages = st.total_pages;
-    out.used_pages = st.used_pages;
-    out.free_pages = st.free_pages;
-    out.shared_pages = pmm_shared_pages();
-    out.cow_faults = faults;
-    out.uptime_ms = time_uptime_ms();
-    struct heap_stats hs;
-    heap_get_stats(&hs);
-    out.heap_used = hs.slab_bytes_used + hs.large_bytes_used;
-    out.cpus = smp_cpu_count();
-    out.procs = (uint32_t)process_count();
-    return copy_to_user(uout, &out, sizeof(out));
-}
-
-static long sys_proclist(struct user_procinfo *uout, int max)
-{
-    if (max <= 0 || max > 256)
-        return -EINVAL;
-    if (!user_range_ok((uint64_t)uout, sizeof(*uout) * (uint64_t)max))
-        return -EFAULT;
-    struct user_procinfo *list = kzalloc(sizeof(*list) * (size_t)max);
-    if (!list)
-        return -ENOMEM;
-    int n = process_list(list, max);
-    long r = copy_to_user(uout, list, sizeof(*list) * (size_t)n);
-    kfree(list);
-    return r < 0 ? r : n;
-}
-
 static long sys_read(int fd, void *ubuf, size_t len)
 {
     struct file *f = process_fd_pin(fd);
@@ -1694,8 +1657,6 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_GETRLIMIT:   ret = sys_getrlimit((int)f->rdi, (struct user_rlimit *)f->rsi); break;
     case SYS_SETRLIMIT:   ret = sys_setrlimit((int)f->rdi, (const struct user_rlimit *)f->rsi); break;
     case SYS_PRLIMIT64:   ret = sys_prlimit64((int)f->rdi, (int)f->rsi, (const struct user_rlimit *)f->rdx, (struct user_rlimit *)f->r10); break;
-    case SYS_SYSINFO:     ret = sys_sysinfo((struct user_sysinfo *)f->rdi); break;
-    case SYS_PROCLIST:    ret = sys_proclist((struct user_procinfo *)f->rdi, (int)f->rsi); break;
     case SYS_SOCKET:      ret = sys_socket((int)f->rdi, (int)f->rsi, (int)f->rdx); break;
     case SYS_BIND:        ret = sys_bind((int)f->rdi, (const struct sockaddr_in *)f->rsi, (uint32_t)f->rdx); break;
     case SYS_CONNECT:     ret = sys_connect((int)f->rdi, (const struct sockaddr_in *)f->rsi, (uint32_t)f->rdx); break;

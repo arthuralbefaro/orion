@@ -1398,3 +1398,57 @@ Uma linha por decisao, na ordem em que foram tomadas.
   escrita que falhava no meio deixava tabelas da radix alem do fim do
   arquivo, contadas no limite ate o `unlink`; escrita curta e `truncate`
   agora liberam o que passa do fim.
+
+## v2.1.0-a3 (procfs)
+
+- `proc` e o quarto tipo da VFS, montado so leitura em `/proc` no boot. Nada
+  fica guardado: o vnode carrega na chave o pid, o tipo de entrada e o numero
+  do descritor, e o conteudo de cada arquivo e gerado inteiro na hora do
+  `open` (num buffer que vive ate o `close`). Assim quem le em varios
+  pedacos ve um retrato so, e `lseek` funciona. Tamanho no `stat` e 0, como
+  no Linux.
+- Entradas: `/proc/<pid>/{status,cmdline,maps,stat,fd/}`, `self` (um
+  diretorio que aponta para o processo que pergunta; vira link simbolico na
+  2.7), `meminfo`, `cpuinfo`, `uptime`, `loadavg`, `mounts` e `version`.
+  `fd/N` le o caminho do arquivo aberto (o caminho guardado no `open`;
+  `/dev/tty`, `pipe:` etc. para o resto), ate os links simbolicos.
+  `meminfo` tem os campos do Linux e tres do Orion (`KernelHeap`,
+  `CowShared`, `CowFaults`/`CowCopies`).
+- Ler outro processo exigiu duas mudancas no nucleo: o processo ganhou um
+  contador de pinos (`process_get`/`process_put`), e a liberacao do processo,
+  se houver pino, fica para o ultimo `put` (quem chega a zero primeiro, o
+  `free` ou o `put`, faz a liberacao, com troca atomica de uma flag). E a
+  lista de VMAs passou a mudar sempre com `mm_lock`: o `exec` (que troca o
+  espaco de enderecamento) e a saida do processo nao pegavam a trava porque
+  so havia uma thread; agora o `/proc/<pid>/maps` de outro processo le a
+  lista com a mesma trava.
+- O processo guarda a linha de comando (ate 4 KiB, argumentos separados por
+  NUL, trocada sob `p->tlock` no `exec`) e o caminho do executavel (o nome
+  das areas da imagem no `maps`).
+- As syscalls 1002 (`sysinfo`) e 1003 (`proclist`) sairam. O `orion.h` tem
+  `orion_sysinfo`, `orion_proclist` e `orion_free_pages`, que leem do
+  `/proc`; `ps`, `top`, `free`, `uptime`, a janela de processos do `wm`, o
+  `memtest`, o `limtest` e o `tmptest` usam essas funcoes. Os testes de
+  vazamento medem so `MemFree` (contar os processos lista `/proc`, e o buffer
+  grande do `getdents64` tem liberacao adiada no heap, o que da ruido de
+  algumas paginas).
+- Teste: `proctest` (status, cmdline, maps acompanhando `mmap`/`mprotect`/
+  `munmap`, fd, zumbi, pid sumindo depois do `wait`, `maps` aberto antes de o
+  processo morrer, `EROFS`); o criterio da etapa e `cat /proc/self/maps` na
+  regressao.
+- Revisao adversarial, corrigido: na saida do processo os descritores eram
+  soltos antes de a entrada da tabela ser zerada e sem `p->tlock`, e o
+  `/proc/<pid>/fd/N` de um processo saindo lia um `struct file` ja liberado
+  (agora a saida e a falha do `fork` usam o mesmo `process_fd_close`: tira da
+  tabela com a trava, solta depois); um filho ja colhido mas ainda preso pelo
+  `/proc` guardava o ponteiro para o pai, que podia ja ter sido liberado (o
+  `unregister` zera o ponteiro); o caminho do executavel e trocado junto com
+  as VMAs, sob `mm_lock`. O gancho `open` dos sistemas de arquivos passou a
+  devolver o erro (`int open(v, flags, &file)`): abrir um arquivo do `/proc`
+  de um processo que acabou de sair da `ENOENT` em vez de `ENODEV`. E o
+  `orion_proclist` devolve a lista do mais novo para o mais velho, como a
+  syscall antiga, para o `ps`, o `top` e o `wm` nao mudarem de ordem.
+- Segunda rodada: com mais de 256 processos o `orion_proclist` ficava com os
+  mais velhos (le todo o `/proc` e guarda os mais novos agora); e um nome de
+  executavel com quebra de linha forjava campos no `/proc/<pid>/status`
+  (o `exec` troca controles e parenteses do nome por `?`).

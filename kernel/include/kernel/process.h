@@ -27,6 +27,7 @@ struct user_rlimit {
 #define USER_STACK_MAX   (8 * 1024 * 1024)
 #define USER_HEAP_MAX    (64 * 1024 * 1024)
 #define PROCESS_CWD_MAX  256
+#define PROCESS_EXE_MAX  128
 
 struct thread;
 struct file;
@@ -84,13 +85,25 @@ struct process {
     uint8_t *fd_flags;
     int fd_cap;
     struct user_rlimit rlimits[RLIMIT_COUNT];
+    char *cmdline;
+    uint32_t cmdline_len;
+    char exe[PROCESS_EXE_MAX];
+    uint32_t pins;
+    bool free_pending;
     struct process *next;
 };
+
+#define PROCESS_CMDLINE_MAX 4096
 
 struct process *process_create_elf(const char *name, const void *image, size_t size);
 struct process *process_spawn_path(const char *path, const char *const *argv);
 struct process *process_current(void);
 struct process *process_find(uint32_t pid);
+struct process *process_get(uint32_t pid);
+void process_put(struct process *p);
+int process_pids(uint32_t *out, int max);
+uint32_t process_ppid(struct process *p);
+uint32_t process_cmdline(struct process *p, char *out, uint32_t size);
 
 int  process_fork(struct interrupt_frame *frame);
 int  process_fork_stack(struct interrupt_frame *frame, uint64_t newsp);
@@ -128,7 +141,6 @@ void process_update_cwd_path(struct process *p, struct vnode *v, const char *pat
 bool process_resolve_path(struct process *p, const char *path, char *out, size_t out_size);
 
 void process_dump(void);
-int  process_list(struct user_procinfo *out, int max);
 int  process_count(void);
 int  process_getppid(void);
 long process_getrlimit(int resource, struct user_rlimit *out);

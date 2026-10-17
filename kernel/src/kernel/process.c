@@ -253,16 +253,92 @@ static void user_thread_entry(void *arg)
     enter_user_mode(p->entry, p->stack_top);
 }
 
-static void process_free(struct process *p)
+static void process_free_now(struct process *p)
 {
-    if (!p)
-        return;
     vma_release_all(p);
     vnode_put(p->cwd_vn);
+    kfree(p->cmdline);
     kfree(p->sig_handlers);
     kfree(p->fds);
     kfree(p->fd_flags);
     kfree(p);
+}
+
+static void process_free(struct process *p)
+{
+    if (!p)
+        return;
+    __atomic_store_n(&p->free_pending, true, __ATOMIC_SEQ_CST);
+    bool expect = true;
+    if (__atomic_load_n(&p->pins, __ATOMIC_SEQ_CST) == 0 &&
+        __atomic_compare_exchange_n(&p->free_pending, &expect, false, false, __ATOMIC_SEQ_CST,
+                                    __ATOMIC_SEQ_CST))
+        process_free_now(p);
+}
+
+void process_put(struct process *p)
+{
+    if (!p)
+        return;
+    bool expect = true;
+    if (__atomic_sub_fetch(&p->pins, 1, __ATOMIC_SEQ_CST) == 0 &&
+        __atomic_compare_exchange_n(&p->free_pending, &expect, false, false, __ATOMIC_SEQ_CST,
+                                    __ATOMIC_SEQ_CST))
+        process_free_now(p);
+}
+
+static void set_name(char *dst, size_t size, const char *name)
+{
+    strlcpy(dst, name, size);
+    for (char *c = dst; *c; c++)
+        if ((unsigned char)*c < 0x20 || *c == 0x7F || *c == '(' || *c == ')')
+            *c = '?';
+}
+
+static char *join_argv(const char *const *argv, uint32_t *len_out)
+{
+    uint32_t len = 0;
+    for (int i = 0; argv && argv[i]; i++) {
+        uint32_t n = (uint32_t)strlen(argv[i]) + 1;
+        if (len + n > PROCESS_CMDLINE_MAX)
+            break;
+        len += n;
+    }
+    char *buf = kmalloc(len ? len : 1);
+    if (!buf)
+        return NULL;
+    uint32_t at = 0;
+    for (int i = 0; argv && argv[i]; i++) {
+        uint32_t n = (uint32_t)strlen(argv[i]) + 1;
+        if (at + n > len)
+            break;
+        memcpy(buf + at, argv[i], n);
+        at += n;
+    }
+    *len_out = at;
+    return buf;
+}
+
+static void set_cmdline(struct process *p, char *cmd, uint32_t len)
+{
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    char *old = p->cmdline;
+    p->cmdline = cmd;
+    p->cmdline_len = cmd ? len : 0;
+    spin_unlock_irqrestore(&p->tlock, flags);
+    kfree(old);
+}
+
+uint32_t process_cmdline(struct process *p, char *out, uint32_t size)
+{
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    uint32_t n = p->cmdline_len < size ? p->cmdline_len : size;
+    if (p->cmdline)
+        memcpy(out, p->cmdline, n);
+    else
+        n = 0;
+    spin_unlock_irqrestore(&p->tlock, flags);
+    return n;
 }
 
 static void rlimits_default(struct process *p)
@@ -425,6 +501,7 @@ static void unregister_locked(struct process *p)
     if (*pp)
         *pp = p->next;
     orphan_children_locked(p);
+    p->parent = NULL;
 }
 
 static void process_unregister(struct process *p)
@@ -492,6 +569,9 @@ struct process *process_create_elf(const char *name, const void *image, size_t s
     }
     give_std_fds(p);
     p->cwd_vn = vfs_root();
+    uint32_t clen;
+    p->cmdline = join_argv(argv, &clen);
+    p->cmdline_len = p->cmdline ? clen : 0;
     p->autofree = true;
     return process_start(p, name);
 }
@@ -521,6 +601,10 @@ struct process *process_spawn_path(const char *path, const char *const *argv)
     }
     give_std_fds(p);
     p->cwd_vn = vfs_root();
+    uint32_t clen;
+    p->cmdline = join_argv(argv ? argv : def, &clen);
+    strlcpy(p->exe, path, sizeof(p->exe));
+    p->cmdline_len = p->cmdline ? clen : 0;
     p->autofree = true;
     return process_start(p, name);
 }
@@ -536,6 +620,34 @@ struct process *process_find(uint32_t pid)
         if (p->pid == pid)
             return p;
     return NULL;
+}
+
+struct process *process_get(uint32_t pid)
+{
+    uint64_t flags = spin_lock_irqsave(&proc_lock);
+    struct process *p = process_find(pid);
+    if (p)
+        __atomic_add_fetch(&p->pins, 1, __ATOMIC_SEQ_CST);
+    spin_unlock_irqrestore(&proc_lock, flags);
+    return p;
+}
+
+int process_pids(uint32_t *out, int max)
+{
+    uint64_t flags = spin_lock_irqsave(&proc_lock);
+    int n = 0;
+    for (struct process *p = processes; p && n < max; p = p->next)
+        out[n++] = p->pid;
+    spin_unlock_irqrestore(&proc_lock, flags);
+    return n;
+}
+
+uint32_t process_ppid(struct process *p)
+{
+    uint64_t flags = spin_lock_irqsave(&proc_lock);
+    uint32_t ppid = p->parent ? p->parent->pid : 0;
+    spin_unlock_irqrestore(&proc_lock, flags);
+    return ppid;
 }
 
 int process_fd_limit(struct process *p)
@@ -778,6 +890,12 @@ int process_fork_stack(struct interrupt_frame *frame, uint64_t newsp)
     child->cwd_vn = parent->cwd_vn;
     if (child->cwd_vn)
         vnode_get(child->cwd_vn);
+    strlcpy(child->exe, parent->exe, sizeof(child->exe));
+    child->cmdline = parent->cmdline ? kmalloc(parent->cmdline_len ? parent->cmdline_len : 1) : NULL;
+    if (child->cmdline) {
+        memcpy(child->cmdline, parent->cmdline, parent->cmdline_len);
+        child->cmdline_len = parent->cmdline_len;
+    }
     if (!fd_table_resize(child, parent->fd_cap)) {
         spin_unlock_irqrestore(&parent->tlock, tflags);
         vmm_destroy_address_space(child->pml4_phys);
@@ -796,7 +914,7 @@ int process_fork_stack(struct interrupt_frame *frame, uint64_t newsp)
     if (!copy) {
         for (int i = 0; i < child->fd_cap; i++)
             if (child->fds[i])
-                file_unref(child->fds[i]);
+                process_fd_close(child, i);
         vmm_destroy_address_space(child->pml4_phys);
         process_free(child);
         return -ENOMEM;
@@ -814,7 +932,7 @@ int process_fork_stack(struct interrupt_frame *frame, uint64_t newsp)
         kfree(copy);
         for (int i = 0; i < child->fd_cap; i++)
             if (child->fds[i])
-                file_unref(child->fds[i]);
+                process_fd_close(child, i);
         vmm_destroy_address_space(child->pml4_phys);
         process_free(child);
         return -ENOMEM;
@@ -890,6 +1008,9 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
     }
     path = full;
 
+    uint32_t clen = 0;
+    char *cmd = join_argv((const char *const *)argv, &clen);
+    mutex_lock(&p->mm_lock);
     uint64_t old_pml4 = p->pml4_phys;
     uint64_t old_pages = p->pages, old_entry = p->entry;
     struct vma *old_vmas = p->vmas;
@@ -910,13 +1031,15 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
         p->brk_start = old_brk_start;
         p->brk = old_brk;
         ret = -ENOEXEC;
+        mutex_unlock(&p->mm_lock);
+        kfree(cmd);
     } else {
         const char *name = path;
         for (const char *c = path; *c; c++)
             if (*c == '/')
                 name = c + 1;
-        strlcpy(p->name, name, sizeof(p->name));
-        strlcpy(thread_current()->name, name, THREAD_NAME_MAX);
+        set_name(p->name, sizeof(p->name), name);
+        set_name(thread_current()->name, THREAD_NAME_MAX, name);
         signal_reset_on_exec(p);
         thread_current()->fs_base = 0;
         wrmsr(MSR_IA32_FS_BASE, 0);
@@ -933,6 +1056,9 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
         p->vmas = old_vmas;
         vma_release_all(p);
         p->vmas = new_vmas;
+        strlcpy(p->exe, full, sizeof(p->exe));
+        mutex_unlock(&p->mm_lock);
+        set_cmdline(p, cmd, clen);
 
         memset(frame, 0, offsetof(struct interrupt_frame, rip));
         frame->rip = p->entry;
@@ -1082,11 +1208,11 @@ static NORETURN void thread_leave(int status)
     p->alarm_at = 0;
     p->alarm_interval = 0;
     for (int i = 0; i < p->fd_cap; i++)
-        if (p->fds[i]) {
-            file_unref(p->fds[i]);
-            p->fds[i] = NULL;
-        }
+        if (p->fds[i])
+            process_fd_close(p, i);
+    mutex_lock(&p->mm_lock);
     vma_release_all(p);
+    mutex_unlock(&p->mm_lock);
     while (p->free_n)
         pmm_free_page(p->free_batch[--p->free_n]);
     flags = spin_lock_irqsave(&p->tlock);
@@ -1449,23 +1575,6 @@ int process_count(void)
     int n = 0;
     for (struct process *p = processes; p; p = p->next)
         n++;
-    spin_unlock_irqrestore(&proc_lock, flags);
-    return n;
-}
-
-int process_list(struct user_procinfo *out, int max)
-{
-    uint64_t flags = spin_lock_irqsave(&proc_lock);
-    int n = 0;
-    for (struct process *p = processes; p && n < max; p = p->next) {
-        out[n].pid = p->pid;
-        out[n].ppid = p->parent ? p->parent->pid : 0;
-        out[n].pgid = p->pgid;
-        out[n].state = (uint32_t)p->state;
-        out[n].pages = p->pages;
-        strlcpy(out[n].name, p->name, PROCLIST_NAME);
-        n++;
-    }
     spin_unlock_irqrestore(&proc_lock, flags);
     return n;
 }

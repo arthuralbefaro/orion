@@ -90,7 +90,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 158 | arch_prctl | parcial | `ARCH_SET_FS` e `ARCH_GET_FS` |
 | 160 | setrlimit | completa | subir o maximo da `EPERM` |
 | 162 | sync | completa | |
-| 165 | mount | parcial | tipos `vfat` (`fat`, `msdos`) com dispositivo de bloco, `devfs` (`devtmpfs`) e `tmpfs` (opcao `size=`); `MS_RDONLY`; `MS_NOSUID`, `MS_NODEV`, `MS_NOEXEC`, `MS_SYNCHRONOUS`, `MS_SILENT` e os de `atime` aceitos sem efeito; `MS_REMOUNT`, `MS_BIND` e `MS_MOVE` dao `EINVAL`; um ponto de montagem por diretorio |
+| 165 | mount | parcial | tipos `vfat` (`fat`, `msdos`) com dispositivo de bloco, `devfs` (`devtmpfs`), `tmpfs` (opcoes `size=` e `nr_inodes=`) e `proc`; `MS_RDONLY`; `MS_NOSUID`, `MS_NODEV`, `MS_NOEXEC`, `MS_SYNCHRONOUS`, `MS_SILENT` e os de `atime` aceitos sem efeito; `MS_REMOUNT`, `MS_BIND` e `MS_MOVE` dao `EINVAL`; um ponto de montagem por diretorio |
 | 166 | umount2 | parcial | `EBUSY` com arquivo aberto, cwd ou montagem dentro; so a flag `UMOUNT_NOFOLLOW` (`MNT_FORCE`, `MNT_DETACH`, `MNT_EXPIRE` dao `EINVAL`) |
 | 186 | gettid | completa | tid de cada thread; a principal tem o pid |
 | 200 | tkill | completa | |
@@ -118,8 +118,6 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 439 | faccessat2 | parcial | `AT_EACCESS`, `AT_SYMLINK_NOFOLLOW`, `AT_EMPTY_PATH`; como o `faccessat`, so confere a existencia (permissoes na 4.1) |
 | 1000 | readdir | propria | uma entrada por chamada; a libc usa o `getdents64` |
 | 1001 | openpty | propria | |
-| 1002 | sysinfo | propria | sai na 2.3 (`/proc`) |
-| 1003 | proclist | propria | sai na 2.3 (`/proc`) |
 
 Chamadas bloqueantes interrompidas por sinal (pipe, terminal, pty, `/dev/input`,
 `recvfrom`, `wait4`, `futex` sem prazo) sao reiniciadas sozinhas quando o
@@ -128,5 +126,8 @@ handler tem `SA_RESTART`; sem ele, devolvem `EINTR`. `poll`, `nanosleep`,
 retomadas (com o prazo que sobrava) quando o sinal nao chega a rodar handler
 nesta thread, como no Linux. 219 (`restart_syscall`) e interna: e o que a
 retomada de uma espera com prazo usa.
+
+1002 (`sysinfo`) e 1003 (`proclist`), proprias do Orion, sairam na 2.3: a
+mesma informacao esta em `/proc/meminfo`, `/proc/uptime` e `/proc/<pid>/status`.
 
 Qualquer outro numero devolve `ENOSYS` e deixa um aviso no log do kernel.

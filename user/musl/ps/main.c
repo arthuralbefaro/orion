@@ -6,7 +6,7 @@ int main(int argc, char **argv)
 {
     int full = argc > 1 && strcmp(argv[1], "-l") == 0;
     struct procinfo_orion list[PROCLIST_MAX];
-    int n = proclist_orion(list, PROCLIST_MAX);
+    int n = orion_proclist(list, PROCLIST_MAX);
     if (n < 0) {
         fprintf(stderr, "ps: proclist falhou\n");
         return 1;

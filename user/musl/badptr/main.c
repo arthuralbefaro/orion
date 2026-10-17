@@ -160,8 +160,8 @@ int main(void)
     expect_efault("mkdir com caminho invalido", syscall2(SYS_mkdir, UNMAPPED, 0755));
     expect_efault("unlink com caminho invalido", syscall1(SYS_unlink, UNMAPPED));
     expect_efault("rename com caminho invalido", syscall2(SYS_rename, UNMAPPED, UNMAPPED));
-    expect_efault("sysinfo com buffer invalido", syscall1(ORION_SYS_SYSINFO, UNMAPPED));
-    expect_efault("proclist com buffer invalido", syscall2(ORION_SYS_PROCLIST, UNMAPPED, 4));
+    expect_efault("mount com destino invalido", syscall6(SYS_mount, (long)"devfs", UNMAPPED, (long)"devfs", 0, 0, 0));
+    expect_efault("umount2 com caminho invalido", syscall2(SYS_umount2, UNMAPPED, 0));
     expect_efault("readdir com buffer invalido", syscall3(ORION_SYS_READDIR, dir, UNMAPPED, 0));
     expect_efault("ioctl TCGETS com buffer invalido", syscall3(SYS_ioctl, 0, TCGETS_N, UNMAPPED));
     expect_efault("ioctl TIOCGWINSZ com buffer invalido", syscall3(SYS_ioctl, 0, TIOCGWINSZ_N, KERNEL));

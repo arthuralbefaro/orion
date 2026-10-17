@@ -22,7 +22,7 @@ na primeira vez, com SHA-256 conferido. Os programas ficam em `user/musl/<nome>`
 em `user/include/orion.h`. A regressao demora uns 20 minutos; o estresse 5x,
 outros 10.
 
-Proxima etapa: 2.3.
+Proxima etapa: 2.4.
 
 ## Checklist
 
@@ -48,8 +48,8 @@ Proxima etapa: 2.3.
 | 1.11 | tcc dentro do Orion | [x] | 07:10 | 07:54 | `4f1b270` |
 | 1.12 | Programas na musl, aposentar a libc propria | [x] | 07:54 | 08:50 | 171ba11 |
 | 2.1 | VFS com inodes | [x] | 08:51 | 11:05 | 9f729b3 |
-| 2.2 | tmpfs | [x] | 11:06 | 11:47 | (ver diario) |
-| 2.3 | procfs | [ ] | | | |
+| 2.2 | tmpfs | [x] | 11:06 | 11:47 | 3b80cdc |
+| 2.3 | procfs | [x] | 11:48 | 12:52 | (ver diario) |
 | 2.4 | Cache de paginas unificado | [ ] | | | |
 | 2.5 | ext2 leitura, piloto em Rust | [ ] | | | |
 | 2.6 | ext2 escrita, mkfs.ext2, fsck | [ ] | | | |
@@ -546,3 +546,18 @@ Regressao 243 -> 254, estresse 5x verde. Versao 2.1.0-a2.
 Licao de processo: rodar o `test.ps1` enquanto a regressao roda derruba o
 QEMU da regressao (as portas 4444/4445 sao as mesmas); uma sequencia C
 "falhou" por isso.
+
+#### 2.3 procfs - 11:48 as 12:52 - FEITO
+`/proc` montado so leitura no boot: `/proc/<pid>/{status,cmdline,maps,stat,fd/}`,
+`self`, `meminfo`, `cpuinfo`, `uptime`, `loadavg`, `mounts`, `version`. O
+conteudo e gerado inteiro no `open`. Ler outro processo pediu pinos no
+processo (a liberacao espera o ultimo leitor) e VMAs trocadas sempre com
+`mm_lock` (o `exec` e a saida nao pegavam). `ps`, `top`, `free`, `uptime`, a
+janela de processos do `wm` e os testes de memoria leem do `/proc` pelo
+`orion.h`; as syscalls 1002 e 1003 sairam. `proctest` novo; o criterio da
+etapa (`cat /proc/self/maps` mostra as VMAs) esta na regressao. Duas rodadas
+de revisao: 6 problemas reais na primeira (uso depois de liberar no
+`/proc/<pid>/fd` de processo saindo, ponteiro de pai pendurado, erro errado
+no `open`, ordem do `ps`...), 2 na segunda (lista com mais de 256 processos,
+nome de executavel forjando campos).
+Regressao 254 -> 263, estresse 5x verde. Versao 2.1.0-a3.

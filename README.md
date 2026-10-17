@@ -4,7 +4,7 @@ Sistema operacional x86_64 escrito do zero em C (gnu11), bootado pelo Limine.
 Kernel com SMP, memoria virtual com areas (VMAs) e paginas sob demanda, fork
 copy-on-write, threads, futex, sinais no formato do Linux, VFS com vnodes e
 montagens (`mount`/`umount`; FAT com leitura e escrita na raiz e em `/mnt`,
-devfs em `/dev`, tmpfs em `/tmp` e `/run`), rede IPv4 (UDP/ICMP) e um compositor de janelas em espaco de
+devfs em `/dev`, tmpfs em `/tmp` e `/run`, procfs em `/proc`), rede IPv4 (UDP/ICMP) e um compositor de janelas em espaco de
 usuario.
 
 Desde a versao 2.0 o espaco de usuario e Linux: os programas sao binarios
@@ -118,7 +118,7 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
     ifconfig ping nslookup dhcp mkfs mount umount
-    testes: memtest fstest vfstest tmptest polltest forktest ptytest limtest stress sctest filetest
+    testes: memtest fstest vfstest tmptest proctest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
 
@@ -144,6 +144,13 @@ na fase 3. O `test.ps1` grava o trafego em `out\net.pcap`.
     /dev/tty        terminal fisico (serial + console)
     /dev/sda /dev/sdb ...   discos e particoes
 
+## /proc
+    /proc/<pid>/status cmdline maps stat fd/   cada processo (self = o proprio)
+    /proc/meminfo cpuinfo uptime loadavg mounts version
+O `ps`, o `top`, o `free`, o `uptime` e a janela de processos do `wm` leem
+daqui. `/proc/<pid>/fd/N` ainda e um arquivo com o caminho (vira link
+simbolico na 2.7).
+
 ## Chamadas de sistema
 Numeros e estruturas do Linux x86_64: arquivos (`openat` e os `*at`,
 `getdents64`, `stat` de 144 bytes), memoria (`mmap` com arquivo e
@@ -151,8 +158,8 @@ Numeros e estruturas do Linux x86_64: arquivos (`openat` e os `*at`,
 `futex`, `exit_group`, `set_tid_address`), sinais com 64 sinais, `SA_RESTART`
 e quadro `rt_sigframe`, tempo (`clock_gettime` com todos os relogios,
 `clock_nanosleep`, `setitimer`, `getrusage`). A lista completa, com o que e
-parcial, esta em `docs/SYSCALLS.md`. Quatro numeros sao proprios do Orion:
-readdir (1000), openpty (1001), sysinfo (1002) e proclist (1003).
+parcial, esta em `docs/SYSCALLS.md`. Dois numeros sao proprios do Orion:
+readdir (1000) e openpty (1001); memoria e processos vem do `/proc`.
 
 ## Layout
     kernel/include/   headers (kernel/, lib/, drivers/, arch/x86_64/, mm/, fs/, boot/)

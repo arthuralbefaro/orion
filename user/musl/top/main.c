@@ -22,13 +22,13 @@ static const char *state_name(uint32_t s)
 static void draw(void)
 {
     struct sysinfo_orion si;
-    if (sysinfo_orion(&si) < 0) {
+    if (orion_sysinfo(&si) < 0) {
         fprintf(stderr, "top: sysinfo falhou\n");
         stop = 1;
         return;
     }
     struct procinfo_orion list[PROCLIST_MAX];
-    int n = proclist_orion(list, PROCLIST_MAX);
+    int n = orion_proclist(list, PROCLIST_MAX);
     if (n < 0)
         n = 0;
 

@@ -160,13 +160,14 @@ static int devfs_readdir(struct vnode *dir, uint64_t *pos, vfs_dir_cb cb, void *
     return 0;
 }
 
-static struct file *devfs_open(struct vnode *v, int flags)
+static int devfs_open(struct vnode *v, int flags, struct file **out)
 {
     (void)flags;
     if (v->ino >= DEVFS_BLOCK_INO)
-        return blkdev_file_open(v->priv);
-    const struct device *d = v->priv;
-    return d ? d->open() : NULL;
+        *out = blkdev_file_open(v->priv);
+    else
+        *out = v->priv ? ((const struct device *)v->priv)->open() : NULL;
+    return *out ? 0 : -ENODEV;
 }
 
 static int devfs_mount(struct mount *m, struct blockdev *dev, const char *data)

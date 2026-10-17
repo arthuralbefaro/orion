@@ -37,10 +37,8 @@ static void check(const char *what, int good)
 
 static long used_pages(void)
 {
-    struct sysinfo_orion si;
-    if (sysinfo_orion(&si) < 0)
-        return -1;
-    return (long)si.used_pages;
+    long f = orion_free_pages();
+    return f < 0 ? -1 : -f;
 }
 
 static volatile char *target;

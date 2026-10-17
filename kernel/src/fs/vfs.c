@@ -2,6 +2,7 @@
 #include <fs/fat.h>
 #include <fs/devfs.h>
 #include <fs/tmpfs.h>
+#include <fs/procfs.h>
 #include <fs/block.h>
 #include <kernel/file.h>
 #include <kernel/log.h>
@@ -25,7 +26,7 @@ static struct mount *mounts;
 static struct mount *root_mount;
 static uint32_t next_mount_id = 1;
 
-static const struct fs_type *const fs_types[] = { &fat_fs_type, &devfs_type, &tmpfs_type };
+static const struct fs_type *const fs_types[] = { &fat_fs_type, &devfs_type, &tmpfs_type, &procfs_type };
 
 const struct fs_type *vfs_find_type(const char *name)
 {
@@ -33,6 +34,8 @@ const struct fs_type *vfs_find_type(const char *name)
         name = "vfat";
     if (strcmp(name, "devtmpfs") == 0)
         name = "devfs";
+    if (strcmp(name, "procfs") == 0)
+        name = "proc";
     for (size_t i = 0; i < ARRAY_SIZE(fs_types); i++)
         if (strcmp(fs_types[i]->name, name) == 0)
             return fs_types[i];
@@ -486,21 +489,21 @@ int vfs_open(struct vnode *start, const char *path, int flags, struct file **out
         return r;
     }
 
-    struct file *f;
-    bool device = v->mnt->type->open && !vnode_is_dir(v);
-    if (device) {
-        f = v->mnt->type->open(v, flags);
-        if (f) {
+    struct file *f = NULL;
+    if (v->mnt->type->open && !vnode_is_dir(v)) {
+        r = v->mnt->type->open(v, flags, &f);
+        if (r == 0) {
             f->vn = v;
             if (!f->mode)
                 f->mode = v->mode;
         }
     } else {
         f = file_from_vnode(v, flags);
+        r = f ? 0 : -ENOMEM;
     }
-    if (!f) {
+    if (r < 0) {
         vnode_put(v);
-        return device ? -ENODEV : -ENOMEM;
+        return r;
     }
     *out = f;
     return 0;
@@ -1015,6 +1018,14 @@ int vfs_mount_kernel(const char *type, struct blockdev *dev, const char *source,
     r = vfs_mount(t, dev, source, target, point, 0, NULL);
     vnode_put(target);
     return r;
+}
+
+void vfs_mounts_foreach(void (*cb)(const struct mount *m, void *ctx), void *ctx)
+{
+    mutex_lock(&mount_lock);
+    for (struct mount *m = mounts; m; m = m->next)
+        cb(m, ctx);
+    mutex_unlock(&mount_lock);
 }
 
 const char *vfs_mnt_device(void)

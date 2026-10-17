@@ -40,7 +40,7 @@ struct fs_type {
     int (*unlink)(struct vnode *dir, const char *name, struct vnode *victim);
     int (*rename)(struct vnode *odir, const char *oname, struct vnode *ndir, const char *nname,
                   struct vnode *v, struct vnode *victim);
-    struct file *(*open)(struct vnode *v, int flags);
+    int (*open)(struct vnode *v, int flags, struct file **out);
     void (*release)(struct vnode *v);
 };
 
@@ -126,4 +126,5 @@ bool vfs_sync(void);
 void vfs_flush_init(void);
 bool vfs_mount_extra(void);
 const char *vfs_mnt_device(void);
+void vfs_mounts_foreach(void (*cb)(const struct mount *m, void *ctx), void *ctx);
 int vfs_mount_kernel(const char *type, struct blockdev *dev, const char *source, const char *point);

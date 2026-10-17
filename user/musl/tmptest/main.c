@@ -24,10 +24,7 @@ static void check(const char *what, int ok)
 
 static long free_pages(void)
 {
-    struct sysinfo_orion si;
-    if (sysinfo_orion(&si) < 0)
-        return -1;
-    return (long)si.free_pages;
+    return orion_free_pages();
 }
 
 static const char *P(const char *rel)

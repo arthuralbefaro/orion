@@ -4,7 +4,7 @@
 int main(void)
 {
     struct sysinfo_orion si;
-    if (sysinfo_orion(&si) < 0) {
+    if (orion_sysinfo(&si) < 0) {
         fprintf(stderr, "uptime: sysinfo falhou\n");
         return 1;
     }

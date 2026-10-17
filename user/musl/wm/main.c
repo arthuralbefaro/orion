@@ -143,13 +143,13 @@ static void reap_children(void)
 static void refresh_procs(struct window *w)
 {
     struct procinfo_orion list[PROCLIST_MAX];
-    int n = proclist_orion(list, PROCLIST_MAX);
+    int n = orion_proclist(list, PROCLIST_MAX);
     if (n < 0)
         n = 0;
 
     struct sysinfo_orion si;
     char head[PANEL_COLS];
-    if (sysinfo_orion(&si) == 0)
+    if (orion_sysinfo(&si) == 0)
         snprintf(head, sizeof(head), "%4s %5s %8s  %s   (%u CPUs)", "pid", "ppid", "paginas",
                  "nome", si.cpus);
     else
@@ -219,7 +219,7 @@ static void update_clock(void)
              tm.tm_year + 1900);
 
     struct sysinfo_orion si;
-    if (sysinfo_orion(&si) == 0)
+    if (orion_sysinfo(&si) == 0)
         snprintf(desk.mem, sizeof(desk.mem), "%lu/%lu MiB", si.used_pages * 4096 / (1024 * 1024),
                  si.total_pages * 4096 / (1024 * 1024));
 

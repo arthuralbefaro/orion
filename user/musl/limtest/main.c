@@ -39,7 +39,7 @@ static int open_until_full(int *last_errno)
 static int count_procs(void)
 {
     struct sysinfo_orion si;
-    if (sysinfo_orion(&si) < 0)
+    if (orion_sysinfo(&si) < 0)
         return -1;
     return (int)si.procs;
 }

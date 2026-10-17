@@ -1,16 +1,18 @@
 #pragma once
 
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
 #define ORION_SYS_READDIR  1000
 #define ORION_SYS_OPENPTY  1001
-#define ORION_SYS_SYSINFO  1002
-#define ORION_SYS_PROCLIST 1003
 
 #define FBIOGET_INFO 0x4600
 #define FBIOREDRAW   0x4601
@@ -96,14 +98,139 @@ struct procinfo_orion {
     char name[PROCLIST_NAME];
 };
 
-static inline int sysinfo_orion(struct sysinfo_orion *out)
+static inline int orion_read_text(const char *path, char *buf, int size)
 {
-    return (int)syscall(ORION_SYS_SYSINFO, out);
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return -1;
+    int len = 0;
+    while (len < size - 1) {
+        ssize_t n = read(fd, buf + len, (size_t)(size - 1 - len));
+        if (n <= 0)
+            break;
+        len += (int)n;
+    }
+    close(fd);
+    buf[len] = 0;
+    return len;
 }
 
-static inline int proclist_orion(struct procinfo_orion *out, int max)
+static inline uint64_t orion_field(const char *text, const char *key)
 {
-    return (int)syscall(ORION_SYS_PROCLIST, out, max);
+    size_t klen = strlen(key);
+    for (const char *line = text; line && *line;) {
+        if (strncmp(line, key, klen) == 0 && line[klen] == ':')
+            return strtoull(line + klen + 1, NULL, 10);
+        line = strchr(line, '\n');
+        if (line)
+            line++;
+    }
+    return 0;
+}
+
+static inline int orion_is_pid(const char *name)
+{
+    if (!*name)
+        return 0;
+    for (; *name; name++)
+        if (*name < '0' || *name > '9')
+            return 0;
+    return 1;
+}
+
+static inline int orion_count_procs(void)
+{
+    DIR *d = opendir("/proc");
+    if (!d)
+        return 0;
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d)))
+        if (orion_is_pid(e->d_name))
+            n++;
+    closedir(d);
+    return n;
+}
+
+static inline long orion_free_pages(void)
+{
+    char buf[1024];
+    if (orion_read_text("/proc/meminfo", buf, sizeof(buf)) < 0)
+        return -1;
+    return (long)(orion_field(buf, "MemFree") / 4);
+}
+
+static inline int orion_sysinfo(struct sysinfo_orion *out)
+{
+    char buf[1024];
+    memset(out, 0, sizeof(*out));
+    if (orion_read_text("/proc/meminfo", buf, sizeof(buf)) < 0)
+        return -1;
+    out->total_pages = orion_field(buf, "MemTotal") / 4;
+    out->free_pages = orion_field(buf, "MemFree") / 4;
+    out->used_pages = out->total_pages - out->free_pages;
+    out->shared_pages = orion_field(buf, "CowShared") / 4;
+    out->cow_faults = orion_field(buf, "CowFaults");
+    out->heap_used = orion_field(buf, "KernelHeap") * 1024;
+    if (orion_read_text("/proc/uptime", buf, sizeof(buf)) > 0) {
+        char *dot;
+        uint64_t sec = strtoull(buf, &dot, 10);
+        uint64_t cs = *dot == '.' ? strtoull(dot + 1, NULL, 10) : 0;
+        out->uptime_ms = sec * 1000 + cs * 10;
+    }
+    long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    out->cpus = cpus > 0 ? (uint32_t)cpus : 1;
+    out->procs = (uint32_t)orion_count_procs();
+    return 0;
+}
+
+#define ORION_PROC_SCAN 1024
+
+static inline int orion_proclist(struct procinfo_orion *out, int max)
+{
+    DIR *d = opendir("/proc");
+    if (!d)
+        return -1;
+    uint32_t *pids = malloc(sizeof(uint32_t) * ORION_PROC_SCAN);
+    if (!pids) {
+        closedir(d);
+        return -1;
+    }
+    int total = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) && total < ORION_PROC_SCAN)
+        if (orion_is_pid(e->d_name))
+            pids[total++] = (uint32_t)strtoul(e->d_name, NULL, 10);
+    closedir(d);
+    int n = 0;
+    char path[64], buf[512];
+    for (int i = total - 1; i >= 0 && n < max; i--) {
+        snprintf(path, sizeof(path), "/proc/%u/status", pids[i]);
+        if (orion_read_text(path, buf, sizeof(buf)) <= 0)
+            continue;
+        struct procinfo_orion *p = &out[n];
+        memset(p, 0, sizeof(*p));
+        p->pid = (uint32_t)orion_field(buf, "Pid");
+        p->ppid = (uint32_t)orion_field(buf, "PPid");
+        p->pgid = (uint32_t)orion_field(buf, "Pgid");
+        p->pages = orion_field(buf, "VmRSS") / 4;
+        const char *st = strstr(buf, "State:");
+        p->state = st && strchr(st, 'Z') && strchr(st, 'Z') < strchr(st, '\n') ? 1 : 0;
+        const char *nm = strstr(buf, "Name:");
+        if (nm) {
+            nm += 5;
+            while (*nm == '\t' || *nm == ' ')
+                nm++;
+            size_t len = strcspn(nm, "\n");
+            if (len >= PROCLIST_NAME)
+                len = PROCLIST_NAME - 1;
+            memcpy(p->name, nm, len);
+            p->name[len] = 0;
+        }
+        n++;
+    }
+    free(pids);
+    return n;
 }
 
 static inline int orion_openpty(int *master, int *slave)

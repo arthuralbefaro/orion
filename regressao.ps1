@@ -123,6 +123,8 @@ if ($runAll -or $OnlyA) {
         "cmd:vfstest -n /", "until:60:falha(s))",
         "cmd:tmptest", "until:400:falha(s))",
         "cmd:vfstest /tmp", "until:200:falha(s))",
+        "cmd:cat /proc/self/maps", "wait:1", "cmd:cat /proc/mounts", "wait:1",
+        "cmd:proctest um dois", "until:60:falha(s))",
         "cmd:polltest", "wait:6",
         "cmd:fbtest 2", "wait:1", "shot:out\shots\reg-fbtest.ppm", "wait:2",
         "cmd:evtest 10", "wait:0.8", "mon:sendkey a", "mon:sendkey ctrl", "mon:sendkey up", "mon:mouse_move 10 5", "until:20:evento(s)",
@@ -295,6 +297,15 @@ if ($runAll -or $OnlyA) {
     Expect $a "nr_inodes limita com ENOSPC +ok" "tmpfs: nr_inodes"
     Expect $a "rename no mesmo diretorio durante o readdir termina +ok" "tmpfs: rename durante o readdir"
     Expect $a "(?s)vfstest /tmp.*?vfstest: TUDO OK" "vfstest no tmpfs"
+    Expect $a "(?s)cat /proc/self/maps\s*\n\s*[0-9a-f]{8,}-[0-9a-f]{8,} r--p [0-9a-f]{8} 00:00 \d+\s+/bin/cat" "cat /proc/self/maps mostra as VMAs do proprio cat"
+    Expect $a "[0-9a-f]+-7ffffffff000 rw-p 00000000 00:00 0\s+\[stack\]" "maps mostra a pilha"
+    Expect $a "proc /proc proc ro 0 0" "/proc/mounts lista o procfs"
+    Expect $a "tmpfs /tmp tmpfs rw 0 0" "/proc/mounts lista o tmpfs"
+    Expect $a "mprotect divide a area no maps\s+ok" "proctest: maps acompanha o mprotect"
+    Expect $a "filho morto aparece como zumbi\s+ok" "proctest: zumbi em /proc/<pid>/status"
+    Expect $a "cmdline tem argv separado por NUL\s+ok" "proctest: cmdline"
+    Expect $a "e le o caminho dele\s+ok" "proctest: /proc/self/fd"
+    Expect $a "proctest: TUDO OK" "proctest: procfs completo"
     Expect $a "sda" "ls /dev listou o disco"
     Expect $a "polltest: TUDO OK" "polltest TUDO OK"
     Expect $a "fbtest: gradiente \+ retangulo desenhados" "fbtest desenhou"

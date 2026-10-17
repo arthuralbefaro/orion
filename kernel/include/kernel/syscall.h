@@ -117,31 +117,6 @@
 #define SYS_PRLIMIT64     302
 #define SYS_READDIR       1000
 #define SYS_OPENPTY       1001
-#define SYS_SYSINFO       1002
-#define SYS_PROCLIST      1003
-
-struct user_sysinfo {
-    uint64_t total_pages;
-    uint64_t used_pages;
-    uint64_t free_pages;
-    uint64_t shared_pages;
-    uint64_t cow_faults;
-    uint64_t uptime_ms;
-    uint64_t heap_used;
-    uint32_t cpus;
-    uint32_t procs;
-};
-
-#define PROCLIST_NAME 24
-
-struct user_procinfo {
-    uint32_t pid;
-    uint32_t ppid;
-    uint32_t pgid;
-    uint32_t state;
-    uint64_t pages;
-    char     name[PROCLIST_NAME];
-};
 
 #define WNOHANG 1
 
