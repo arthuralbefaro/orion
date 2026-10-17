@@ -565,3 +565,29 @@ Uma linha por decisao, na ordem em que foram tomadas.
 - O quadro de sinal leva o estado de SSE; o `rt_sigreturn` o restaura depois de
   aplicar a mascara do MXCSR (bits reservados no MXCSR fazem o `fxrstor` dar
   `#GP` em ring 0).
+
+## v2.0.0-a2 (syscalls de partida da musl)
+
+- Sinais no formato do Linux: 64 sinais (1..64) e a mascara com o sinal `n` no
+  bit `n-1`. Antes o Orion tinha 31 sinais e usava o bit `n`; a musl passa
+  mascaras no formato do Linux para `rt_sigprocmask` e `rt_sigaction`. A libc
+  propria mudou junto (`sigaddset`, `sigdelset`, `sigismember`).
+- A tabela de handlers saiu de dentro do `struct process` para uma alocacao
+  propria de exatamente 2 KiB (64 x 32 bytes), que cabe no slab; dentro do
+  processo ela o faria passar de 2 KiB e virar alocacao grande em todo `fork`.
+- `SIGKILL` e `SIGSTOP` nao podem ser bloqueados nem ter handler. Sem suporte a
+  parar processos, `SIGSTOP`, `SIGTSTP`, `SIGTTIN`, `SIGTTOU` e `SIGCONT` sao
+  ignorados por padrao, como `SIGCHLD`, `SIGURG` e `SIGWINCH`.
+- `rt_sigaction` e `rt_sigprocmask` exigem `sigsetsize` = 8, como o Linux.
+- `readv`/`writev` repetem `read`/`write` por pedaco e param no primeiro curto.
+- `set_tid_address` guarda o endereco na thread; na saida o kernel escreve 0
+  nele. O despertar por `futex` chega na 1.7. `gettid` e o pid enquanto cada
+  processo tem uma thread so; `exit_group` e o `exit`.
+- `uname`: `Orion`, `orion`, a versao do kernel, `#1 SMP <data>` e `x86_64`.
+- `getuid`/`geteuid`/`getgid`/`getegid` devolvem 0 e `sigaltstack` aceita e
+  informa `SS_DISABLE`: sao stubs pedidos pelo plano e estao marcados assim em
+  `docs/SYSCALLS.md`, que lista o estado de cada syscall.
+- `struct termios` do `TCGETS` com o layout do kernel Linux (36 bytes:
+  quatro flags, `c_line`, `c_cc[19]`) e valores padrao de verdade (`CS8`,
+  `ICRNL`, `OPOST|ONLCR`, `VINTR`=3, `VEOF`=4, `VMIN`=1...). `TCSETSW` e
+  `TCSETSF` sao aceitos como `TCSETS`.

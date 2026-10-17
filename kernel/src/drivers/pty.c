@@ -147,7 +147,17 @@ long ldisc_termios_ioctl(struct line_discipline *ld, uint64_t request, uint64_t 
     if (request == TCGETS) {
         ldisc_get_mode(ld, &canonical, &echo_on);
         memset(&t, 0, sizeof(t));
-        t.c_lflag = (canonical ? TIO_ICANON : 0) | (echo_on ? TIO_ECHO : 0);
+        t.c_iflag = TIO_ICRNL;
+        t.c_oflag = TIO_OPOST | TIO_ONLCR;
+        t.c_cflag = TIO_B38400 | TIO_CS8 | TIO_CREAD;
+        t.c_lflag = TIO_ISIG | TIO_IEXTEN | TIO_ECHOE | TIO_ECHOK | (canonical ? TIO_ICANON : 0) |
+                    (echo_on ? TIO_ECHO : 0);
+        t.c_cc[TIO_VINTR] = 3;
+        t.c_cc[TIO_VQUIT] = 28;
+        t.c_cc[TIO_VERASE] = 127;
+        t.c_cc[TIO_VKILL] = 21;
+        t.c_cc[TIO_VEOF] = 4;
+        t.c_cc[TIO_VMIN] = 1;
         return copy_to_user((void *)arg, &t, sizeof(t));
     }
     if (copy_from_user(&t, (const void *)arg, sizeof(t)) < 0)
@@ -161,7 +171,7 @@ static long master_ioctl(struct file *f, uint64_t request, uint64_t arg)
     struct pty *p = f->priv;
     if (request == TIOCGPGRP || request == TIOCSPGRP)
         return pty_pgrp_ioctl(p, request, arg);
-    if (request == TCGETS || request == TCSETS)
+    if (request == TCGETS || IS_TCSETS(request))
         return ldisc_termios_ioctl(&p->ld, request, arg);
     if (request == TIOCGWINSZ || request == TIOCSWINSZ)
         return pty_winsize_ioctl(p, request, arg);
@@ -230,7 +240,7 @@ static long slave_ioctl(struct file *f, uint64_t request, uint64_t arg)
     struct pty *p = f->priv;
     if (request == TIOCGPGRP || request == TIOCSPGRP)
         return pty_pgrp_ioctl(p, request, arg);
-    if (request == TCGETS || request == TCSETS)
+    if (request == TCGETS || IS_TCSETS(request))
         return ldisc_termios_ioctl(&p->ld, request, arg);
     if (request == TIOCGWINSZ || request == TIOCSWINSZ)
         return pty_winsize_ioctl(p, request, arg);

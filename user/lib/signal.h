@@ -2,19 +2,30 @@
 
 #include <sys/types.h>
 
-#define SIGHUP   1
-#define SIGINT   2
-#define SIGQUIT  3
-#define SIGILL   4
-#define SIGABRT  6
-#define SIGFPE   8
-#define SIGKILL  9
-#define SIGSEGV  11
-#define SIGPIPE  13
-#define SIGALRM  14
-#define SIGTERM  15
-#define SIGCHLD  17
-#define NSIG     32
+#define SIGHUP    1
+#define SIGINT    2
+#define SIGQUIT   3
+#define SIGILL    4
+#define SIGTRAP   5
+#define SIGABRT   6
+#define SIGBUS    7
+#define SIGFPE    8
+#define SIGKILL   9
+#define SIGUSR1   10
+#define SIGSEGV   11
+#define SIGUSR2   12
+#define SIGPIPE   13
+#define SIGALRM   14
+#define SIGTERM   15
+#define SIGCHLD   17
+#define SIGCONT   18
+#define SIGSTOP   19
+#define SIGTSTP   20
+#define SIGWINCH  28
+#define SIGSYS    31
+#define SIGRTMIN  34
+#define SIGRTMAX  64
+#define NSIG      65
 
 typedef void (*sighandler_t)(int);
 typedef unsigned long sigset_t;
@@ -43,6 +54,8 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *old);
 int sigemptyset(sigset_t *set);
 int sigfillset(sigset_t *set);
 int sigaddset(sigset_t *set, int sig);
+int sigdelset(sigset_t *set, int sig);
+int sigismember(const sigset_t *set, int sig);
 int kill(pid_t pid, int sig);
 int raise(int sig);
 unsigned alarm(unsigned seconds);

@@ -101,7 +101,7 @@ static long tty_file_ioctl(struct file *f, uint64_t request, uint64_t arg)
         tty_set_pgrp(pg);
         return 0;
     }
-    if (request == TCGETS || request == TCSETS)
+    if (request == TCGETS || IS_TCSETS(request))
         return tty_termios(request, arg);
     if (request == TIOCGWINSZ) {
         struct user_winsize ws;

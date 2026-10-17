@@ -233,7 +233,7 @@ static void handle_exception(struct interrupt_frame *f)
         log_error("proc", "pid %u '%s': %s em RIP=%016lx (err=%lx, CR2=%016lx) -> %s",
                   p->pid, p->name, exception_name((uint8_t)f->int_no), f->rip, f->err_code,
                   read_cr2(), signal_name(sig));
-        uint64_t action = p->sig_handlers[sig].sa_handler;
+        uint64_t action = SIGACT(p, sig)->sa_handler;
         if (action == SIG_DFL || action == SIG_IGN || (p->sig_blocked & SIGMASK(sig)))
             process_exit_signal(sig);
         signal_send(p, sig);

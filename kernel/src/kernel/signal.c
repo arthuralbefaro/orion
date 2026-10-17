@@ -24,10 +24,17 @@ struct sigframe {
 };
 
 static const char *const names[NSIG] = {
-    [SIGHUP] = "SIGHUP",   [SIGINT] = "SIGINT",   [SIGQUIT] = "SIGQUIT",
-    [SIGILL] = "SIGILL",   [SIGABRT] = "SIGABRT", [SIGFPE] = "SIGFPE",
-    [SIGKILL] = "SIGKILL", [SIGSEGV] = "SIGSEGV", [SIGPIPE] = "SIGPIPE",
-    [SIGALRM] = "SIGALRM", [SIGTERM] = "SIGTERM", [SIGCHLD] = "SIGCHLD",
+    [SIGHUP] = "SIGHUP",     [SIGINT] = "SIGINT",       [SIGQUIT] = "SIGQUIT",
+    [SIGILL] = "SIGILL",     [SIGTRAP] = "SIGTRAP",     [SIGABRT] = "SIGABRT",
+    [SIGBUS] = "SIGBUS",     [SIGFPE] = "SIGFPE",       [SIGKILL] = "SIGKILL",
+    [SIGUSR1] = "SIGUSR1",   [SIGSEGV] = "SIGSEGV",     [SIGUSR2] = "SIGUSR2",
+    [SIGPIPE] = "SIGPIPE",   [SIGALRM] = "SIGALRM",     [SIGTERM] = "SIGTERM",
+    [SIGSTKFLT] = "SIGSTKFLT", [SIGCHLD] = "SIGCHLD",   [SIGCONT] = "SIGCONT",
+    [SIGSTOP] = "SIGSTOP",   [SIGTSTP] = "SIGTSTP",     [SIGTTIN] = "SIGTTIN",
+    [SIGTTOU] = "SIGTTOU",   [SIGURG] = "SIGURG",       [SIGXCPU] = "SIGXCPU",
+    [SIGXFSZ] = "SIGXFSZ",   [SIGVTALRM] = "SIGVTALRM", [SIGPROF] = "SIGPROF",
+    [SIGWINCH] = "SIGWINCH", [SIGIO] = "SIGIO",         [SIGPWR] = "SIGPWR",
+    [SIGSYS] = "SIGSYS",
 };
 
 const char *signal_name(int sig)
@@ -39,7 +46,8 @@ const char *signal_name(int sig)
 
 static bool default_ignores(int sig)
 {
-    return sig == SIGCHLD;
+    return sig == SIGCHLD || sig == SIGURG || sig == SIGWINCH || sig == SIGCONT || sig == SIGSTOP ||
+           sig == SIGTSTP || sig == SIGTTIN || sig == SIGTTOU;
 }
 
 void signal_init_process(struct process *p)
@@ -47,12 +55,12 @@ void signal_init_process(struct process *p)
     p->sig_pending = 0;
     p->sig_blocked = 0;
     p->alarm_at = 0;
-    memset(p->sig_handlers, 0, sizeof(p->sig_handlers));
+    memset(p->sig_handlers, 0, SIG_TABLE_SIZE);
 }
 
 void signal_reset_on_exec(struct process *p)
 {
-    for (int i = 0; i < NSIG; i++) {
+    for (int i = 0; i < NSIG - 1; i++) {
         if (p->sig_handlers[i].sa_handler != SIG_IGN)
             p->sig_handlers[i].sa_handler = SIG_DFL;
         p->sig_handlers[i].sa_flags = 0;
@@ -67,7 +75,7 @@ int signal_send(struct process *p, int sig)
     if (p->state == PROC_ZOMBIE)
         return 0;
 
-    uint64_t action = p->sig_handlers[sig].sa_handler;
+    uint64_t action = SIGACT(p, sig)->sa_handler;
     if (sig != SIGKILL) {
         if (action == SIG_IGN)
             return 0;
@@ -117,7 +125,7 @@ static bool user_code_addr(uint64_t a)
 
 static bool push_sigframe(struct process *p, struct interrupt_frame *f, int sig)
 {
-    struct user_sigaction *sa = &p->sig_handlers[sig];
+    struct user_sigaction *sa = SIGACT(p, sig);
     if (!sa->sa_restorer || !user_code_addr(sa->sa_restorer) || !user_code_addr(sa->sa_handler))
         return false;
 
@@ -135,7 +143,7 @@ static bool push_sigframe(struct process *p, struct interrupt_frame *f, int sig)
         return false;
 
     p->sig_blocked |= sa->sa_mask | SIGMASK(sig);
-    p->sig_blocked &= ~SIGMASK(SIGKILL);
+    p->sig_blocked &= ~SIG_UNBLOCKABLE;
     f->rsp = sp;
     f->rip = sa->sa_handler;
     f->rdi = (uint64_t)sig;
@@ -156,7 +164,7 @@ void signal_check(struct interrupt_frame *f)
             return;
         __atomic_fetch_and(&p->sig_pending, ~SIGMASK(sig), __ATOMIC_SEQ_CST);
 
-        uint64_t action = p->sig_handlers[sig].sa_handler;
+        uint64_t action = SIGACT(p, sig)->sa_handler;
         if (sig == SIGKILL)
             action = SIG_DFL;
         if (action == SIG_IGN)
@@ -178,13 +186,13 @@ void signal_check(struct interrupt_frame *f)
 
 long signal_sigaction(int sig, const struct user_sigaction *act, struct user_sigaction *old)
 {
-    if (sig <= 0 || sig >= NSIG || sig == SIGKILL)
+    if (sig <= 0 || sig >= NSIG || sig == SIGKILL || sig == SIGSTOP)
         return -EINVAL;
     struct process *p = process_current();
     if (old)
-        *old = p->sig_handlers[sig];
+        *old = *SIGACT(p, sig);
     if (act) {
-        p->sig_handlers[sig] = *act;
+        *SIGACT(p, sig) = *act;
         if (act->sa_handler == SIG_IGN || (act->sa_handler == SIG_DFL && default_ignores(sig)))
             __atomic_fetch_and(&p->sig_pending, ~SIGMASK(sig), __ATOMIC_SEQ_CST);
     }
@@ -198,7 +206,7 @@ long signal_procmask(int how, const uint64_t *set, uint64_t *old)
         *old = p->sig_blocked;
     if (!set)
         return 0;
-    uint64_t v = *set & ~(SIGMASK(SIGKILL));
+    uint64_t v = *set & ~SIG_UNBLOCKABLE;
     switch (how) {
     case SIG_BLOCK:   p->sig_blocked |= v; break;
     case SIG_UNBLOCK: p->sig_blocked &= ~v; break;
@@ -220,7 +228,7 @@ long signal_sigreturn(struct interrupt_frame *f)
     }
 
     struct interrupt_frame saved = sf.ctx;
-    p->sig_blocked = sf.mask & ~SIGMASK(SIGKILL);
+    p->sig_blocked = sf.mask & ~SIG_UNBLOCKABLE;
     fpu_sanitize(sf.fpu);
     fpu_restore(sf.fpu);
 

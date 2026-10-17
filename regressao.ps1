@@ -73,6 +73,7 @@ if ($runAll -or $OnlyA) {
         "cmd:sigtest", "wait:10",
         "cmd:badptr", "until:40:badptr: fim",
         "cmd:fputest", "until:60:fputest: fim", "cmd:auxtest", "until:30:auxtest: fim",
+        "cmd:sctest", "until:30:sctest: fim",
         "cmd:sleep 100", "wait:2", "key:03", "wait:2",
         "cmd:hello um dois", "wait:1",
         "cmd:date", "wait:1",
@@ -143,6 +144,11 @@ if ($runAll -or $OnlyA) {
     Expect $a "AT_ENTRY = _start\s+ok" "auxv: AT_ENTRY"
     Expect $a "AT_RANDOM muda a cada exec\s+ok" "auxv: AT_RANDOM com 16 bytes novos a cada exec"
     Expect $a "auxtest: fim, TUDO OK" "auxtest: todos os campos do auxv"
+    Expect $a "readv espalha em 2 buffers\s+ok" "readv e writev"
+    Expect $a "sinal de tempo real 40 entregue ao handler\s+ok" "64 sinais (tempo real)"
+    Expect $a "sigaddset usa o bit sig-1 do Linux\s+ok" "mascara de sinais no formato Linux"
+    Expect $a "TCGETS no formato do Linux\s+ok" "termios no formato do Linux"
+    Expect $a "sctest: fim, TUDO OK" "sctest: syscalls de partida da musl"
     Expect $a "flag NT ligada dentro do handler\s+ok" "flag NT do usuario nao derruba o iretq do rt_sigreturn"
     Expect $a "Copias de usuario: [1-9]\d* falta\(s\) recuperada\(s\)" "tabela de excecoes recuperou as faltas"
     Expect $a "morto por sinal 2" "Ctrl\+C matou o sleep com SIGINT"

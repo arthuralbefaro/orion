@@ -21,7 +21,7 @@ int sigaction(int sig, const struct sigaction *act, struct sigaction *old)
         tmp.sa_flags |= SA_RESTORER;
         use = &tmp;
     }
-    return (int)__syscall_ret(syscall3(SYS_RT_SIGACTION, sig, (long)use, (long)old));
+    return (int)__syscall_ret(syscall6(SYS_RT_SIGACTION, sig, (long)use, (long)old, sizeof(sigset_t), 0, 0));
 }
 
 sighandler_t signal(int sig, sighandler_t handler)
@@ -37,7 +37,7 @@ sighandler_t signal(int sig, sighandler_t handler)
 
 int sigprocmask(int how, const sigset_t *set, sigset_t *old)
 {
-    return (int)__syscall_ret(syscall3(SYS_RT_SIGPROCMASK, how, (long)set, (long)old));
+    return (int)__syscall_ret(syscall6(SYS_RT_SIGPROCMASK, how, (long)set, (long)old, sizeof(sigset_t), 0, 0));
 }
 
 int sigemptyset(sigset_t *set)
@@ -58,8 +58,27 @@ int sigaddset(sigset_t *set, int sig)
         errno = EINVAL;
         return -1;
     }
-    *set |= 1ul << sig;
+    *set |= 1ul << (sig - 1);
     return 0;
+}
+
+int sigdelset(sigset_t *set, int sig)
+{
+    if (sig <= 0 || sig >= NSIG) {
+        errno = EINVAL;
+        return -1;
+    }
+    *set &= ~(1ul << (sig - 1));
+    return 0;
+}
+
+int sigismember(const sigset_t *set, int sig)
+{
+    if (sig <= 0 || sig >= NSIG) {
+        errno = EINVAL;
+        return -1;
+    }
+    return (*set >> (sig - 1)) & 1;
 }
 
 int kill(pid_t pid, int sig)
@@ -88,6 +107,8 @@ static const char *const signames[NSIG] = {
     [SIGILL] = "Instrucao ilegal", [SIGABRT] = "Abortado", [SIGFPE] = "Erro aritmetico",
     [SIGKILL] = "Morto", [SIGSEGV] = "Falha de segmentacao", [SIGPIPE] = "Pipe quebrado",
     [SIGALRM] = "Alarme", [SIGTERM] = "Terminado", [SIGCHLD] = "Filho mudou de estado",
+    [SIGUSR1] = "Sinal do usuario 1", [SIGUSR2] = "Sinal do usuario 2", [SIGBUS] = "Erro de barramento",
+    [SIGTRAP] = "Armadilha", [SIGSYS] = "Chamada de sistema invalida", [SIGWINCH] = "Janela mudou",
 };
 
 const char *strsignal(int sig)

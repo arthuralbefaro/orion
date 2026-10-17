@@ -16,6 +16,7 @@
 #include <mm/vmm.h>
 #include <arch/x86_64/fpu.h>
 #include <lib/random.h>
+#include <mm/uaccess.h>
 #include <mm/pmm.h>
 #include <mm/heap.h>
 #include <mm/memory.h>
@@ -240,6 +241,7 @@ static void process_free(struct process *p)
 {
     if (!p)
         return;
+    kfree(p->sig_handlers);
     kfree(p->fds);
     kfree(p);
 }
@@ -261,7 +263,8 @@ static struct process *process_alloc(const char *name)
     if (!p)
         return NULL;
     p->fds = kzalloc(PROCESS_FD_INITIAL * sizeof(struct file *));
-    if (!p->fds) {
+    p->sig_handlers = kzalloc(SIG_TABLE_SIZE);
+    if (!p->fds || !p->sig_handlers) {
         process_free(p);
         return NULL;
     }
@@ -577,7 +580,7 @@ int process_fork(struct interrupt_frame *frame)
     child->mmap_next = parent->mmap_next;
     child->pgid = parent->pgid;
     child->sig_blocked = parent->sig_blocked;
-    memcpy(child->sig_handlers, parent->sig_handlers, sizeof(child->sig_handlers));
+    memcpy(child->sig_handlers, parent->sig_handlers, SIG_TABLE_SIZE);
     strlcpy(child->cwd, parent->cwd, sizeof(child->cwd));
     child->parent = parent;
     child->thread = NULL;
@@ -666,6 +669,7 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
         thread_current()->fs_base = 0;
         wrmsr(MSR_IA32_FS_BASE, 0);
         fpu_reset_current();
+        thread_current()->clear_child_tid = 0;
         cli();
         p->pml4_phys = new_pml4;
         write_cr3(new_pml4);
@@ -735,6 +739,12 @@ static NORETURN void process_terminate(int status)
     ASSERT(p);
     p->exit_code = status;
     p->alarm_at = 0;
+    struct thread *self = thread_current();
+    if (self->clear_child_tid) {
+        int32_t zero = 0;
+        copy_to_user((void *)self->clear_child_tid, &zero, sizeof(zero));
+        self->clear_child_tid = 0;
+    }
     for (int i = 0; i < p->fd_cap; i++)
         if (p->fds[i]) {
             file_unref(p->fds[i]);

@@ -48,7 +48,7 @@ struct process {
     uint64_t sig_pending;
     uint64_t sig_blocked;
     uint64_t alarm_at;
-    struct user_sigaction sig_handlers[NSIG];
+    struct user_sigaction *sig_handlers;
     bool autofree;
     struct thread *thread;
     struct process *parent;

@@ -16,7 +16,7 @@ ou sinais), 5 vezes seguidas:
 
     .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
 
-Proxima etapa: 1.2.
+Proxima etapa: 1.3.
 
 ## Checklist
 
@@ -30,7 +30,7 @@ Proxima etapa: 1.2.
 | 0.6 | Shell: `&`, jobs, fg, wait, `VAR=x cmd`, `&&`, `\|\|`, `;` | [x] | 23:40 | 00:00 | (ver diario) |
 | 0.7 | Limites: 256 fds, 256 processos, ulimit | [x] | 00:00 | 01:09 | (ver diario) |
 | 1.1 | Pilha inicial do Linux (auxv) | [x] | 00:55 | 01:29 | (ver diario) |
-| 1.2 | Syscalls de partida da musl | [ ] | | | |
+| 1.2 | Syscalls de partida da musl | [x] | 01:29 | 01:51 | (ver diario) |
 | 1.3 | Arquivos no formato do Linux | [ ] | | | |
 | 1.4 | Memoria do jeito Linux (VMAs, mmap) | [ ] | | | |
 | 1.5 | Programas contra a musl com `zig cc` (plano B: musl pelo build.ps1) | [ ] | | | |
@@ -270,3 +270,13 @@ Problemas: (1) `fninit` nao zera os XMM e o firmware UEFI os usa, entao o
 estado inicial capturado no boot tinha lixo - zerado a mao; (2) os programas
 da libc propria nao tem os cabecalhos ELF dentro de um segmento carregado e o
 `AT_PHDR` saia 0 - o kernel agora copia a tabela para a pilha nesse caso.
+
+#### 1.2 Syscalls de partida da musl - 01:29 as 01:51 - FEITO
+`set_tid_address`, `exit_group`, `uname`, `getuid`/`geteuid`/`getgid`/
+`getegid`, `gettid`, `readv`, `writev`, `sigaltstack` (stub) e
+`rt_sigprocmask`/`rt_sigaction` completos com `sigsetsize`. Os sinais passaram
+para o formato do Linux (64 sinais, bit `sig-1`), com a tabela de handlers
+alocada a parte (2 KiB, no slab). `struct termios` do `TCGETS` no layout do
+kernel Linux. Tabela `docs/SYSCALLS.md` com o estado de cada syscall
+(completa, parcial, stub, propria). Programa novo `sctest` (22 verificacoes).
+Regressao 129 -> 134, estresse 5x verde.

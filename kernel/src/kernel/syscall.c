@@ -21,6 +21,7 @@
 #include <mm/heap.h>
 #include <net/socket.h>
 #include <kernel/smp.h>
+#include <kernel/version.h>
 
 extern void syscall_entry(void);
 
@@ -351,8 +352,11 @@ static long sys_kill(int pid, int sig)
     return process_kill(pid, sig);
 }
 
-static long sys_rt_sigaction(int sig, const struct user_sigaction *uact, struct user_sigaction *uold)
+static long sys_rt_sigaction(int sig, const struct user_sigaction *uact, struct user_sigaction *uold,
+                             uint64_t setsize)
 {
+    if (setsize != sizeof(uint64_t))
+        return -EINVAL;
     struct user_sigaction act, old;
     if (uact && copy_from_user(&act, uact, sizeof(act)) < 0)
         return -EFAULT;
@@ -364,8 +368,10 @@ static long sys_rt_sigaction(int sig, const struct user_sigaction *uact, struct 
     return r;
 }
 
-static long sys_rt_sigprocmask(int how, const uint64_t *uset, uint64_t *uold)
+static long sys_rt_sigprocmask(int how, const uint64_t *uset, uint64_t *uold, uint64_t setsize)
 {
+    if (setsize != sizeof(uint64_t))
+        return -EINVAL;
     uint64_t set, old;
     if (uset && copy_from_user(&set, uset, sizeof(set)) < 0)
         return -EFAULT;
@@ -777,6 +783,91 @@ static long sys_prlimit64(int pid, int resource, const struct user_rlimit *uin, 
     return 0;
 }
 
+#define IOV_MAX 1024
+
+struct user_iovec {
+    uint64_t base;
+    uint64_t len;
+};
+
+static long sys_rwv(int fd, const struct user_iovec *uiov, int cnt, bool write)
+{
+    if (cnt < 0 || cnt > IOV_MAX)
+        return -EINVAL;
+    long total = 0;
+    for (int i = 0; i < cnt; i++) {
+        struct user_iovec v;
+        if (copy_from_user(&v, &uiov[i], sizeof(v)) < 0)
+            return total ? total : -EFAULT;
+        if (v.len == 0)
+            continue;
+        long n = write ? sys_write(fd, (const void *)v.base, v.len) : sys_read(fd, (void *)v.base, v.len);
+        if (n < 0)
+            return total ? total : n;
+        total += n;
+        if ((uint64_t)n < v.len)
+            break;
+    }
+    return total;
+}
+
+static long sys_readv(int fd, const struct user_iovec *uiov, int cnt)
+{
+    return sys_rwv(fd, uiov, cnt, false);
+}
+
+static long sys_writev(int fd, const struct user_iovec *uiov, int cnt)
+{
+    return sys_rwv(fd, uiov, cnt, true);
+}
+
+struct user_utsname {
+    char sysname[65];
+    char nodename[65];
+    char release[65];
+    char version[65];
+    char machine[65];
+    char domainname[65];
+};
+
+static long sys_uname(struct user_utsname *uout)
+{
+    struct user_utsname u;
+    memset(&u, 0, sizeof(u));
+    strlcpy(u.sysname, KERNEL_NAME, sizeof(u.sysname));
+    strlcpy(u.nodename, "orion", sizeof(u.nodename));
+    strlcpy(u.release, KERNEL_VERSION, sizeof(u.release));
+    strlcpy(u.version, "#1 SMP " __DATE__ " " __TIME__, sizeof(u.version));
+    strlcpy(u.machine, KERNEL_ARCH, sizeof(u.machine));
+    strlcpy(u.domainname, "(none)", sizeof(u.domainname));
+    return copy_to_user(uout, &u, sizeof(u));
+}
+
+#define SS_DISABLE 2
+
+struct user_stack_t {
+    uint64_t ss_sp;
+    int32_t ss_flags;
+    int32_t pad;
+    uint64_t ss_size;
+};
+
+static long sys_sigaltstack(const struct user_stack_t *uss, struct user_stack_t *uold)
+{
+    if (uss) {
+        struct user_stack_t ss;
+        if (copy_from_user(&ss, uss, sizeof(ss)) < 0)
+            return -EFAULT;
+    }
+    if (uold) {
+        struct user_stack_t old;
+        memset(&old, 0, sizeof(old));
+        old.ss_flags = SS_DISABLE;
+        return copy_to_user(uold, &old, sizeof(old));
+    }
+    return 0;
+}
+
 bool syscall_dispatch(struct interrupt_frame *f)
 {
     sti();
@@ -814,8 +905,19 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_POLL:        ret = sys_poll((struct user_pollfd *)f->rdi, f->rsi, (int)f->rdx); break;
     case SYS_FCNTL:       ret = sys_fcntl((int)f->rdi, (int)f->rsi, f->rdx); break;
     case SYS_KILL:        ret = sys_kill((int)f->rdi, (int)f->rsi); break;
-    case SYS_RT_SIGACTION: ret = sys_rt_sigaction((int)f->rdi, (const struct user_sigaction *)f->rsi, (struct user_sigaction *)f->rdx); break;
-    case SYS_RT_SIGPROCMASK: ret = sys_rt_sigprocmask((int)f->rdi, (const uint64_t *)f->rsi, (uint64_t *)f->rdx); break;
+    case SYS_RT_SIGACTION: ret = sys_rt_sigaction((int)f->rdi, (const struct user_sigaction *)f->rsi, (struct user_sigaction *)f->rdx, f->r10); break;
+    case SYS_RT_SIGPROCMASK: ret = sys_rt_sigprocmask((int)f->rdi, (const uint64_t *)f->rsi, (uint64_t *)f->rdx, f->r10); break;
+    case SYS_READV:       ret = sys_readv((int)f->rdi, (const struct user_iovec *)f->rsi, (int)f->rdx); break;
+    case SYS_WRITEV:      ret = sys_writev((int)f->rdi, (const struct user_iovec *)f->rsi, (int)f->rdx); break;
+    case SYS_UNAME:       ret = sys_uname((struct user_utsname *)f->rdi); break;
+    case SYS_GETUID:
+    case SYS_GETGID:
+    case SYS_GETEUID:
+    case SYS_GETEGID:     ret = 0; break;
+    case SYS_GETTID:      ret = process_current()->pid; break;
+    case SYS_SET_TID_ADDRESS: thread_current()->clear_child_tid = f->rdi; ret = process_current()->pid; break;
+    case SYS_EXIT_GROUP:  process_exit((int)f->rdi);
+    case SYS_SIGALTSTACK: ret = sys_sigaltstack((const struct user_stack_t *)f->rdi, (struct user_stack_t *)f->rsi); break;
     case SYS_RT_SIGRETURN: ret = signal_sigreturn(f); full_restore = true; break;
     case SYS_ALARM:       ret = process_alarm(f->rdi); break;
     case SYS_SETPGID:     ret = process_setpgid((int)f->rdi, (int)f->rsi); break;

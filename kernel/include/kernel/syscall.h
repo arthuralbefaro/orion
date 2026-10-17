@@ -50,6 +50,17 @@
 #define SYS_ARCH_PRCTL    158
 #define SYS_CLOCK_GETTIME 228
 #define SYS_GETRLIMIT     97
+#define SYS_READV         19
+#define SYS_WRITEV        20
+#define SYS_UNAME         63
+#define SYS_GETUID        102
+#define SYS_GETGID        104
+#define SYS_GETEUID       107
+#define SYS_GETEGID       108
+#define SYS_SIGALTSTACK   131
+#define SYS_GETTID        186
+#define SYS_SET_TID_ADDRESS 218
+#define SYS_EXIT_GROUP    231
 #define SYS_SETRLIMIT     160
 #define SYS_PRLIMIT64     302
 #define SYS_READDIR       1000

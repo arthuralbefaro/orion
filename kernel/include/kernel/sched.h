@@ -40,6 +40,7 @@ struct thread {
     bool     on_sleep_list;
     bool     on_runq;
     void    *fpu;
+    uint64_t clear_child_tid;
     struct wait_entry *waits;
 
     struct thread *next;
