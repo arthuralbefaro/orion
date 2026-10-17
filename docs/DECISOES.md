@@ -1632,3 +1632,52 @@ Uma linha por decisao, na ordem em que foram tomadas.
   sorteia a semente a cada rodada (`ORION_FUZZ_SEED` repete uma) e reprova a
   imagem que passar de 400 mil leituras de disco (laco sem fim vira falha em
   vez de travar o `check.ps1`).
+
+## v2.1.0-a6 (ext2 com escrita)
+
+- O ext2 monta em leitura e escrita por padrao (`-r` ou `-o ro` para so
+  leitura). Cai sozinho para so leitura quando o dispositivo nao escreve, os
+  descritores de grupo nao fecham, ha `ro_compat` alem de `sparse_super` e
+  `large_file`, o superbloco tem o bit de erro ou o primeiro inode livre e
+  absurdo. Montado com escrita, o estado perde o bit `VALID` no disco e so o
+  ganha de volta no `umount`, como no Linux: queda no meio deixa o `e2fsck`
+  avisado.
+- Parte 1: `write` e `truncate` em arquivo que ja existe. Bloco novo nasce
+  zerado so quando e tabela indireta ou fica parcialmente escrito; tabela
+  indireta que esvazia no `truncate` e devolvida. Bitmaps sao gravados na
+  hora; os contadores livres do superbloco e dos grupos ficam em memoria e
+  vao para o disco no `sync` periodico e no `umount`.
+- Parte 2: `create`, `mkdir`, `unlink`, `rmdir` e `rename`. Inode de
+  diretorio vai para o grupo com mais blocos livres, o de arquivo para o
+  grupo do pai, como no ext2 do Linux, e o contador de diretorios por grupo e
+  mantido (o `e2fsck` confere). Entrada nova entra na primeira folga que
+  couber; quando nao cabe, o diretorio ganha um bloco (inclusive pelo
+  indireto). Entrada apagada e somada a anterior no mesmo bloco; a primeira
+  do bloco so zera o inode. Nada e compactado, entao o cookie do `readdir`
+  continua valido entre chamadas.
+- Arquivo apagado ainda aberto: o `unlink` tira o nome e baixa o
+  `links_count`; com zero, o vnode sai do cache marcado como apagado, e o
+  inode e os blocos so sao liberados no `release`, quando o ultimo `close`
+  solta o vnode. O numero do inode nao e reusado antes disso, porque o bit
+  dele continua marcado. Inode com mais de um link (imagem feita por outro
+  sistema) so perde o nome.
+- Diretorio indexado (`dir_index`, flag `INDEX_FL`, criado pelo Linux ou pelo
+  `e2fsck -D`) e mexido como lista linear e perde a flag, como faz o ext2 do
+  Linux: a raiz do indice fica escondida na folga do `..` e a leitura linear
+  continua certa. Bloco de atributos estendidos do inode apagado tem o
+  contador de referencias decrementado e so e liberado quando chega a zero.
+  Dispositivo, FIFO e link rapido nao tem blocos para liberar (o `block[]`
+  deles guarda outra coisa).
+- Teste no hospedeiro: alem das imagens do `mkext2.py`, o `cargo test` usa
+  imagens do `mke2fs` de verdade quando ele existe (inodes de 256 bytes,
+  `dir_index`, `ext_attr`, `resize_inode`, varios grupos de 2 KiB) e um
+  diretorio com indice htree gerado pelo `debugfs` e `e2fsck -D`. O cenario
+  cria 250 arquivos de nome comprido (diretorio no indireto), apaga metade,
+  recria, move arquivos e diretorios entre pais (conferindo `..` e
+  `links_count`), sobrescreve com `rename`, apaga arquivo aberto, esgota os
+  inodes ate `ENOSPC`, apaga tudo e confere que blocos e inodes voltaram ao
+  numero inicial. O `e2fsck -fn` roda no meio e no fim e precisa sair limpo.
+  O fuzz ganhou uma rodada de escrita: imagens mutadas montadas com escrita
+  recebem criacao, remocao, `rename` e `write` sorteados e nao podem dar
+  `panic`. No Windows, sem `mke2fs` nem `e2fsck`, essas partes sao puladas
+  com aviso e o resto roda.

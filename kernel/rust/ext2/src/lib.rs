@@ -15,12 +15,16 @@ use core::ffi::c_void;
 const EIO: i32 = 5;
 const ENOENT: i32 = 2;
 const ENOMEM: i32 = 12;
+const EEXIST: i32 = 17;
 const ENOTDIR: i32 = 20;
+const EISDIR: i32 = 21;
 const EINVAL: i32 = 22;
 const EFBIG: i32 = 27;
 const ENOSPC: i32 = 28;
 const EROFS: i32 = 30;
+const EMLINK: i32 = 31;
 const ENAMETOOLONG: i32 = 36;
+const ENOTEMPTY: i32 = 39;
 
 const EXT2_MAGIC: u16 = 0xEF53;
 const ROOT_INO: u32 = 2;
@@ -37,11 +41,20 @@ const RO_COMPAT_LARGE_FILE: u32 = 0x0002;
 const RO_COMPAT_WRITABLE: u32 = RO_COMPAT_SPARSE_SUPER | RO_COMPAT_LARGE_FILE;
 const STATE_VALID: u16 = 0x0001;
 const STATE_ERRORS: u16 = 0x0002;
+const GOOD_OLD_FIRST_INO: u32 = 11;
+const LINK_MAX: u32 = 32000;
+const INDEX_FL: u32 = 0x1000;
+const EA_MAGIC: u32 = 0xEA02_0000;
+const FT_DIR: u8 = 2;
 
 const S_IFMT: u32 = 0o170000;
 const S_IFDIR: u32 = 0o040000;
 const S_IFLNK: u32 = 0o120000;
 const S_IFREG: u32 = 0o100000;
+const S_IFCHR: u32 = 0o020000;
+const S_IFBLK: u32 = 0o060000;
+const S_IFIFO: u32 = 0o010000;
+const S_IFSOCK: u32 = 0o140000;
 
 pub type ReadFn = unsafe extern "C" fn(ctx: *mut c_void, off: u64, buf: *mut u8, len: u32, meta: bool) -> i32;
 pub type WriteFn = unsafe extern "C" fn(ctx: *mut c_void, off: u64, buf: *const u8, len: u32) -> i32;
@@ -81,6 +94,7 @@ struct Group {
     inode_table: u32,
     free_blocks: u32,
     free_inodes: u32,
+    used_dirs: u32,
 }
 
 pub struct Fs {
@@ -94,6 +108,7 @@ pub struct Fs {
     blocks_per_group: u32,
     inodes_per_group: u32,
     inode_size: u32,
+    first_ino: u32,
     gdt_off: u64,
     gdt_blocks: u32,
     free_blocks: u32,
@@ -115,7 +130,16 @@ struct Inode {
     ctime: u32,
     sectors: u32,
     file_acl: u32,
+    flags: u32,
     block: [u32; 15],
+}
+
+struct Slot {
+    phys: u32,
+    buf: Vec<u8>,
+    pos: usize,
+    prev: Option<usize>,
+    ino: u32,
 }
 
 fn le16(b: &[u8], off: usize) -> u16 {
@@ -132,6 +156,33 @@ fn put16(b: &mut [u8], off: usize, v: u16) {
 
 fn put32(b: &mut [u8], off: usize, v: u32) {
     b[off..off + 4].copy_from_slice(&v.to_le_bytes());
+}
+
+fn rec_need(len: usize) -> usize {
+    (8 + len + 3) & !3
+}
+
+fn file_type(mode: u32) -> u8 {
+    match mode & S_IFMT {
+        S_IFREG => 1,
+        S_IFDIR => 2,
+        S_IFCHR => 3,
+        S_IFBLK => 4,
+        S_IFIFO => 5,
+        S_IFSOCK => 6,
+        S_IFLNK => 7,
+        _ => 0,
+    }
+}
+
+fn check_name(name: &[u8]) -> Result<(), i32> {
+    if name.len() > 255 {
+        return Err(ENAMETOOLONG);
+    }
+    if name.is_empty() || name == b"." || name == b".." || name.iter().any(|&c| c == b'/' || c == 0) {
+        return Err(EINVAL);
+    }
+    Ok(())
 }
 
 fn zeroed(len: usize) -> Result<Vec<u8>, i32> {
@@ -223,6 +274,7 @@ impl Fs {
             mtime: le32(&raw, 16),
             sectors: le32(&raw, 28),
             file_acl: le32(&raw, 104),
+            flags: le32(&raw, 32),
             block,
         })
     }
@@ -231,6 +283,9 @@ impl Fs {
         let off = self.inode_off(ino)?;
         let mut raw = [0u8; 128];
         self.read_at(off, &mut raw, true)?;
+        put16(&mut raw, 0, i.mode as u16);
+        put16(&mut raw, 26, i.nlink as u16);
+        put32(&mut raw, 32, i.flags);
         put32(&mut raw, 4, i.size as u32);
         if (i.mode & S_IFMT) == S_IFREG && self.large_file {
             put32(&mut raw, 108, (i.size >> 32) as u32);
@@ -715,6 +770,484 @@ impl Fs {
         self.write_inode(ino_n, &ino)
     }
 
+    fn writable(&self) -> Result<(), i32> {
+        if self.write.is_none() {
+            Err(EROFS)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn group_of(&self, ino: u32) -> usize {
+        ((ino - 1) / self.inodes_per_group) as usize
+    }
+
+    fn entry(&self, buf: &[u8], pos: usize) -> Result<(u32, usize, usize), i32> {
+        let bs = self.block_size as usize;
+        if pos + 8 > bs {
+            return Err(EIO);
+        }
+        let ino = le32(buf, pos);
+        let rec = le16(buf, pos + 4) as usize;
+        let len = if self.filetype { buf[pos + 6] as usize } else { le16(buf, pos + 6) as usize };
+        if rec < 8 || !rec.is_multiple_of(4) || pos + rec > bs || len + 8 > rec || ino > self.inodes {
+            return Err(EIO);
+        }
+        Ok((ino, rec, len))
+    }
+
+    fn put_entry(&self, buf: &mut [u8], pos: usize, ino: u32, rec: usize, name: &[u8], ft: u8) {
+        put32(buf, pos, ino);
+        put16(buf, pos + 4, rec as u16);
+        if self.filetype {
+            buf[pos + 6] = name.len() as u8;
+            buf[pos + 7] = ft;
+        } else {
+            put16(buf, pos + 6, name.len() as u16);
+        }
+        let end = pos + 8 + name.len();
+        buf[pos + 8..end].copy_from_slice(name);
+        let pad = core::cmp::min(pos + rec_need(name.len()), pos + rec);
+        buf[end..pad].fill(0);
+    }
+
+    fn dir_inode(&self, n: u32) -> Result<Inode, i32> {
+        let d = self.inode(n)?;
+        if (d.mode & S_IFMT) != S_IFDIR {
+            return Err(ENOTDIR);
+        }
+        if d.nlink == 0 {
+            return Err(ENOENT);
+        }
+        if !d.size.is_multiple_of(self.block_size as u64) || d.size > MAX_DIR_BYTES {
+            return Err(EIO);
+        }
+        Ok(d)
+    }
+
+    fn dir_block(&self, d: &Inode, blk: u64, buf: &mut [u8]) -> Result<u32, i32> {
+        let phys = self.map(d, blk)?;
+        if phys == 0 {
+            return Err(EIO);
+        }
+        self.read_block(phys, buf, true)?;
+        Ok(phys)
+    }
+
+    fn locate(&self, d: &Inode, name: &[u8]) -> Result<Slot, i32> {
+        let bs = self.block_size as usize;
+        let mut buf = zeroed(bs)?;
+        for blk in 0..d.size / bs as u64 {
+            let phys = self.dir_block(d, blk, &mut buf)?;
+            let mut pos = 0;
+            let mut prev = None;
+            while pos < bs {
+                let (ino, rec, len) = self.entry(&buf, pos)?;
+                if ino != 0 && &buf[pos + 8..pos + 8 + len] == name {
+                    return Ok(Slot { phys, buf, pos, prev, ino });
+                }
+                prev = Some(pos);
+                pos += rec;
+            }
+        }
+        Err(ENOENT)
+    }
+
+    fn dir_empty(&self, d: &Inode) -> Result<bool, i32> {
+        let mut empty = true;
+        self.dir_walk(d, 0, |name, _, _, _| {
+            if name == b"." || name == b".." {
+                true
+            } else {
+                empty = false;
+                false
+            }
+        })?;
+        Ok(empty)
+    }
+
+    fn add_entry(&mut self, dir_n: u32, d: &mut Inode, name: &[u8], ino: u32, ft: u8) -> Result<(), i32> {
+        let bs = self.block_size as usize;
+        let need = rec_need(name.len());
+        let mut buf = zeroed(bs)?;
+        let blocks = d.size / bs as u64;
+        for blk in 0..blocks {
+            let phys = self.dir_block(d, blk, &mut buf)?;
+            let mut pos = 0;
+            while pos < bs {
+                let (e, rec, len) = self.entry(&buf, pos)?;
+                let used = if e == 0 { 0 } else { rec_need(len) };
+                if rec - used >= need {
+                    if e == 0 {
+                        self.put_entry(&mut buf, pos, ino, rec, name, ft);
+                    } else {
+                        put16(&mut buf, pos + 4, used as u16);
+                        self.put_entry(&mut buf, pos + used, ino, rec - used, name, ft);
+                    }
+                    return self.write_block(phys, &buf);
+                }
+                pos += rec;
+            }
+        }
+        if d.size + bs as u64 > MAX_DIR_BYTES {
+            return Err(ENOSPC);
+        }
+        let goal = self.group_of(dir_n);
+        let r = self.bmap_alloc(d, blocks, goal).and_then(|(phys, _)| {
+            buf.fill(0);
+            self.put_entry(&mut buf, 0, ino, bs, name, ft);
+            self.write_block(phys, &buf)
+        });
+        if let Err(e) = r {
+            let _ = self.free_from(d, blocks);
+            return Err(e);
+        }
+        d.size += bs as u64;
+        Ok(())
+    }
+
+    fn touch_dir(&self, n: u32, d: &mut Inode, now: u32) -> Result<(), i32> {
+        d.mtime = now;
+        d.ctime = now;
+        d.flags &= !INDEX_FL;
+        self.write_inode(n, d)
+    }
+
+    fn dir_add(&mut self, dir_n: u32, name: &[u8], ino: u32, ft: u8, now: u32) -> Result<(), i32> {
+        let mut d = self.dir_inode(dir_n)?;
+        let r = self.add_entry(dir_n, &mut d, name, ino, ft);
+        if r.is_ok() {
+            self.touch_dir(dir_n, &mut d, now)?;
+        } else {
+            self.write_inode(dir_n, &d)?;
+        }
+        r
+    }
+
+    fn dir_remove(&mut self, dir_n: u32, name: &[u8], expect: u32, now: u32) -> Result<u32, i32> {
+        let mut d = self.dir_inode(dir_n)?;
+        let mut s = self.locate(&d, name)?;
+        if expect != 0 && s.ino != expect {
+            return Err(ENOENT);
+        }
+        let (_, rec, _) = self.entry(&s.buf, s.pos)?;
+        match s.prev {
+            Some(p) => {
+                let merged = le16(&s.buf, p + 4) as usize + rec;
+                put16(&mut s.buf, p + 4, merged as u16);
+            }
+            None => put32(&mut s.buf, s.pos, 0),
+        }
+        self.write_block(s.phys, &s.buf)?;
+        self.touch_dir(dir_n, &mut d, now)?;
+        Ok(s.ino)
+    }
+
+    fn dir_set(&mut self, dir_n: u32, name: &[u8], ino: u32, ft: u8, now: u32) -> Result<u32, i32> {
+        let mut d = self.dir_inode(dir_n)?;
+        let mut s = self.locate(&d, name)?;
+        put32(&mut s.buf, s.pos, ino);
+        if self.filetype {
+            s.buf[s.pos + 7] = ft;
+        }
+        self.write_block(s.phys, &s.buf)?;
+        self.touch_dir(dir_n, &mut d, now)?;
+        Ok(s.ino)
+    }
+
+    fn relink<F: FnOnce(u32) -> u32>(&self, n: u32, now: u32, f: F) -> Result<u32, i32> {
+        let mut i = self.inode(n)?;
+        i.nlink = f(i.nlink);
+        i.ctime = now;
+        self.write_inode(n, &i)?;
+        Ok(i.nlink)
+    }
+
+    fn alloc_inode(&mut self, dir: bool, parent: usize) -> Result<u32, i32> {
+        let n = self.groups.len();
+        let mut start = parent % n;
+        if dir {
+            let mut best: Option<u32> = None;
+            for (g, gr) in self.groups.iter().enumerate() {
+                let better = match best {
+                    None => true,
+                    Some(b) => gr.free_blocks > b,
+                };
+                if gr.free_inodes > 0 && better {
+                    start = g;
+                    best = Some(gr.free_blocks);
+                }
+            }
+        }
+        let ipg = self.inodes_per_group;
+        let mut bitmap = zeroed(self.block_size as usize)?;
+        for k in 0..n {
+            let g = (start + k) % n;
+            if self.groups[g].free_inodes == 0 {
+                continue;
+            }
+            let bm = self.groups[g].inode_bitmap;
+            self.read_block(bm, &mut bitmap, true)?;
+            for i in 0..ipg {
+                let wide = g as u64 * ipg as u64 + i as u64 + 1;
+                let byte = (i / 8) as usize;
+                let bit = 1u8 << (i % 8);
+                if wide < self.first_ino as u64 || wide > self.inodes as u64 || bitmap[byte] & bit != 0 {
+                    continue;
+                }
+                let ino = wide as u32;
+                bitmap[byte] |= bit;
+                self.write_block(bm, &bitmap)?;
+                let gr = &mut self.groups[g];
+                gr.free_inodes -= 1;
+                if dir {
+                    gr.used_dirs += 1;
+                }
+                self.free_inodes = self.free_inodes.saturating_sub(1);
+                self.dirty = true;
+                return Ok(ino);
+            }
+        }
+        Err(ENOSPC)
+    }
+
+    fn free_inode(&mut self, ino: u32, dir: bool) -> Result<(), i32> {
+        if ino < self.first_ino || ino > self.inodes {
+            return Err(EIO);
+        }
+        let g = self.group_of(ino);
+        let i = (ino - 1) % self.inodes_per_group;
+        let bm = self.groups.get(g).ok_or(EIO)?.inode_bitmap;
+        let mut bitmap = zeroed(self.block_size as usize)?;
+        self.read_block(bm, &mut bitmap, true)?;
+        let byte = (i / 8) as usize;
+        let bit = 1u8 << (i % 8);
+        if bitmap[byte] & bit == 0 {
+            return Err(EIO);
+        }
+        bitmap[byte] &= !bit;
+        self.write_block(bm, &bitmap)?;
+        let gr = &mut self.groups[g];
+        gr.free_inodes += 1;
+        if dir {
+            gr.used_dirs = gr.used_dirs.saturating_sub(1);
+        }
+        self.free_inodes += 1;
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn clear_inode(&self, ino: u32, now: u32) -> Result<(), i32> {
+        let off = self.inode_off(ino)?;
+        let mut raw = zeroed(self.inode_size as usize)?;
+        put32(&mut raw, 20, now);
+        self.write_at(off, &raw)
+    }
+
+    fn fill_new(&mut self, ino: u32, parent: u32, node: &mut Inode) -> Result<(), i32> {
+        if (node.mode & S_IFMT) == S_IFDIR {
+            let bs = self.block_size as usize;
+            let goal = self.group_of(ino);
+            let b = self.new_block(goal, false, &mut node.sectors)?;
+            node.block[0] = b;
+            node.size = bs as u64;
+            let mut buf = zeroed(bs)?;
+            self.put_entry(&mut buf, 0, ino, 12, b".", FT_DIR);
+            self.put_entry(&mut buf, 12, parent, bs - 12, b"..", FT_DIR);
+            self.write_block(b, &buf)?;
+        }
+        self.clear_inode(ino, 0)?;
+        self.write_inode(ino, node)
+    }
+
+    fn create(&mut self, dir_n: u32, name: &[u8], mode: u32, now: u32) -> Result<u32, i32> {
+        self.writable()?;
+        check_name(name)?;
+        let kind = mode & S_IFMT;
+        if kind != S_IFREG && kind != S_IFDIR {
+            return Err(EINVAL);
+        }
+        let is_dir = kind == S_IFDIR;
+        let parent = self.dir_inode(dir_n)?;
+        match self.locate(&parent, name) {
+            Ok(_) => return Err(EEXIST),
+            Err(ENOENT) => {}
+            Err(e) => return Err(e),
+        }
+        if is_dir && parent.nlink >= LINK_MAX {
+            return Err(EMLINK);
+        }
+        let ino = self.alloc_inode(is_dir, self.group_of(dir_n))?;
+        let mut node = Inode {
+            mode,
+            uid: 0,
+            gid: 0,
+            nlink: if is_dir { 2 } else { 1 },
+            size: 0,
+            atime: now,
+            mtime: now,
+            ctime: now,
+            sectors: 0,
+            file_acl: 0,
+            flags: 0,
+            block: [0; 15],
+        };
+        let r = self
+            .fill_new(ino, dir_n, &mut node)
+            .and_then(|_| self.dir_add(dir_n, name, ino, file_type(mode), now));
+        if let Err(e) = r {
+            let _ = self.free_from(&mut node, 0);
+            let _ = self.clear_inode(ino, now);
+            let _ = self.free_inode(ino, is_dir);
+            return Err(e);
+        }
+        if is_dir {
+            self.relink(dir_n, now, |n| n + 1)?;
+        }
+        Ok(ino)
+    }
+
+    fn unlink(&mut self, dir_n: u32, name: &[u8], expect: u32, rmdir: bool, now: u32) -> Result<(u32, u32), i32> {
+        self.writable()?;
+        check_name(name)?;
+        let d = self.dir_inode(dir_n)?;
+        let ino = self.locate(&d, name)?.ino;
+        if expect != 0 && ino != expect {
+            return Err(ENOENT);
+        }
+        let node = self.inode(ino)?;
+        let is_dir = (node.mode & S_IFMT) == S_IFDIR;
+        if rmdir && !is_dir {
+            return Err(ENOTDIR);
+        }
+        if !rmdir && is_dir {
+            return Err(EISDIR);
+        }
+        if is_dir && !self.dir_empty(&node)? {
+            return Err(ENOTEMPTY);
+        }
+        self.dir_remove(dir_n, name, ino, now)?;
+        let left = self.relink(ino, now, |n| if is_dir { 0 } else { n.saturating_sub(1) })?;
+        if is_dir {
+            self.relink(dir_n, now, |n| n.saturating_sub(1))?;
+        }
+        Ok((ino, left))
+    }
+
+    fn is_ancestor(&self, anc: u32, mut dir: u32) -> Result<bool, i32> {
+        for _ in 0..4096 {
+            if dir == anc {
+                return Ok(true);
+            }
+            if dir == ROOT_INO {
+                return Ok(false);
+            }
+            dir = self.lookup(dir, b"..")?;
+        }
+        Err(EIO)
+    }
+
+    fn rename(&mut self, od: u32, oname: &[u8], nd: u32, nname: &[u8], expect: u32, now: u32) -> Result<(u32, u32), i32> {
+        self.writable()?;
+        check_name(oname)?;
+        check_name(nname)?;
+        let src = self.locate(&self.dir_inode(od)?, oname)?.ino;
+        if expect != 0 && src != expect {
+            return Err(ENOENT);
+        }
+        let snode = self.inode(src)?;
+        let s_dir = (snode.mode & S_IFMT) == S_IFDIR;
+        let ndir = self.dir_inode(nd)?;
+        let dst = match self.locate(&ndir, nname) {
+            Ok(s) => s.ino,
+            Err(ENOENT) => 0,
+            Err(e) => return Err(e),
+        };
+        if dst == src {
+            return Ok((0, 0));
+        }
+        let mut d_dir = false;
+        if dst != 0 {
+            let dnode = self.inode(dst)?;
+            d_dir = (dnode.mode & S_IFMT) == S_IFDIR;
+            if s_dir && !d_dir {
+                return Err(ENOTDIR);
+            }
+            if !s_dir && d_dir {
+                return Err(EISDIR);
+            }
+            if d_dir && !self.dir_empty(&dnode)? {
+                return Err(ENOTEMPTY);
+            }
+        } else if s_dir && od != nd && ndir.nlink >= LINK_MAX {
+            return Err(EMLINK);
+        }
+        if s_dir && od != nd && self.is_ancestor(src, nd)? {
+            return Err(EINVAL);
+        }
+        let ft = file_type(snode.mode);
+        if dst != 0 {
+            self.dir_set(nd, nname, src, ft, now)?;
+        } else {
+            self.dir_add(nd, nname, src, ft, now)?;
+        }
+        self.dir_remove(od, oname, src, now)?;
+        if s_dir && od != nd {
+            self.dir_set(src, b"..", nd, FT_DIR, now)?;
+            self.relink(od, now, |n| n.saturating_sub(1))?;
+            if !d_dir {
+                self.relink(nd, now, |n| n + 1)?;
+            }
+        } else if d_dir {
+            self.relink(nd, now, |n| n.saturating_sub(1))?;
+        }
+        self.relink(src, now, |n| n)?;
+        let left = if dst != 0 {
+            self.relink(dst, now, |n| if d_dir { 0 } else { n.saturating_sub(1) })?
+        } else {
+            0
+        };
+        Ok((dst, left))
+    }
+
+    fn inline_link(&self, i: &Inode) -> bool {
+        let ea = if i.file_acl != 0 { self.sectors_per_block() } else { 0 };
+        i.size <= 60 && i.sectors.saturating_sub(ea) == 0
+    }
+
+    fn drop_xattr(&mut self, b: u32) -> Result<(), i32> {
+        let mut buf = zeroed(self.block_size as usize)?;
+        self.read_block(b, &mut buf, true)?;
+        if le32(&buf, 0) != EA_MAGIC {
+            return Err(EIO);
+        }
+        let refs = le32(&buf, 4);
+        if refs > 1 {
+            put32(&mut buf, 4, refs - 1);
+            self.write_block(b, &buf)
+        } else {
+            self.free_block(b)
+        }
+    }
+
+    fn evict(&mut self, ino: u32, now: u32) -> Result<(), i32> {
+        self.writable()?;
+        let mut node = self.inode(ino)?;
+        if node.nlink != 0 {
+            return Ok(());
+        }
+        let kind = node.mode & S_IFMT;
+        let has_blocks = kind == S_IFREG || kind == S_IFDIR || (kind == S_IFLNK && !self.inline_link(&node));
+        if has_blocks {
+            self.free_from(&mut node, 0)?;
+        }
+        if node.file_acl != 0 {
+            self.drop_xattr(node.file_acl)?;
+        }
+        self.clear_inode(ino, now)?;
+        self.free_inode(ino, kind == S_IFDIR)
+    }
+
     fn sync(&mut self, now: u32, clean: bool) -> Result<(), i32> {
         if self.write.is_none() || (!self.dirty && !clean) {
             return Ok(());
@@ -733,6 +1266,7 @@ impl Fs {
             for (i, g) in self.groups.iter().enumerate() {
                 put16(&mut gdt, i * 32 + 12, g.free_blocks as u16);
                 put16(&mut gdt, i * 32 + 14, g.free_inodes as u16);
+                put16(&mut gdt, i * 32 + 16, g.used_dirs as u16);
             }
             self.write_at(self.gdt_off, &gdt)?;
             self.dirty = false;
@@ -756,10 +1290,10 @@ fn mount(ctx: *mut c_void, read: ReadFn, write: Option<WriteFn>, info: &mut Ext2
     }
     let block_size = 1024u32 << log;
     let rev = le32(&sb, 76);
-    let (inode_size, incompat, ro_compat) = if rev >= 1 {
-        (le16(&sb, 88) as u32, le32(&sb, 96), le32(&sb, 100))
+    let (inode_size, first_ino, incompat, ro_compat) = if rev >= 1 {
+        (le16(&sb, 88) as u32, le32(&sb, 84), le32(&sb, 96), le32(&sb, 100))
     } else {
-        (128, 0, 0)
+        (128, GOOD_OLD_FIRST_INO, 0, 0)
     };
     if incompat & INCOMPAT_RECOVER != 0 || incompat & !(INCOMPAT_SUPPORTED | INCOMPAT_RECOVER) != 0 {
         return Err(EINVAL);
@@ -816,6 +1350,7 @@ fn mount(ctx: *mut c_void, read: ReadFn, write: Option<WriteFn>, info: &mut Ext2
             inode_table: table,
             free_blocks: le16(&gdt, g * 32 + 12) as u32,
             free_inodes: le16(&gdt, g * 32 + 14) as u32,
+            used_dirs: le16(&gdt, g * 32 + 16) as u32,
         };
         if group.block_bitmap == 0
             || group.block_bitmap >= blocks
@@ -823,6 +1358,7 @@ fn mount(ctx: *mut c_void, read: ReadFn, write: Option<WriteFn>, info: &mut Ext2
             || group.inode_bitmap >= blocks
             || group.free_blocks > blocks_per_group
             || group.free_inodes > inodes_per_group
+            || group.used_dirs > inodes_per_group
         {
             sane = false;
         }
@@ -831,6 +1367,8 @@ fn mount(ctx: *mut c_void, read: ReadFn, write: Option<WriteFn>, info: &mut Ext2
     let state = le16(&sb, 58);
     let writable = write.is_some()
         && sane
+        && first_ino > ROOT_INO
+        && first_ino <= inodes
         && ro_compat & !RO_COMPAT_WRITABLE == 0
         && state & STATE_ERRORS == 0;
     let mut fs = Fs {
@@ -844,6 +1382,7 @@ fn mount(ctx: *mut c_void, read: ReadFn, write: Option<WriteFn>, info: &mut Ext2
         blocks_per_group,
         inodes_per_group,
         inode_size,
+        first_ino,
         gdt_off,
         gdt_blocks: (gdt_bytes as u64).div_ceil(block_size as u64) as u32,
         free_blocks: le32(&sb, 12),
@@ -1056,6 +1595,98 @@ pub unsafe extern "C" fn ext2_truncate(fs: *mut Fs, ino: u32, size: u64, now: u3
 pub unsafe extern "C" fn ext2_sync(fs: *mut Fs, now: u32, clean: bool) -> i32 {
     let fs = &mut *fs;
     match fs.sync(now, clean) {
+        Ok(()) => 0,
+        Err(e) => errno(e),
+    }
+}
+
+unsafe fn name_of<'a>(name: *const u8, len: u32) -> Result<&'a [u8], i32> {
+    if name.is_null() || len == 0 {
+        return Err(EINVAL);
+    }
+    if len > 255 {
+        return Err(ENAMETOOLONG);
+    }
+    Ok(core::slice::from_raw_parts(name, len as usize))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ext2_create(
+    fs: *mut Fs,
+    dir: u32,
+    name: *const u8,
+    len: u32,
+    mode: u32,
+    now: u32,
+    out: *mut u32,
+) -> i32 {
+    let fs = &mut *fs;
+    let r = name_of(name, len).and_then(|n| fs.create(dir, n, mode, now));
+    match r {
+        Ok(ino) => {
+            *out = ino;
+            0
+        }
+        Err(e) => errno(e),
+    }
+}
+
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn ext2_unlink(
+    fs: *mut Fs,
+    dir: u32,
+    name: *const u8,
+    len: u32,
+    expect: u32,
+    rmdir: bool,
+    now: u32,
+    nlink: *mut u32,
+) -> i32 {
+    let fs = &mut *fs;
+    let r = name_of(name, len).and_then(|n| fs.unlink(dir, n, expect, rmdir, now));
+    match r {
+        Ok((_, left)) => {
+            *nlink = left;
+            0
+        }
+        Err(e) => errno(e),
+    }
+}
+
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn ext2_rename(
+    fs: *mut Fs,
+    odir: u32,
+    oname: *const u8,
+    olen: u32,
+    ndir: u32,
+    nname: *const u8,
+    nlen: u32,
+    expect: u32,
+    now: u32,
+    victim: *mut u32,
+    nlink: *mut u32,
+) -> i32 {
+    let fs = &mut *fs;
+    let r = name_of(oname, olen)
+        .and_then(|o| name_of(nname, nlen).map(|n| (o, n)))
+        .and_then(|(o, n)| fs.rename(odir, o, ndir, n, expect, now));
+    match r {
+        Ok((gone, left)) => {
+            *victim = gone;
+            *nlink = left;
+            0
+        }
+        Err(e) => errno(e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ext2_evict(fs: *mut Fs, ino: u32, now: u32) -> i32 {
+    let fs = &mut *fs;
+    match fs.evict(ino, now) {
         Ok(()) => 0,
         Err(e) => errno(e),
     }

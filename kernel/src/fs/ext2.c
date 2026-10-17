@@ -228,6 +228,67 @@ static int ext2v_truncate(struct vnode *v, uint64_t size)
     return r;
 }
 
+static int ext2v_create(struct vnode *dir, const char *name, uint32_t mode, struct vnode **out)
+{
+    struct ext2_mnt *em = em_of(dir);
+    uint32_t ino = 0;
+    mutex_lock(&em->lock);
+    int r = ext2_create(em->fs, (uint32_t)dir->key, (const uint8_t *)name, (uint32_t)strlen(name), mode,
+                        now_epoch(), &ino);
+    mutex_unlock(&em->lock);
+    if (r < 0)
+        return r;
+    return ino_vnode(dir->mnt, ino, out);
+}
+
+static void forget(struct vnode *victim, uint32_t nlink)
+{
+    if (nlink)
+        return;
+    victim->unlinked = true;
+    vcache_unhash(victim);
+}
+
+static int ext2v_unlink(struct vnode *dir, const char *name, struct vnode *victim)
+{
+    struct ext2_mnt *em = em_of(dir);
+    uint32_t nlink = 1;
+    mutex_lock(&em->lock);
+    int r = ext2_unlink(em->fs, (uint32_t)dir->key, (const uint8_t *)name, (uint32_t)strlen(name),
+                        (uint32_t)victim->key, vnode_is_dir(victim), now_epoch(), &nlink);
+    if (r == 0)
+        forget(victim, nlink);
+    mutex_unlock(&em->lock);
+    return r;
+}
+
+static int ext2v_rename(struct vnode *odir, const char *oname, struct vnode *ndir, const char *nname,
+                        struct vnode *v, struct vnode *victim)
+{
+    struct ext2_mnt *em = em_of(odir);
+    uint32_t gone = 0, nlink = 1;
+    mutex_lock(&em->lock);
+    int r = ext2_rename(em->fs, (uint32_t)odir->key, (const uint8_t *)oname, (uint32_t)strlen(oname),
+                        (uint32_t)ndir->key, (const uint8_t *)nname, (uint32_t)strlen(nname), (uint32_t)v->key,
+                        now_epoch(), &gone, &nlink);
+    if (r == 0 && victim && gone == (uint32_t)victim->key)
+        forget(victim, nlink);
+    mutex_unlock(&em->lock);
+    return r;
+}
+
+static void ext2v_release(struct vnode *v)
+{
+    struct ext2_mnt *em = v->mnt->priv;
+    if (!v->unlinked || !em)
+        return;
+    mutex_lock(&em->lock);
+    int r = ext2_evict(em->fs, (uint32_t)v->key, now_epoch());
+    mutex_unlock(&em->lock);
+    if (r < 0)
+        log_warn("ext2", "%s: falha ao liberar o inode %u (erro %d)", em->dev->name, (uint32_t)v->key, r);
+}
+
 static int ext2v_sync(struct mount *m)
 {
     struct ext2_mnt *em = m->priv;
@@ -305,4 +366,8 @@ const struct fs_type ext2_fs_type = {
     .readlink = ext2v_readlink,
     .write = ext2v_write,
     .truncate = ext2v_truncate,
+    .create = ext2v_create,
+    .unlink = ext2v_unlink,
+    .rename = ext2v_rename,
+    .release = ext2v_release,
 };

@@ -46,5 +46,12 @@ int64_t ext2_readlink(const struct ext2_rs *fs, uint32_t ino, uint8_t *buf, uint
 int64_t ext2_write(struct ext2_rs *fs, uint32_t ino, uint64_t off, const uint8_t *buf, uint64_t len, uint32_t now);
 int ext2_truncate(struct ext2_rs *fs, uint32_t ino, uint64_t size, uint32_t now);
 int ext2_sync(struct ext2_rs *fs, uint32_t now, bool clean);
+int ext2_create(struct ext2_rs *fs, uint32_t dir, const uint8_t *name, uint32_t len, uint32_t mode, uint32_t now,
+                uint32_t *out);
+int ext2_unlink(struct ext2_rs *fs, uint32_t dir, const uint8_t *name, uint32_t len, uint32_t expect, bool rmdir,
+                uint32_t now, uint32_t *nlink);
+int ext2_rename(struct ext2_rs *fs, uint32_t odir, const uint8_t *oname, uint32_t olen, uint32_t ndir,
+                const uint8_t *nname, uint32_t nlen, uint32_t expect, uint32_t now, uint32_t *victim, uint32_t *nlink);
+int ext2_evict(struct ext2_rs *fs, uint32_t ino, uint32_t now);
 
 extern const struct fs_type ext2_fs_type;
