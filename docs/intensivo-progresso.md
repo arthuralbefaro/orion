@@ -16,7 +16,7 @@ ou sinais), 5 vezes seguidas:
 
     .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
 
-Proxima etapa: 1.10.
+Proxima etapa: 1.11.
 
 ## Checklist
 
@@ -38,7 +38,7 @@ Proxima etapa: 1.10.
 | 1.7 | futex | [x] | 03:50 | 04:28 | (ver diario) |
 | 1.8 | Tempo e sinais completos | [x] | 04:28 | 05:37 | (ver diario) |
 | 1.9 | dash, lua, sbase | [x] | 05:37 | 06:28 | (ver diario) |
-| 1.10 | Doom | [ ] | | | |
+| 1.10 | Doom | [x] | 06:28 | 07:10 | (ver diario) |
 | 1.11 | tcc dentro do Orion | [ ] | | | |
 | 1.12 | Programas na musl, aposentar a libc propria | [ ] | | | |
 | 2.1 | VFS com inodes | [ ] | | | |
@@ -441,3 +441,24 @@ Regressao 196 -> 207, estresse 5x verde.
 Pendente: o escalonador nao acorda CPU ociosa quando entra trabalho na fila
 (um filho novo espera o proximo tick; no TCG uns 15 ms); o `dash` fica sem
 edicao de linha (`SMALL`, sem libedit).
+
+#### 1.10 Doom - 06:28 as 07:10 - FEITO
+Doom pelo `doomgeneric` (commit `e257a09`, intocado em `third_party`) com o
+Freedoom 0.13.0 (`freedoom1.wad`, baixado e conferido por `tools/freedoom.ps1`
+ou `tools/freedoom.py`, fora do git). Nosso e so a plataforma
+(`user/musl/doom/doomgeneric_orion.c`): framebuffer por `mmap` do `/dev/fb0`
+com escala inteira e conversao pelas mascaras de cor, teclado por
+`/dev/input` com `poll`, e `-orionquit <s>` para a regressao. Roda a demo a
+uns 38 quadros por segundo no QEMU TCG (limite do jogo: 35). A sequencia B
+roda o Doom 30 s, tira a captura e confere que ela tem a cena do jogo
+(91 cores numa amostra; tela preta ou console daria poucas).
+A revisao achou que o teclado nao funcionava no jogo: o driver nao mandava
+Shift/Ctrl/Alt/Caps para `/dev/input` (correcao no kernel, que tambem passa a
+tratar Ctrl/Alt da direita como modificador do terminal) e a plataforma lia a
+flag de tecla estendida errado. Corrigido e conferido no QEMU: Enter abre o
+menu, setas andam, Ctrl atira. A sequencia A confere Ctrl e seta no `evtest`.
+Outros: tecla do jogo por tabela fixa (soltar com Shift prendia a tecla),
+WAD tambem no Linux/CI, `__pycache__` fora do git.
+Regressao 207 -> 213, estresse 5x verde.
+Pendente: a tecla Pause (sequencia E1 que o driver nao trata; Scroll Lock
+faz a pausa); som.

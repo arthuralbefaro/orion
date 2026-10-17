@@ -21,9 +21,13 @@ if (Test-Path user\musl) {
             foreach ($line in Get-Content $spec) {
                 $t = $line.Trim()
                 if ($t.StartsWith("flag ")) {
-                    $f = $t.Substring(5).Trim()
-                    if ($f.StartsWith("-I")) { $f = "-I" + (Join-Path $dir $f.Substring(2)) }
-                    $mflags += $f
+                    foreach ($f in ($t.Substring(5).Trim() -split '\s+')) {
+                        $f = $f.Replace("@gen", (Join-Path $PSScriptRoot "out\gen\$($_.Name)")).Replace("@root", $PSScriptRoot)
+                        if ($f.StartsWith("-I") -and -not [System.IO.Path]::IsPathRooted($f.Substring(2))) {
+                            $f = "-I" + (Join-Path $dir $f.Substring(2))
+                        }
+                        $mflags += $f
+                    }
                 }
             }
         }

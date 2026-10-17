@@ -95,6 +95,19 @@ def build_all(quiet=False):
     for n, owner in links.items():
         if n not in taken:
             shutil.copyfile(out / f"{owner}.elf", bindir / n)
+    wad = None
+    if "doom" in built:
+        sys.path.insert(0, str(ROOT / "tools"))
+        import freedoom
+        try:
+            wad = freedoom.fetch()
+        except (OSError, SystemExit) as e:
+            print(f"aviso: sem o freedoom1.wad ({e}); o doom fica sem IWAD")
+    if wad and wad.exists():
+        (out / "esp" / "doom").mkdir(parents=True, exist_ok=True)
+        dest = out / "esp" / "doom" / "freedoom1.wad"
+        if not dest.exists() or dest.stat().st_size != wad.stat().st_size:
+            shutil.copyfile(wad, dest)
     return built
 
 

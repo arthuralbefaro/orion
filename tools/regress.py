@@ -30,7 +30,7 @@ def parse_sequences():
         end = re.search(r"^\}\s*$", body, flags=re.M)
         if end:
             body = body[:end.start()]
-        seq = {"name": name, "steps": [], "expect": [], "memdelta": None, "disk": False, "gui": False,
+        seq = {"name": name, "steps": [], "expect": [], "memdelta": None, "shots": [], "disk": False, "gui": False,
                "delay": 1.0, "boot": 60.0, "remove_disk": False, "log": f"out/reg-{name.lower()}.log",
                "stress": None}
         m = re.search(r"\$steps" + name + r"\s*=\s*@\((.*?)^\s*\)\s*$", body, flags=re.S | re.M)
@@ -56,6 +56,8 @@ def parse_sequences():
             pat = ps_string(STRING.match(e.group(2)))
             desc = ps_string(STRING.match(e.group(3)))
             seq["expect"].append((pat, desc, e.group(1) == "ExpectNot"))
+        for sc in re.finditer(r'^\s*Test-ShotColors "([^"]+)" "([^"]+)" (\d+)\s*$', body, flags=re.M):
+            seq["shots"].append((sc.group(1).replace("\\", "/"), sc.group(2), int(sc.group(3))))
         md = re.search(r'^\s*Test-MemDelta \$\w+ "([^"]+)" (\d+)\s*$', body, flags=re.M)
         if md:
             seq["memdelta"] = (md.group(1), int(md.group(2)))
@@ -92,6 +94,30 @@ class Report:
             print(f"  [ok]    {desc} ({a} -> {b}, delta {d})")
         else:
             print(f"  [FALHA] {desc} ({a} -> {b}, delta {d} > {limit})")
+            self.failures.append(desc)
+
+
+    def shot_colors(self, ppm, desc, minimum):
+        self.checks += 1
+        path = ROOT / ppm.replace("\\", "/")
+        if not path.exists():
+            print(f"  [FALHA] {desc}   (sem a captura {ppm})")
+            self.failures.append(desc)
+            return
+        data = path.read_bytes()
+        i = 0
+        lines = 0
+        while i < len(data) and lines < 3:
+            if data[i] == 10:
+                lines += 1
+            i += 1
+        seen = set()
+        for p in range(i, len(data) - 2, 3 * 997):
+            seen.add(data[p] * 65536 + data[p + 1] * 256 + data[p + 2])
+        if len(seen) >= minimum:
+            print(f"  [ok]    {desc} ({len(seen)} cores na amostra)")
+        else:
+            print(f"  [FALHA] {desc} ({len(seen)} cores na amostra, minimo {minimum})")
             self.failures.append(desc)
 
 
@@ -150,6 +176,8 @@ def main():
             print(log)
         for pat, desc, negate in seq["expect"]:
             rep.expect(log, pat, desc, negate)
+        for ppm, desc, minimum in seq["shots"]:
+            rep.shot_colors(ppm, desc, minimum)
         if seq["memdelta"]:
             rep.memdelta(log, *seq["memdelta"])
 

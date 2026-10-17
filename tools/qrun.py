@@ -178,7 +178,7 @@ class Machine:
             pass
 
     def screenshot(self, path):
-        path = Path(path)
+        path = Path(str(path).replace("\\", "/"))
         if not path.is_absolute():
             path = ROOT / path
         path.parent.mkdir(parents=True, exist_ok=True)

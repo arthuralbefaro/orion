@@ -1051,3 +1051,56 @@ Uma linha por decisao, na ordem em que foram tomadas.
     pede sem controle de jobs.
   - `faccessat2` com `AT_EMPTY_PATH` e `AT_FDCWD` confere o diretorio atual em
     vez de dar `EBADF`.
+
+## v2.0.0-a10 (Doom)
+
+- Doom pelo `doomgeneric` (commit `e257a09`, GPL-2.0), com o IWAD do
+  Freedoom 0.13.0 (`freedoom1.wad`, BSD-3-Clause). O motor entra como veio:
+  sao as 80 fontes da lista `SRC_DOOM` do Makefile dele, sem as de outras
+  plataformas e sem som (o `doomfeatures.h` deixa `FEATURE_SOUND` desligado).
+  Os oito tipos de aviso que o motor gera com `-Wall -Wextra` sao desligados
+  por nome no `build.txt` (e nao com `-w`, que esconderia avisos do nosso
+  arquivo).
+- O que e nosso e so a plataforma (`user/musl/doom/doomgeneric_orion.c`): as
+  seis funcoes `DG_*`. O quadro de 640x400 (o jogo de 320x200 ampliado 2x pelo
+  proprio doomgeneric) e ampliado de novo pela escala inteira que cabe no
+  framebuffer (2x em 1280x800) e centralizado, convertendo cada pixel para as
+  mascaras de cor que o `FBIOGET_INFO` informa. As teclas vem de
+  `/dev/input`, lido com `poll` sem esperar (o driver nao tem `O_NONBLOCK`),
+  e seguem o mapeamento da plataforma SDL do proprio doomgeneric: Ctrl atira,
+  espaco usa, Shift corre, Alt faz strafe. A ABI dos dispositivos do Orion
+  fica num cabecalho proprio (`orion_dev.h`), ja que a musl nao tem os
+  cabecalhos da libc propria.
+- `-orionquit <segundos>` (tirado do argv antes do doomgeneric ver) encerra o
+  jogo depois desse tempo e imprime quantos quadros desenhou. E o que a
+  regressao usa: roda a demo do titulo por 30 s, tira a captura no meio e
+  confere que ela tem a cena do jogo (dezenas de cores numa amostra, coisa
+  que uma tela preta ou o console nao tem). `-nogui` e obrigatorio: sem ele o
+  `I_Error` tenta rodar o `zenity` pelo shell.
+- O IWAD tem 28 MB e fica fora do git, como o Zig: `tools/freedoom.ps1` baixa
+  o zip oficial uma vez, confere o SHA-256 do zip e do `freedoom1.wad`, e o
+  `build.ps1` o copia para `/doom/freedoom1.wad` quando o `doom` existe.
+- No QEMU TCG com 4 CPUs a demo roda a uns 38 quadros por segundo, no limite
+  dos 35 Hz do jogo.
+- `check.ps1` passou a entender varias opcoes por linha `flag` e os
+  marcadores `@gen`/`@root`, como o `build.ps1`.
+- Depois de uma revisao, antes do commit:
+  - O driver de teclado nao mandava Shift, Ctrl, Alt e Caps para
+    `/dev/input` (so atualizava os modificadores), e jogava fora Ctrl e Alt da
+    direita. No Doom isso deixava sem atirar, correr e strafe. Agora todas as
+    teclas viram evento, e o Ctrl/Alt da direita tambem contam como
+    modificador para o terminal.
+  - Teclas estendidas chegam como o scancode simples com a flag
+    `INPUT_MOD_EXTENDED` (a seta para cima e 0x48 + flag), nao como 0x148; a
+    plataforma juntava errado e as setas nao funcionavam. As setas do teclado
+    numerico tambem valem.
+  - A tecla do Doom vem de uma tabela fixa por scancode, sem Shift: com o
+    ASCII do evento, apertar `-` e soltar com Shift apertado mandava `_` na
+    soltura e a tecla ficava presa. Scroll Lock e a pausa (a tecla Pause manda
+    uma sequencia E1 que o driver ainda nao trata).
+  - Mascaras de cor com mais de 8 bits por canal sao tratadas.
+  - Linux/CI: `tools/freedoom.py` baixa e confere o WAD como o
+    `freedoom.ps1`; o caminho das capturas no `qrun.py` aceita a barra do
+    Windows que vem do `regressao.ps1`. Sem rede, o build avisa e segue sem
+    IWAD em vez de falhar inteiro.
+  - `__pycache__` saiu do git.

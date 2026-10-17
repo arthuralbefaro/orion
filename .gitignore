@@ -4,3 +4,6 @@ out/
 *.iso
 *.log
 third_party/zig/
+third_party/freedoom/
+__pycache__/
+*.pyc

@@ -59,6 +59,34 @@ function Test-MemDelta([string]$log, [string]$what, [int]$max) {
     }
 }
 
+function Test-ShotColors([string]$ppm, [string]$what, [int]$min) {
+    $script:checks++
+    $path = Join-Path $Root $ppm
+    if (-not (Test-Path $path)) {
+        Write-Host ("  [FALHA] " + $what + "   (sem a captura " + $ppm + ")") -ForegroundColor Red
+        $script:failures += $what
+        return
+    }
+    $bytes = [System.IO.File]::ReadAllBytes($path)
+    $lines = 0
+    $i = 0
+    while ($i -lt $bytes.Length -and $lines -lt 3) {
+        if ($bytes[$i] -eq 10) { $lines++ }
+        $i++
+    }
+    $seen = @{}
+    for ($p = $i; $p + 2 -lt $bytes.Length; $p += 3 * 997) {
+        $seen[[int]$bytes[$p] * 65536 + [int]$bytes[$p + 1] * 256 + [int]$bytes[$p + 2]] = $true
+    }
+    $n = $seen.Count
+    if ($n -ge $min) {
+        Write-Host ("  [ok]    " + $what + " ($n cores na amostra)") -ForegroundColor Green
+    } else {
+        Write-Host ("  [FALHA] " + $what + " ($n cores na amostra, minimo $min)") -ForegroundColor Red
+        $script:failures += $what
+    }
+}
+
 $buildFlag = @{}
 if ($NoBuild) { $buildFlag = @{ NoBuild = $true } }
 
@@ -92,7 +120,7 @@ if ($runAll -or $OnlyA) {
         "cmd:ls /dev", "wait:1",
         "cmd:polltest", "wait:6",
         "cmd:fbtest 2", "wait:1", "shot:out\shots\reg-fbtest.ppm", "wait:2",
-        "cmd:evtest 3", "wait:0.8", "mon:sendkey a", "mon:mouse_move 10 5", "wait:4",
+        "cmd:evtest 10", "wait:0.8", "mon:sendkey a", "mon:sendkey ctrl", "mon:sendkey up", "mon:mouse_move 10 5", "until:20:evento(s)",
         "cmd:ptytest", "wait:8",
         "cmd:echo alfa", "wait:1",
         "keys:1B5B41", "raw: beta", "key:0D", "wait:1.5",
@@ -246,6 +274,8 @@ if ($runAll -or $OnlyA) {
     Expect $a "fbtest: gradiente \+ retangulo desenhados" "fbtest desenhou"
     Expect $a "tecla-desce" "evtest recebeu tecla"
     Expect $a "mouse-move" "evtest recebeu movimento do mouse"
+    Expect $a "tecla-desce\s+scancode=1d" "Ctrl chega ao /dev/input"
+    Expect $a "tecla-desce\s+scancode=48 ascii=0 mods=1\d" "seta chega ao /dev/input como estendida"
     Expect $a "\nola" "ptytest imprimiu ola"
     Expect $a "ptytest: sh saiu com 0" "ptytest encerrou o sh"
     Expect $a "\nalfa beta" "seta para cima recuperou o comando e o texto foi anexado"
@@ -314,6 +344,8 @@ if ($runAll -or $OnlyB) {
     Write-Host "== Sequencia B (grafica) ==" -ForegroundColor Cyan
     $stepsB = @(
         "key:0B", "cmd:mem", "key:0B", "wait:1",
+        "cmd:doom -iwad /doom/freedoom1.wad -nogui -orionquit 30", "wait:22", "shot:out\shots\reg-doom.ppm",
+        "until:120:quadros em", "wait:1",
         "cmd:wm", "wait:3", "shot:out\shots\reg-wm-1-inicial.ppm",
         "mon:sendkey l", "mon:sendkey s", "mon:sendkey ret", "wait:1.5",
         "shot:out\shots\reg-wm-2-ls.ppm",
@@ -334,6 +366,10 @@ if ($runAll -or $OnlyB) {
     $b = Get-Log "out\reg-b.log"
     if ($Verbose) { Write-Output $b }
 
+    Expect $b "adding /doom/freedoom1.wad" "doom: carregou o freedoom1.wad"
+    Expect $b "doom: framebuffer \d+x\d+, escala \d" "doom: framebuffer e /dev/input"
+    Expect $b "doom: \d{3,} quadros em \d+ ms" "doom rodou a demo (centenas de quadros)"
+    Test-ShotColors "out\shots\reg-doom.ppm" "captura do doom tem a cena do jogo" 40
     Expect $b "wm: \d+x\d+, celula" "wm abriu o framebuffer"
     Expect $b "wm: terminal 0 -> sh pid \d+" "wm abriu o primeiro terminal"
     Expect $b "wm: terminal 3 -> sh pid \d+" "Ctrl\+T abriu um segundo terminal"

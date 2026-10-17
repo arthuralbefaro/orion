@@ -203,6 +203,16 @@ New-Item -ItemType Directory -Force -Path (Join-Path $EspDir "EFI\BOOT"), (Join-
 Copy-Item (Join-Path $LimineDir "BOOTX64.EFI") (Join-Path $EspDir "EFI\BOOT\BOOTX64.EFI") -Force
 Copy-Item $KernelElf (Join-Path $EspDir "boot\$Kernel.elf") -Force
 foreach ($name in $userBins.Keys) { Copy-Item $userBins[$name] (Join-Path $EspDir "bin\$name") -Force }
+if ($userBins.ContainsKey("doom")) {
+    $wad = $null
+    try { $wad = & (Join-Path $Root "tools\freedoom.ps1") } catch { Write-Warning "sem o freedoom1.wad ($_); o doom fica sem IWAD" }
+    if ($wad) {
+        $wadDir = Join-Path $EspDir "doom"
+        $wadOut = Join-Path $wadDir "freedoom1.wad"
+        New-Item -ItemType Directory -Force -Path $wadDir | Out-Null
+        if (-not (Test-Path $wadOut) -or (Get-Item $wadOut).Length -ne (Get-Item $wad).Length) { Copy-Item $wad $wadOut -Force }
+    }
+}
 Copy-Item (Join-Path $Root "limine.conf") (Join-Path $EspDir "boot\limine\limine.conf") -Force
 
 New-Item -ItemType Directory -Force -Path (Join-Path $EspDir "etc") | Out-Null
