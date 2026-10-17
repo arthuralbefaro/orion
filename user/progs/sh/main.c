@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -343,6 +344,58 @@ static int job_wait(struct job *j, int foreground)
     return j->status[j->n - 1];
 }
 
+static void print_limit(const char *what, char flag, int resource)
+{
+    struct rlimit r;
+    if (getrlimit(resource, &r) < 0)
+        return;
+    if (r.rlim_cur == RLIM_INFINITY)
+        printf("-%c %-22s ilimitado\n", flag, what);
+    else
+        printf("-%c %-22s %lu\n", flag, what, (unsigned long)r.rlim_cur);
+}
+
+static int builtin_ulimit(int argc, char **argv)
+{
+    int resource = RLIMIT_NOFILE;
+    int i = 1;
+    if (argc > 1 && strcmp(argv[1], "-a") == 0) {
+        print_limit("arquivos abertos", 'n', RLIMIT_NOFILE);
+        print_limit("processos", 'u', RLIMIT_NPROC);
+        print_limit("pilha (bytes)", 's', RLIMIT_STACK);
+        return 0;
+    }
+    if (argc > 1 && argv[1][0] == '-') {
+        if (strcmp(argv[1], "-n") == 0)
+            resource = RLIMIT_NOFILE;
+        else if (strcmp(argv[1], "-u") == 0)
+            resource = RLIMIT_NPROC;
+        else if (strcmp(argv[1], "-s") == 0)
+            resource = RLIMIT_STACK;
+        else {
+            fprintf(stderr, "ulimit: opcao invalida %s (use -a, -n, -u ou -s)\n", argv[1]);
+            return 2;
+        }
+        i = 2;
+    }
+    struct rlimit r;
+    if (getrlimit(resource, &r) < 0)
+        return 1;
+    if (i >= argc) {
+        if (r.rlim_cur == RLIM_INFINITY)
+            puts("ilimitado");
+        else
+            printf("%lu\n", (unsigned long)r.rlim_cur);
+        return 0;
+    }
+    r.rlim_cur = (rlim_t)strtoul(argv[i], NULL, 10);
+    if (setrlimit(resource, &r) < 0) {
+        fprintf(stderr, "ulimit: %s: %s\n", argv[i], strerror(errno));
+        return 1;
+    }
+    return 0;
+}
+
 static int run_builtin(struct cmd *c)
 {
     char **argv = c->argv;
@@ -397,6 +450,8 @@ static int run_builtin(struct cmd *c)
         fputs("\x1b[2J\x1b[H", stdout);
         return 0;
     }
+    if (strcmp(argv[0], "ulimit") == 0)
+        return builtin_ulimit(c->argc, argv);
     if (strcmp(argv[0], "jobs") == 0) {
         job_poll(0);
         for (int i = 0; i < MAX_JOBS; i++)
@@ -436,7 +491,7 @@ static int run_builtin(struct cmd *c)
         return st;
     }
     if (strcmp(argv[0], "help") == 0) {
-        puts("builtins: cd, pwd, sync, clear, history, export, unset, jobs, fg, wait, exit, help");
+        puts("builtins: cd, pwd, sync, clear, history, export, unset, jobs, fg, wait, ulimit, exit, help");
         puts("variaveis:   NOME=valor, $NOME, ${NOME}, $? (status do ultimo comando)");
         puts("             NOME=valor cmd  (so para esse comando); PATH escolhe onde procurar");
         puts("arquivos: ls cat cp mv rm mkdir touch head tail grep sort uniq tee wc echo");

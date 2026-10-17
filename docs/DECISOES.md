@@ -514,3 +514,24 @@ Uma linha por decisao, na ordem em que foram tomadas.
   argumento espera todos. Nao ha `bg` nem suspensao (Ctrl+Z), porque o kernel
   ainda nao tem `SIGTSTP`/`SIGCONT`.
 - Programa novo `false` (o `true` ja existia), para testar `&&` e `||`.
+
+## v1.9.6 (limites)
+
+- A tabela de descritores deixou de ser um vetor fixo de 32 dentro do
+  `struct process`: e um vetor alocado que comeca com 32 posicoes e dobra
+  (64, 128, 256) quando um `open`/`dup`/`dup2` precisa de um numero maior,
+  ate o `RLIMIT_NOFILE` (no maximo 256). Um vetor fixo de 256 deixaria todo
+  `struct process` com mais de 2 KiB, o que o tira do slab e faz cada `fork`
+  pagar uma alocacao grande (mapear paginas e, na liberacao, um TLB shootdown).
+- `getrlimit`, `setrlimit` e `prlimit64` (este so para o proprio processo).
+  `RLIMIT_NOFILE` comeca em 256/256, `RLIMIT_NPROC` em 512/512 e
+  `RLIMIT_STACK` informa os 64 KiB da pilha. Baixar o limite e livre; subir o
+  maximo da `EPERM` (ainda nao ha usuario root). Os limites sao herdados no
+  `fork`.
+- `RLIMIT_NPROC` e conferido no `fork` contra o numero total de processos
+  (ainda ha um usuario so), e o `fork` devolve `EAGAIN` ao passar dele.
+- `proclist` aceita ate 256 entradas (`PROCLIST_MAX` da libc tambem).
+- `ulimit` no `sh` (`-a`, `-n`, `-u`, `-s`), mudando so o limite corrente.
+- O `stress` ganhou um terceiro argumento (milissegundos que cada filho fica
+  vivo) e aceita ate 256 filhos ao mesmo tempo; com ele imprime o pico de
+  vivos.

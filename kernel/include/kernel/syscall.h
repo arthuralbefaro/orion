@@ -49,6 +49,9 @@
 #define SYS_GETPPID       110
 #define SYS_ARCH_PRCTL    158
 #define SYS_CLOCK_GETTIME 228
+#define SYS_GETRLIMIT     97
+#define SYS_SETRLIMIT     160
+#define SYS_PRLIMIT64     302
 #define SYS_READDIR       1000
 #define SYS_OPENPTY       1001
 #define SYS_SYSINFO       1002

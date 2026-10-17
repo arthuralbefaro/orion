@@ -1,5 +1,5 @@
 #pragma once
 
 #define KERNEL_NAME    "Orion"
-#define KERNEL_VERSION "1.9.5"
+#define KERNEL_VERSION "1.9.6"
 #define KERNEL_ARCH    "x86_64"

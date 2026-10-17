@@ -149,6 +149,6 @@ int main(void)
 
     close(fd);
     close(dir);
-    printf("badptr: %d/%d %s\n", good, total, good == total ? "TUDO OK" : "FALHA");
+    printf("badptr: fim, %d/%d %s\n", good, total, good == total ? "TUDO OK" : "FALHA");
     return good == total ? 0 : 1;
 }

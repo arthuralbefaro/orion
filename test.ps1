@@ -151,12 +151,13 @@ function Wait-After([string]$needle, [double]$timeout, [int]$from) {
     $stream = $client.GetStream()
     $buf = New-Object byte[] 65536
     $end = (Get-Date).AddSeconds($timeout)
+    if ($log.ToString().IndexOf($needle, $from, [System.StringComparison]::Ordinal) -ge 0) { return $true }
     while ((Get-Date) -lt $end) {
         if ($stream.DataAvailable) {
             $n = $stream.Read($buf, 0, $buf.Length)
             if ($n -gt 0) {
                 [void]$log.Append([System.Text.Encoding]::ASCII.GetString($buf, 0, $n))
-                if ($log.ToString().IndexOf($needle, $from) -ge 0) { return $true }
+                if ($log.ToString().IndexOf($needle, $from, [System.StringComparison]::Ordinal) -ge 0) { return $true }
             }
         } else {
             Start-Sleep -Milliseconds 50

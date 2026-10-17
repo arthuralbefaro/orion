@@ -15,7 +15,7 @@ struct sysinfo_orion {
 };
 
 #define PROCLIST_NAME 24
-#define PROCLIST_MAX  64
+#define PROCLIST_MAX  256
 
 struct procinfo_orion {
     uint32_t pid;

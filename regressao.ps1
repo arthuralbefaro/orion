@@ -71,7 +71,7 @@ if ($runAll -or $OnlyA) {
         "cmd:memtest", "wait:2",
         "cmd:crash", "wait:2",
         "cmd:sigtest", "wait:10",
-        "cmd:badptr", "until:40:badptr: ",
+        "cmd:badptr", "until:40:badptr: fim",
         "cmd:sleep 100", "wait:2", "key:03", "wait:2",
         "cmd:hello um dois", "wait:1",
         "cmd:date", "wait:1",
@@ -116,6 +116,8 @@ if ($runAll -or $OnlyA) {
         "cmd:XV=abc printenv XV", "cmd:printenv XV || echo XV-sumiu",
         "cmd:sleep 3 &", "cmd:jobs", "cmd:wait", "wait:1",
         "cmd:sleep 2 & sleep 1 & jobs", "cmd:fg", "wait:3", "cmd:jobs", "wait:1",
+        "cmd:limtest", "until:60:limtest: fim",
+        "cmd:ulimit -a", "cmd:stress 220 220 9000 &", "wait:6", "cmd:ps | wc", "cmd:wait", "until:120:pronto  stress",
         "key:0B", "cmd:heaptest", "wait:1", "cmd:preempt", "wait:2",
         "cmd:arp", "cmd:net",
         "cmd:dev", "cmd:pty", "cmd:mem"
@@ -132,7 +134,7 @@ if ($runAll -or $OnlyA) {
     Expect $a "morto por sinal 11" "crash morto com SIGSEGV"
     Expect $a "sigtest: TUDO OK" "sigtest TUDO OK"
     Expect $a "rcx e r11 sobrevivem a um sinal\s+ok" "rt_sigreturn devolve todos os registradores"
-    Expect $a "badptr: (\d+)/\1 TUDO OK" "badptr: ponteiros invalidos devolvem EFAULT sem panico"
+    Expect $a "badptr: fim, (\d+)/\1 TUDO OK" "badptr: ponteiros invalidos devolvem EFAULT sem panico"
     Expect $a "handler de sinal nao canonico\s+SIGSEGV" "handler nao canonico vira SIGSEGV"
     Expect $a "flag NT ligada dentro do handler\s+ok" "flag NT do usuario nao derruba o iretq do rt_sigreturn"
     Expect $a "Copias de usuario: [1-9]\d* falta\(s\) recuperada\(s\)" "tabela de excecoes recuperou as faltas"
@@ -187,6 +189,11 @@ if ($runAll -or $OnlyA) {
     Expect $a "\[3\] rodando\s+sleep 1" "dois trabalhos em segundo plano ao mesmo tempo"
     Expect $a "(?s)\$ fg\s*\nsleep 1" "fg traz o ultimo trabalho para o primeiro plano"
     Expect $a "\[2\] pronto\s+sleep 2" "trabalho terminado e avisado no prompt seguinte"
+    Expect $a "limtest: fim, TUDO OK" "limtest: 256 fds, setrlimit, RLIMIT_NPROC no fork"
+    Expect $a "-n arquivos abertos\s+256" "ulimit -a mostra 256 arquivos abertos"
+    Expect $a "ps \| wc\s*\n\s+2[0-5]\d\s+" "ps lista mais de 200 processos vivos ao mesmo tempo"
+    Expect $a "stress: pico de 220 vivos ao mesmo tempo" "stress manteve 220 filhos vivos"
+    Expect $a "stress: 220 processos, 0 falha\(s\) ok" "stress com 220 vivos terminou sem falha"
     Expect $a "PID\s+PPID\s+PGID\s+PAGINAS\s+ESTADO\s+NOME" "ps -l mostrou o cabecalho"
     Expect $a "\n\s+\d+\s+\d+\s+\d+\s+\d+\s+rodando\s+ps" "ps -l listou a si mesmo"
     Expect $a "ligado ha \d\d:\d\d:\d\d, [1-9]\d* processo\(s\), 4 CPU\(s\)" "uptime contou processos e CPUs"

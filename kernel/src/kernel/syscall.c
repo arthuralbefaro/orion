@@ -64,7 +64,7 @@ static long sys_sysinfo(struct user_sysinfo *uout)
 
 static long sys_proclist(struct user_procinfo *uout, int max)
 {
-    if (max <= 0 || max > 64)
+    if (max <= 0 || max > 256)
         return -EINVAL;
     if (!user_range_ok((uint64_t)uout, sizeof(*uout) * (uint64_t)max))
         return -EFAULT;
@@ -582,7 +582,7 @@ static long sys_dup2(int oldfd, int newfd)
 {
     struct process *p = process_current();
     struct file *f = process_fd_get(p, oldfd);
-    if (!f || newfd < 0 || newfd >= PROCESS_MAX_FDS)
+    if (!f || !process_fd_reserve(p, newfd))
         return -EBADF;
     if (oldfd == newfd)
         return newfd;
@@ -742,6 +742,41 @@ static long sys_readdir(int fd, struct user_dirent *uout, uint64_t index)
     return 1;
 }
 
+static long sys_getrlimit(int resource, struct user_rlimit *uout)
+{
+    struct user_rlimit r;
+    long e = process_getrlimit(resource, &r);
+    if (e < 0)
+        return e;
+    return copy_to_user(uout, &r, sizeof(r));
+}
+
+static long sys_setrlimit(int resource, const struct user_rlimit *uin)
+{
+    struct user_rlimit r;
+    if (copy_from_user(&r, uin, sizeof(r)) < 0)
+        return -EFAULT;
+    return process_setrlimit(resource, &r);
+}
+
+static long sys_prlimit64(int pid, int resource, const struct user_rlimit *uin, struct user_rlimit *uout)
+{
+    if (pid != 0 && pid != (int)process_current()->pid)
+        return -ESRCH;
+    struct user_rlimit old;
+    long e = process_getrlimit(resource, &old);
+    if (e < 0)
+        return e;
+    if (uin) {
+        e = sys_setrlimit(resource, uin);
+        if (e < 0)
+            return e;
+    }
+    if (uout)
+        return copy_to_user(uout, &old, sizeof(old));
+    return 0;
+}
+
 bool syscall_dispatch(struct interrupt_frame *f)
 {
     sti();
@@ -792,6 +827,9 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_FSYNC:
     case SYS_SYNC:        ret = vfs_sync() ? 0 : -EIO; break;
     case SYS_GETPGID:     ret = process_getpgid((int)f->rdi); break;
+    case SYS_GETRLIMIT:   ret = sys_getrlimit((int)f->rdi, (struct user_rlimit *)f->rsi); break;
+    case SYS_SETRLIMIT:   ret = sys_setrlimit((int)f->rdi, (const struct user_rlimit *)f->rsi); break;
+    case SYS_PRLIMIT64:   ret = sys_prlimit64((int)f->rdi, (int)f->rsi, (const struct user_rlimit *)f->rdx, (struct user_rlimit *)f->r10); break;
     case SYS_SYSINFO:     ret = sys_sysinfo((struct user_sysinfo *)f->rdi); break;
     case SYS_PROCLIST:    ret = sys_proclist((struct user_procinfo *)f->rdi, (int)f->rsi); break;
     case SYS_SOCKET:      ret = sys_socket((int)f->rdi, (int)f->rsi, (int)f->rdx); break;

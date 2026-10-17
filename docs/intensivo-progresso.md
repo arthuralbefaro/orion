@@ -16,7 +16,7 @@ ou sinais), 5 vezes seguidas:
 
     .\test.ps1 -Smp 4 -Commands @("stress 3000 16 | stress 3000 16 | stress 3000 16 | stress 3000 16")
 
-Proxima etapa: 0.7.
+Proxima etapa: 1.1.
 
 ## Checklist
 
@@ -28,7 +28,7 @@ Proxima etapa: 0.7.
 | 0.4 | FAT e cache de blocos com mutex | [x] | 22:42 | 23:08 | `076285d` |
 | 0.5 | Harness em Python e CI | [x] | 23:09 | 23:39 | `bc9a8e0` |
 | 0.6 | Shell: `&`, jobs, fg, wait, `VAR=x cmd`, `&&`, `\|\|`, `;` | [x] | 23:40 | 00:00 | (ver diario) |
-| 0.7 | Limites: 256 fds, 256 processos, ulimit | [ ] | | | |
+| 0.7 | Limites: 256 fds, 256 processos, ulimit | [x] | 00:00 | 01:09 | (ver diario) |
 | 1.1 | Pilha inicial do Linux (auxv) | [ ] | | | |
 | 1.2 | Syscalls de partida da musl | [ ] | | | |
 | 1.3 | Arquivos no formato do Linux | [ ] | | | |
@@ -232,3 +232,25 @@ Regressao 105 -> 118 (13 verificacoes novas na sequencia A, inclusive uma
 negativa: `false && echo NAO-DEVIA` nao pode imprimir). O `regress.py`
 aprendeu `ExpectNot`. Sem estresse: a etapa so mexe em espaco de usuario.
 Fora: `bg`, Ctrl+Z e `2>&1` (o kernel ainda nao tem `SIGTSTP`/`SIGCONT`).
+
+#### 0.7 Limites - 00:00 as 01:09 - FEITO
+Tabela de descritores alocada, comecando com 32 e dobrando ate o
+`RLIMIT_NOFILE` (256); `getrlimit`/`setrlimit`/`prlimit64`; `RLIMIT_NPROC`
+(512) conferido no `fork`; `proclist` ate 256; `ulimit` no `sh`. Programa
+novo `limtest` (253 descritores alem de 0/1/2 e `EMFILE`, limite 16, `dup2`
+na borda 255/256, `EINVAL`/`EPERM`, `RLIMIT_NPROC` deixando passar 3 forks e
+devolvendo `EAGAIN` nos outros). `stress N W ms` mantem os filhos vivos ms
+milissegundos; a regressao confere 220 vivos ao mesmo tempo pelo `ps | wc`.
+Regressao 118 -> 123, estresse 5x verde (`.egressao.ps1 -OnlyE -StressRuns 5`).
+Problemas achados:
+(1) O passo `until` do `test.ps1` so procurava o texto quando chegavam dados
+novos: se a saida inteira ja tinha chegado durante o `cmd:`, ele esperava o
+tempo todo. Agora confere antes de esperar.
+(2) Os `until` do `badptr` e do `limtest` usavam como marcador o inicio da
+primeira linha (`badptr: `), entao o passo seguinte (um Ctrl+C) chegava com o
+programa ainda rodando e o matava; tudo depois na sequencia A se deslocava (14
+verificacoes vermelhas sem nenhum bug no kernel). As linhas finais ganharam um
+marcador proprio (`badptr: fim`, `limtest: fim`).
+(3) O primeiro `ps | wc` contou 194 em vez de 220+: 1 de cada 7 filhos do
+`stress` faz `exec /bin/true` e terminava antes da espera. A espera passou a
+vir antes do `exec`.

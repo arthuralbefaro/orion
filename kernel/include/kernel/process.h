@@ -6,7 +6,20 @@
 #include <kernel/syscall.h>
 
 #define PROCESS_NAME_MAX 32
-#define PROCESS_MAX_FDS  32
+#define PROCESS_FD_INITIAL 32
+#define PROCESS_FD_MAX     256
+#define PROCESS_NPROC_MAX  512
+
+#define RLIMIT_STACK  3
+#define RLIMIT_NPROC  6
+#define RLIMIT_NOFILE 7
+#define RLIMIT_COUNT  16
+#define RLIM_INFINITY (~0ull)
+
+struct user_rlimit {
+    uint64_t cur;
+    uint64_t max;
+};
 #define USER_STACK_TOP   0x00007ffffffff000ull
 #define USER_STACK_SIZE  (64 * 1024)
 #define USER_HEAP_MAX    (64 * 1024 * 1024)
@@ -39,7 +52,9 @@ struct process {
     bool autofree;
     struct thread *thread;
     struct process *parent;
-    struct file *fds[PROCESS_MAX_FDS];
+    struct file **fds;
+    int fd_cap;
+    struct user_rlimit rlimits[RLIMIT_COUNT];
     struct process *next;
 };
 
@@ -70,3 +85,7 @@ void process_dump(void);
 int  process_list(struct user_procinfo *out, int max);
 int  process_count(void);
 int  process_getppid(void);
+long process_getrlimit(int resource, struct user_rlimit *out);
+long process_setrlimit(int resource, const struct user_rlimit *in);
+int  process_fd_limit(struct process *p);
+bool process_fd_reserve(struct process *p, int fd);

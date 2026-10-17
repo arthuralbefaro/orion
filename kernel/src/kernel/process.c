@@ -180,15 +180,41 @@ static void user_thread_entry(void *arg)
     enter_user_mode(p->entry, p->stack_top);
 }
 
+static void process_free(struct process *p)
+{
+    if (!p)
+        return;
+    kfree(p->fds);
+    kfree(p);
+}
+
+static void rlimits_default(struct process *p)
+{
+    for (int i = 0; i < RLIMIT_COUNT; i++) {
+        p->rlimits[i].cur = RLIM_INFINITY;
+        p->rlimits[i].max = RLIM_INFINITY;
+    }
+    p->rlimits[RLIMIT_NOFILE].cur = p->rlimits[RLIMIT_NOFILE].max = PROCESS_FD_MAX;
+    p->rlimits[RLIMIT_NPROC].cur = p->rlimits[RLIMIT_NPROC].max = PROCESS_NPROC_MAX;
+    p->rlimits[RLIMIT_STACK].cur = p->rlimits[RLIMIT_STACK].max = USER_STACK_SIZE;
+}
+
 static struct process *process_alloc(const char *name)
 {
     struct process *p = kzalloc(sizeof(*p));
     if (!p)
         return NULL;
+    p->fds = kzalloc(PROCESS_FD_INITIAL * sizeof(struct file *));
+    if (!p->fds) {
+        process_free(p);
+        return NULL;
+    }
+    p->fd_cap = PROCESS_FD_INITIAL;
+    rlimits_default(p);
     strlcpy(p->name, name, sizeof(p->name));
     p->pml4_phys = vmm_create_address_space();
     if (!p->pml4_phys) {
-        kfree(p);
+        process_free(p);
         return NULL;
     }
     p->state = PROC_RUNNING;
@@ -262,7 +288,7 @@ static void orphan_children_locked(struct process *p)
             c->autofree = c->state == PROC_ZOMBIE;
             if (c->state == PROC_ZOMBIE && c->pml4_phys == 0) {
                 *pp = c->next;
-                kfree(c);
+                process_free(c);
                 continue;
             }
         }
@@ -300,7 +326,7 @@ static struct process *process_start(struct process *p, const char *name)
     if (!p->thread) {
         process_unregister(p);
         vmm_destroy_address_space(p->pml4_phys);
-        kfree(p);
+        process_free(p);
         return NULL;
     }
     return p;
@@ -315,7 +341,7 @@ struct process *process_create_elf(const char *name, const void *image, size_t s
     if (!setup_image(p, p->pml4_phys, image, size, argv, NULL)) {
         log_error("proc", "'%s': ELF invalido", name);
         vmm_destroy_address_space(p->pml4_phys);
-        kfree(p);
+        process_free(p);
         return NULL;
     }
     give_std_fds(p);
@@ -343,7 +369,7 @@ struct process *process_spawn_path(const char *path, const char *const *argv)
     kfree(image);
     if (!ok) {
         vmm_destroy_address_space(p->pml4_phys);
-        kfree(p);
+        process_free(p);
         return NULL;
     }
     give_std_fds(p);
@@ -364,9 +390,39 @@ struct process *process_find(uint32_t pid)
     return NULL;
 }
 
+int process_fd_limit(struct process *p)
+{
+    uint64_t lim = p->rlimits[RLIMIT_NOFILE].cur;
+    return lim > PROCESS_FD_MAX ? PROCESS_FD_MAX : (int)lim;
+}
+
+bool process_fd_reserve(struct process *p, int fd)
+{
+    if (fd < 0 || fd >= process_fd_limit(p))
+        return false;
+    if (fd < p->fd_cap)
+        return true;
+    int cap = p->fd_cap;
+    while (cap <= fd)
+        cap *= 2;
+    if (cap > PROCESS_FD_MAX)
+        cap = PROCESS_FD_MAX;
+    struct file **n = kzalloc((size_t)cap * sizeof(struct file *));
+    if (!n)
+        return false;
+    memcpy(n, p->fds, (size_t)p->fd_cap * sizeof(struct file *));
+    kfree(p->fds);
+    p->fds = n;
+    p->fd_cap = cap;
+    return true;
+}
+
 int process_fd_install(struct process *p, struct file *f)
 {
-    for (int i = 0; i < PROCESS_MAX_FDS; i++) {
+    int limit = process_fd_limit(p);
+    for (int i = 0; i < limit; i++) {
+        if (i >= p->fd_cap && !process_fd_reserve(p, i))
+            return -EMFILE;
         if (!p->fds[i]) {
             p->fds[i] = f;
             return i;
@@ -377,7 +433,7 @@ int process_fd_install(struct process *p, struct file *f)
 
 struct file *process_fd_get(struct process *p, int fd)
 {
-    if (fd < 0 || fd >= PROCESS_MAX_FDS)
+    if (fd < 0 || fd >= p->fd_cap)
         return NULL;
     return p->fds[fd];
 }
@@ -440,13 +496,15 @@ static void fork_child_entry(void *arg)
 int process_fork(struct interrupt_frame *frame)
 {
     struct process *parent = process_current();
+    if ((uint64_t)process_count() >= parent->rlimits[RLIMIT_NPROC].cur)
+        return -EAGAIN;
     struct process *child = process_alloc(parent->name);
     if (!child)
         return -ENOMEM;
 
     if (!share_user_pages(child, parent->pml4_phys)) {
         vmm_destroy_address_space(child->pml4_phys);
-        kfree(child);
+        process_free(child);
         return -ENOMEM;
     }
     child->entry = parent->entry;
@@ -460,7 +518,19 @@ int process_fork(struct interrupt_frame *frame)
     strlcpy(child->cwd, parent->cwd, sizeof(child->cwd));
     child->parent = parent;
     child->thread = NULL;
-    for (int i = 0; i < PROCESS_MAX_FDS; i++) {
+    memcpy(child->rlimits, parent->rlimits, sizeof(child->rlimits));
+    if (parent->fd_cap > child->fd_cap) {
+        struct file **n = kzalloc((size_t)parent->fd_cap * sizeof(struct file *));
+        if (!n) {
+            vmm_destroy_address_space(child->pml4_phys);
+            process_free(child);
+            return -ENOMEM;
+        }
+        kfree(child->fds);
+        child->fds = n;
+        child->fd_cap = parent->fd_cap;
+    }
+    for (int i = 0; i < parent->fd_cap; i++) {
         child->fds[i] = parent->fds[i];
         if (child->fds[i])
             file_ref(child->fds[i]);
@@ -476,7 +546,7 @@ int process_fork(struct interrupt_frame *frame)
         process_unregister(child);
         kfree(copy);
         vmm_destroy_address_space(child->pml4_phys);
-        kfree(child);
+        process_free(child);
         return -ENOMEM;
     }
     return (int)child->pid;
@@ -567,7 +637,7 @@ int process_waitpid(int pid, int *status, int options)
                 *status = found->exit_code;
             unregister_locked(found);
             spin_unlock_irqrestore(&proc_lock, flags);
-            kfree(found);
+            process_free(found);
             return rpid;
         }
         if (!have_child) {
@@ -592,7 +662,7 @@ static NORETURN void process_terminate(int status)
     ASSERT(p);
     p->exit_code = status;
     p->alarm_at = 0;
-    for (int i = 0; i < PROCESS_MAX_FDS; i++)
+    for (int i = 0; i < p->fd_cap; i++)
         if (p->fds[i]) {
             file_unref(p->fds[i]);
             p->fds[i] = NULL;
@@ -720,8 +790,29 @@ void process_thread_reaped(struct process *p)
     if (pml4)
         vmm_destroy_address_space(pml4);
     if (autofree)
-        kfree(p);
+        process_free(p);
     wake_up_all(&child_exit_wq);
+}
+
+long process_getrlimit(int resource, struct user_rlimit *out)
+{
+    if (resource < 0 || resource >= RLIMIT_COUNT)
+        return -EINVAL;
+    *out = process_current()->rlimits[resource];
+    return 0;
+}
+
+long process_setrlimit(int resource, const struct user_rlimit *in)
+{
+    if (resource < 0 || resource >= RLIMIT_COUNT || in->cur > in->max)
+        return -EINVAL;
+    struct process *p = process_current();
+    if (in->max > p->rlimits[resource].max)
+        return -EPERM;
+    if (resource == RLIMIT_NOFILE && in->max > PROCESS_FD_MAX)
+        return -EPERM;
+    p->rlimits[resource] = *in;
+    return 0;
 }
 
 int process_getppid(void)
