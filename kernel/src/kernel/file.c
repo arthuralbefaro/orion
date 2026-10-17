@@ -10,6 +10,7 @@
 #include <drivers/pty.h>
 #include <drivers/console.h>
 #include <mm/heap.h>
+#include <mm/uaccess.h>
 #include <lib/string.h>
 
 struct file *file_alloc(const struct file_ops *ops, void *priv)
@@ -89,28 +90,28 @@ static int64_t tty_file_write(struct file *f, const void *buf, uint64_t len)
 static long tty_file_ioctl(struct file *f, uint64_t request, uint64_t arg)
 {
     (void)f;
-    if (request == TIOCGPGRP || request == TIOCSPGRP) {
-        if (arg >= USER_ADDR_MAX)
+    if (request == TIOCGPGRP) {
+        int32_t pg = tty_get_pgrp();
+        return copy_to_user((void *)arg, &pg, sizeof(pg));
+    }
+    if (request == TIOCSPGRP) {
+        int32_t pg;
+        if (copy_from_user(&pg, (const void *)arg, sizeof(pg)) < 0)
             return -EFAULT;
-        if (request == TIOCGPGRP)
-            *(int32_t *)arg = tty_get_pgrp();
-        else
-            tty_set_pgrp(*(int32_t *)arg);
+        tty_set_pgrp(pg);
         return 0;
     }
     if (request == TCGETS || request == TCSETS)
         return tty_termios(request, arg);
     if (request == TIOCGWINSZ) {
-        if (arg >= USER_ADDR_MAX)
-            return -EFAULT;
-        struct user_winsize *ws = (struct user_winsize *)arg;
+        struct user_winsize ws;
         uint32_t cols, rows;
         console_get_size(&cols, &rows);
-        ws->ws_col = (uint16_t)(cols ? cols : 80);
-        ws->ws_row = (uint16_t)(rows ? rows : 24);
-        ws->ws_xpixel = 0;
-        ws->ws_ypixel = 0;
-        return 0;
+        ws.ws_col = (uint16_t)(cols ? cols : 80);
+        ws.ws_row = (uint16_t)(rows ? rows : 24);
+        ws.ws_xpixel = 0;
+        ws.ws_ypixel = 0;
+        return copy_to_user((void *)arg, &ws, sizeof(ws));
     }
     return 0;
 }
@@ -195,6 +196,11 @@ static const struct file_ops vfs_ops = {
     .write = vfs_file_write,
     .readdir = vfs_file_readdir,
 };
+
+bool file_is_regular(const struct file *f)
+{
+    return f->ops == &vfs_ops;
+}
 
 struct file *file_open_path(const char *path, int flags)
 {
@@ -339,12 +345,11 @@ static void pipe_close_read(struct file *f)
     uint64_t flags = spin_lock_irqsave(&p->lock);
     p->readers--;
     bool dead = p->readers == 0 && p->writers == 0;
+    if (!dead)
+        wake_up_all(&p->wq);
     spin_unlock_irqrestore(&p->lock, flags);
-    if (dead) {
+    if (dead)
         kfree(p);
-        return;
-    }
-    wake_up_all(&p->wq);
 }
 
 static void pipe_close_write(struct file *f)
@@ -353,12 +358,11 @@ static void pipe_close_write(struct file *f)
     uint64_t flags = spin_lock_irqsave(&p->lock);
     p->writers--;
     bool dead = p->readers == 0 && p->writers == 0;
+    if (!dead)
+        wake_up_all(&p->rq);
     spin_unlock_irqrestore(&p->lock, flags);
-    if (dead) {
+    if (dead)
         kfree(p);
-        return;
-    }
-    wake_up_all(&p->rq);
 }
 
 static const struct file_ops pipe_read_ops = {

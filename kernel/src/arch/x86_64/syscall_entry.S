@@ -38,6 +38,11 @@ syscall_entry:
     call syscall_dispatch
 
     cli
+    testb %al, %al
+    jz 1f
+    movq %rsp, %rdi
+    jmp user_return
+1:
     popq %r15
     popq %r14
     popq %r13

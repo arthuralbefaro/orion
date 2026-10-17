@@ -98,11 +98,13 @@ struct user_procinfo {
 #define ERANGE  34
 #define ENOSYS  38
 #define ENOEXEC 8
+#define E2BIG   7
 #define ENODEV  19
 #define EINTR   4
 #define EIO     5
 #define EEXIST  17
 #define ENOTEMPTY 39
+#define ENAMETOOLONG 36
 #define EROFS   30
 #define ENOSPC  28
 #define EMSGSIZE 90

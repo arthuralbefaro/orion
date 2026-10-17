@@ -9,6 +9,7 @@
 #include <lib/string.h>
 #include <mm/memory.h>
 #include <mm/vmm.h>
+#include <mm/uaccess.h>
 
 #define SIGFRAME_MAGIC 0x4F52494F5349475Aull
 #define RED_ZONE       128
@@ -104,35 +105,34 @@ static int next_pending(struct process *p)
     return 0;
 }
 
-static bool user_stack_ok(struct process *p, uint64_t base, uint64_t size)
+#define USER_RFLAGS_MASK 0xCD5ull
+#define RFLAGS_FIXED     0x202ull
+
+static bool user_code_addr(uint64_t a)
 {
-    if (base >= USER_ADDR_MAX || size > USER_ADDR_MAX - base)
-        return false;
-    for (uint64_t v = PAGE_ALIGN_DOWN(base); v < base + size; v += PAGE_SIZE)
-        if (!vmm_virt_to_phys_in(p->pml4_phys, v))
-            return false;
-    return true;
+    return a < USER_ADDR_MAX;
 }
 
 static bool push_sigframe(struct process *p, struct interrupt_frame *f, int sig)
 {
     struct user_sigaction *sa = &p->sig_handlers[sig];
-    if (!sa->sa_restorer)
+    if (!sa->sa_restorer || !user_code_addr(sa->sa_restorer) || !user_code_addr(sa->sa_handler))
         return false;
 
     uint64_t sp = ALIGN_DOWN(f->rsp - RED_ZONE, 16);
     sp -= sizeof(struct sigframe);
     sp = ALIGN_DOWN(sp, 16) - 8;
-    if (!user_stack_ok(p, sp, sizeof(struct sigframe)))
+
+    struct sigframe sf;
+    sf.restorer = sa->sa_restorer;
+    sf.magic = SIGFRAME_MAGIC;
+    sf.mask = p->sig_blocked;
+    sf.ctx = *f;
+    if (copy_to_user((void *)sp, &sf, sizeof(sf)) < 0)
         return false;
 
-    struct sigframe *sf = (struct sigframe *)sp;
-    sf->restorer = sa->sa_restorer;
-    sf->magic = SIGFRAME_MAGIC;
-    sf->mask = p->sig_blocked;
-    sf->ctx = *f;
-
     p->sig_blocked |= sa->sa_mask | SIGMASK(sig);
+    p->sig_blocked &= ~SIGMASK(SIGKILL);
     f->rsp = sp;
     f->rip = sa->sa_handler;
     f->rdi = (uint64_t)sig;
@@ -209,20 +209,21 @@ long signal_sigreturn(struct interrupt_frame *f)
 {
     struct process *p = process_current();
     uint64_t sp = f->rsp - 8;
-    if (!user_stack_ok(p, sp, sizeof(struct sigframe)))
-        return -EFAULT;
+    struct sigframe sf;
+    if (copy_from_user(&sf, (const void *)sp, sizeof(sf)) < 0 || sf.magic != SIGFRAME_MAGIC ||
+        !user_code_addr(sf.ctx.rip) || !user_code_addr(sf.ctx.rsp)) {
+        log_error("proc", "pid %u '%s': quadro de sinal invalido em %016lx", p->pid, p->name, sp);
+        process_exit_signal(SIGSEGV);
+    }
 
-    struct sigframe *sf = (struct sigframe *)sp;
-    if (sf->magic != SIGFRAME_MAGIC)
-        return -EFAULT;
-
-    struct interrupt_frame saved = sf->ctx;
-    p->sig_blocked = sf->mask;
+    struct interrupt_frame saved = sf.ctx;
+    p->sig_blocked = sf.mask & ~SIGMASK(SIGKILL);
 
     saved.cs = f->cs;
     saved.ss = f->ss;
     saved.int_no = f->int_no;
     saved.err_code = f->err_code;
+    saved.rflags = (saved.rflags & USER_RFLAGS_MASK) | RFLAGS_FIXED;
     *f = saved;
     return (long)f->rax;
 }

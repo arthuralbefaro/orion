@@ -8,6 +8,7 @@
 #include <kernel/signal.h>
 #include <lib/printf.h>
 #include <mm/heap.h>
+#include <mm/uaccess.h>
 #include <lib/string.h>
 
 #define PTY_OUT_MAX 8192
@@ -117,41 +118,41 @@ static short master_poll(struct file *f, struct poll_table *pt)
 
 static long pty_pgrp_ioctl(struct pty *p, uint64_t request, uint64_t arg)
 {
-    if (arg >= USER_ADDR_MAX)
-        return -EFAULT;
+    int32_t pg;
     if (request == TIOCGPGRP) {
-        *(int32_t *)arg = ldisc_get_pgrp(&p->ld);
-        return 0;
+        pg = ldisc_get_pgrp(&p->ld);
+        return copy_to_user((void *)arg, &pg, sizeof(pg));
     }
-    ldisc_set_pgrp(&p->ld, *(int32_t *)arg);
+    if (copy_from_user(&pg, (const void *)arg, sizeof(pg)) < 0)
+        return -EFAULT;
+    ldisc_set_pgrp(&p->ld, pg);
     return 0;
 }
 
 static long pty_winsize_ioctl(struct pty *p, uint64_t request, uint64_t arg)
 {
-    if (arg >= USER_ADDR_MAX)
-        return -EFAULT;
-    struct user_winsize *ws = (struct user_winsize *)arg;
     if (request == TIOCGWINSZ)
-        *ws = p->size;
-    else
-        p->size = *ws;
+        return copy_to_user((void *)arg, &p->size, sizeof(p->size));
+    struct user_winsize ws;
+    if (copy_from_user(&ws, (const void *)arg, sizeof(ws)) < 0)
+        return -EFAULT;
+    p->size = ws;
     return 0;
 }
 
 long ldisc_termios_ioctl(struct line_discipline *ld, uint64_t request, uint64_t arg)
 {
-    if (arg >= USER_ADDR_MAX)
-        return -EFAULT;
-    struct user_termios *t = (struct user_termios *)arg;
+    struct user_termios t;
     bool canonical, echo_on;
     if (request == TCGETS) {
         ldisc_get_mode(ld, &canonical, &echo_on);
-        memset(t, 0, sizeof(*t));
-        t->c_lflag = (canonical ? TIO_ICANON : 0) | (echo_on ? TIO_ECHO : 0);
-        return 0;
+        memset(&t, 0, sizeof(t));
+        t.c_lflag = (canonical ? TIO_ICANON : 0) | (echo_on ? TIO_ECHO : 0);
+        return copy_to_user((void *)arg, &t, sizeof(t));
     }
-    ldisc_set_mode(ld, (t->c_lflag & TIO_ICANON) != 0, (t->c_lflag & TIO_ECHO) != 0);
+    if (copy_from_user(&t, (const void *)arg, sizeof(t)) < 0)
+        return -EFAULT;
+    ldisc_set_mode(ld, (t.c_lflag & TIO_ICANON) != 0, (t.c_lflag & TIO_ECHO) != 0);
     return 0;
 }
 
@@ -165,13 +166,10 @@ static long master_ioctl(struct file *f, uint64_t request, uint64_t arg)
     if (request == TIOCGWINSZ || request == TIOCSWINSZ)
         return pty_winsize_ioctl(p, request, arg);
     if (request == TIOCINQ) {
-        if (arg >= USER_ADDR_MAX)
-            return -EFAULT;
         uint64_t flags = spin_lock_irqsave(&p->lock);
         uint32_t n = out_used(p);
         spin_unlock_irqrestore(&p->lock, flags);
-        *(uint32_t *)arg = n;
-        return 0;
+        return copy_to_user((void *)arg, &n, sizeof(n));
     }
     return 0;
 }
@@ -182,12 +180,11 @@ static void master_close(struct file *f)
     uint64_t flags = spin_lock_irqsave(&p->lock);
     p->masters--;
     bool dead = p->masters == 0 && p->slaves == 0;
-    bool notify = p->masters == 0 && !dead;
-    spin_unlock_irqrestore(&p->lock, flags);
-    if (notify) {
+    if (p->masters == 0 && !dead) {
         ldisc_hangup(&p->ld);
         wake_up_all(&p->writers);
     }
+    spin_unlock_irqrestore(&p->lock, flags);
     if (dead)
         pty_destroy(p);
 }
@@ -239,10 +236,8 @@ static long slave_ioctl(struct file *f, uint64_t request, uint64_t arg)
         return pty_winsize_ioctl(p, request, arg);
     if (request != TIOCINQ)
         return 0;
-    if (arg >= USER_ADDR_MAX)
-        return -EFAULT;
-    *(uint32_t *)arg = ldisc_available(&p->ld);
-    return 0;
+    uint32_t n = ldisc_available(&p->ld);
+    return copy_to_user((void *)arg, &n, sizeof(n));
 }
 
 static void slave_close(struct file *f)
@@ -251,10 +246,9 @@ static void slave_close(struct file *f)
     uint64_t flags = spin_lock_irqsave(&p->lock);
     p->slaves--;
     bool dead = p->masters == 0 && p->slaves == 0;
-    bool notify = p->slaves == 0 && !dead;
-    spin_unlock_irqrestore(&p->lock, flags);
-    if (notify)
+    if (p->slaves == 0 && !dead)
         wake_up_all(&p->readers);
+    spin_unlock_irqrestore(&p->lock, flags);
     if (dead)
         pty_destroy(p);
 }

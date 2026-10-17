@@ -7,6 +7,7 @@ extern int errno;
 #define ENOENT  2
 #define ESRCH   3
 #define ENOEXEC 8
+#define E2BIG   7
 #define EBADF   9
 #define ECHILD  10
 #define EAGAIN  11
@@ -25,6 +26,7 @@ extern int errno;
 #define EIO     5
 #define EEXIST  17
 #define ENOTEMPTY 39
+#define ENAMETOOLONG 36
 #define EROFS   30
 #define ENOSPC  28
 

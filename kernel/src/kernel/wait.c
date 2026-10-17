@@ -3,6 +3,7 @@
 #include <arch/x86_64/cpu.h>
 #include <lib/string.h>
 #include <kernel/log.h>
+#include <kernel/signal.h>
 
 static void entry_attach(struct wait_entry *e, struct waitqueue *wq, struct thread *t)
 {
@@ -154,7 +155,7 @@ bool poll_table_sleep(struct poll_table *pt, uint64_t ms)
         if (pt->entries[i].woken)
             woken = true;
 
-    if (!woken) {
+    if (!woken && !signal_pending_current()) {
         sched_block_switch(ms ? sched_deadline(ms) : 0);
         sched_runq_lock();
         for (int i = 0; i < pt->count; i++)

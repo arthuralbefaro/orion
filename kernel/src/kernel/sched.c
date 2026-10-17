@@ -210,7 +210,9 @@ bool sched_enabled(void)
 
 struct thread *thread_current(void)
 {
-    return percpu_get()->current;
+    struct thread *t;
+    __asm__ volatile("movq %%gs:%c1, %0" : "=r"(t) : "i"(__builtin_offsetof(struct percpu, current)));
+    return t;
 }
 
 static void switch_to(struct percpu *cpu, struct thread *prev, struct thread *next)

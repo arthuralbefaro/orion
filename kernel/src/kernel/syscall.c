@@ -9,6 +9,7 @@
 #include <mm/vmm.h>
 #include <mm/pmm.h>
 #include <mm/memory.h>
+#include <mm/uaccess.h>
 #include <lib/string.h>
 #include <kernel/time.h>
 #include <drivers/rtc.h>
@@ -19,105 +20,141 @@
 #include <kernel/signal.h>
 #include <mm/heap.h>
 #include <net/socket.h>
-#include <mm/pmm.h>
-#include <mm/vmm.h>
 #include <kernel/smp.h>
 
 extern void syscall_entry(void);
 
 #define EFER_SCE (1ull << 0)
+#define USER_PATH_MAX 512
+#define EXEC_MAX_ARGS 256
+#define EXEC_ARG_MAX  4096
 
-static bool user_range_ok(uint64_t ptr, uint64_t len)
+static long resolve_user(const char *upath, char *full, size_t size)
 {
-    return ptr < USER_ADDR_MAX && len <= USER_ADDR_MAX - ptr;
+    char kpath[USER_PATH_MAX];
+    long r = strncpy_from_user(kpath, upath, sizeof(kpath));
+    if (r < 0)
+        return r;
+    if (!process_resolve_path(process_current(), kpath, full, size))
+        return -ENOENT;
+    return 0;
 }
 
-static bool user_str_ok(const char *s, size_t max)
+static long sys_sysinfo(struct user_sysinfo *uout)
 {
-    if (!user_range_ok((uint64_t)s, 1))
-        return false;
-    for (size_t i = 0; i < max; i++) {
-        if (!user_range_ok((uint64_t)(s + i), 1))
-            return false;
-        if (s[i] == '\0')
-            return true;
-    }
-    return false;
-}
-
-static bool user_ptrs_ok(char *const *v)
-{
-    if (!v)
-        return true;
-    for (int i = 0; i < 256; i++) {
-        if (!user_range_ok((uint64_t)&v[i], 8))
-            return false;
-        if (!v[i])
-            return true;
-        if (!user_str_ok(v[i], 4096))
-            return false;
-    }
-    return false;
-}
-
-static long sys_sysinfo(struct user_sysinfo *out)
-{
-    if (!user_range_ok((uint64_t)out, sizeof(*out)))
-        return -EFAULT;
+    struct user_sysinfo out;
+    memset(&out, 0, sizeof(out));
     struct pmm_stats st;
     pmm_get_stats(&st);
     uint64_t faults, copies;
     vmm_cow_stats(&faults, &copies);
-    out->total_pages = st.total_pages;
-    out->used_pages = st.used_pages;
-    out->free_pages = st.free_pages;
-    out->shared_pages = pmm_shared_pages();
-    out->cow_faults = faults;
-    out->uptime_ms = time_uptime_ms();
+    out.total_pages = st.total_pages;
+    out.used_pages = st.used_pages;
+    out.free_pages = st.free_pages;
+    out.shared_pages = pmm_shared_pages();
+    out.cow_faults = faults;
+    out.uptime_ms = time_uptime_ms();
     struct heap_stats hs;
     heap_get_stats(&hs);
-    out->heap_used = hs.slab_bytes_used + hs.large_bytes_used;
-    out->cpus = smp_cpu_count();
-    out->procs = (uint32_t)process_count();
-    return 0;
+    out.heap_used = hs.slab_bytes_used + hs.large_bytes_used;
+    out.cpus = smp_cpu_count();
+    out.procs = (uint32_t)process_count();
+    return copy_to_user(uout, &out, sizeof(out));
 }
 
-static long sys_proclist(struct user_procinfo *out, int max)
+static long sys_proclist(struct user_procinfo *uout, int max)
 {
     if (max <= 0 || max > 64)
         return -EINVAL;
-    if (!user_range_ok((uint64_t)out, sizeof(*out) * (uint64_t)max))
+    if (!user_range_ok((uint64_t)uout, sizeof(*uout) * (uint64_t)max))
         return -EFAULT;
-    return process_list(out, max);
+    struct user_procinfo *list = kzalloc(sizeof(*list) * (size_t)max);
+    if (!list)
+        return -ENOMEM;
+    int n = process_list(list, max);
+    long r = copy_to_user(uout, list, sizeof(*list) * (size_t)n);
+    kfree(list);
+    return r < 0 ? r : n;
 }
 
-static long sys_read(int fd, void *buf, size_t len)
+static long sys_read(int fd, void *ubuf, size_t len)
 {
     struct file *f = process_fd_get(process_current(), fd);
     if (!f)
         return -EBADF;
-    if (!user_range_ok((uint64_t)buf, len))
+    if (!user_range_ok((uint64_t)ubuf, len))
         return -EFAULT;
-    return file_read(f, buf, len);
+    if (len == 0)
+        return 0;
+
+    struct kbuf kb;
+    uint8_t *k = kbuf_get(&kb, len);
+    long total = 0;
+    while ((size_t)total < len) {
+        size_t want = len - (size_t)total;
+        if (want > kb.size)
+            want = kb.size;
+        int64_t n = file_read(f, k, want);
+        if (n < 0) {
+            if (!total)
+                total = n;
+            break;
+        }
+        if (n > 0 && copy_to_user((uint8_t *)ubuf + total, k, (size_t)n) < 0) {
+            if (!total)
+                total = -EFAULT;
+            break;
+        }
+        total += n;
+        if ((size_t)n < want || !file_is_regular(f))
+            break;
+    }
+    kbuf_put(&kb);
+    return total;
 }
 
-static long sys_write(int fd, const void *buf, size_t len)
+static long sys_write(int fd, const void *ubuf, size_t len)
 {
     struct file *f = process_fd_get(process_current(), fd);
     if (!f)
         return -EBADF;
-    if (!user_range_ok((uint64_t)buf, len))
+    if (!user_range_ok((uint64_t)ubuf, len))
         return -EFAULT;
-    return file_write(f, buf, len);
+    if (len == 0)
+        return 0;
+
+    struct kbuf kb;
+    uint8_t *k = kbuf_get(&kb, len);
+    long total = 0;
+    while ((size_t)total < len) {
+        size_t want = len - (size_t)total;
+        if (want > kb.size)
+            want = kb.size;
+        if (copy_from_user(k, (const uint8_t *)ubuf + total, want) < 0) {
+            if (!total)
+                total = -EFAULT;
+            break;
+        }
+        int64_t n = file_write(f, k, want);
+        if (n < 0) {
+            if (!total)
+                total = n;
+            break;
+        }
+        total += n;
+        if ((size_t)n < want)
+            break;
+    }
+    kbuf_put(&kb);
+    return total;
 }
 
-static long sys_open(const char *path, int flags)
+static long sys_open(const char *upath, int flags)
 {
-    if (!user_str_ok(path, 512))
-        return -EFAULT;
     char full[PROCESS_CWD_MAX];
-    if (!process_resolve_path(process_current(), path, full, sizeof(full)))
-        return -ENOENT;
+    long r = resolve_user(upath, full, sizeof(full));
+    if (r < 0)
+        return r;
     struct file *f = file_open_path(full, flags);
     if (!f)
         return -ENOENT;
@@ -127,19 +164,10 @@ static long sys_open(const char *path, int flags)
     return fd;
 }
 
-static long resolved(const char *path, char *out, size_t size)
-{
-    if (!user_str_ok(path, 512))
-        return -EFAULT;
-    if (!process_resolve_path(process_current(), path, out, size))
-        return -ENOENT;
-    return 0;
-}
-
-static long sys_mkdir(const char *path)
+static long sys_mkdir(const char *upath)
 {
     char full[PROCESS_CWD_MAX];
-    long r = resolved(path, full, sizeof(full));
+    long r = resolve_user(upath, full, sizeof(full));
     if (r < 0)
         return r;
     struct vfs_node n;
@@ -150,10 +178,10 @@ static long sys_mkdir(const char *path)
     return vfs_create(full, true, NULL) ? 0 : -EIO;
 }
 
-static long sys_unlink(const char *path, bool is_dir)
+static long sys_unlink(const char *upath, bool is_dir)
 {
     char full[PROCESS_CWD_MAX];
-    long r = resolved(path, full, sizeof(full));
+    long r = resolve_user(upath, full, sizeof(full));
     if (r < 0)
         return r;
     struct vfs_node n;
@@ -166,13 +194,13 @@ static long sys_unlink(const char *path, bool is_dir)
     return vfs_unlink(full, is_dir) ? 0 : (is_dir ? -ENOTEMPTY : -EIO);
 }
 
-static long sys_rename(const char *from, const char *to)
+static long sys_rename(const char *ufrom, const char *uto)
 {
     char a[PROCESS_CWD_MAX], b[PROCESS_CWD_MAX];
-    long r = resolved(from, a, sizeof(a));
+    long r = resolve_user(ufrom, a, sizeof(a));
     if (r < 0)
         return r;
-    r = resolved(to, b, sizeof(b));
+    r = resolve_user(uto, b, sizeof(b));
     if (r < 0)
         return r;
     if (!vfs_writable())
@@ -195,52 +223,52 @@ static long sys_close(int fd)
     return process_fd_close(process_current(), fd);
 }
 
-static long sys_pipe(int *fds)
+static long install_pair(struct file *a, struct file *b, int *ufds)
 {
-    if (!user_range_ok((uint64_t)fds, 8))
+    struct process *p = process_current();
+    int fds[2];
+    fds[0] = process_fd_install(p, a);
+    fds[1] = process_fd_install(p, b);
+    if (fds[0] < 0 || fds[1] < 0) {
+        if (fds[0] >= 0) process_fd_close(p, fds[0]); else file_unref(a);
+        if (fds[1] >= 0) process_fd_close(p, fds[1]); else file_unref(b);
+        return -EMFILE;
+    }
+    if (copy_to_user(ufds, fds, sizeof(fds)) < 0) {
+        process_fd_close(p, fds[0]);
+        process_fd_close(p, fds[1]);
+        return -EFAULT;
+    }
+    return 0;
+}
+
+static long sys_pipe(int *ufds)
+{
+    if (!user_range_ok((uint64_t)ufds, 2 * sizeof(int)))
         return -EFAULT;
     struct file *r, *w;
     if (!file_make_pipe(&r, &w))
         return -ENOMEM;
-    struct process *p = process_current();
-    int rfd = process_fd_install(p, r);
-    int wfd = process_fd_install(p, w);
-    if (rfd < 0 || wfd < 0) {
-        if (rfd >= 0) process_fd_close(p, rfd); else file_unref(r);
-        if (wfd >= 0) process_fd_close(p, wfd); else file_unref(w);
-        return -EMFILE;
-    }
-    fds[0] = rfd;
-    fds[1] = wfd;
-    return 0;
+    return install_pair(r, w, ufds);
 }
 
-static long sys_openpty(int *fds)
+static long sys_openpty(int *ufds)
 {
-    if (!user_range_ok((uint64_t)fds, 2 * sizeof(int)))
+    if (!user_range_ok((uint64_t)ufds, 2 * sizeof(int)))
         return -EFAULT;
     struct file *master, *slave;
     int r = pty_open_pair(&master, &slave);
     if (r < 0)
         return r;
-    struct process *p = process_current();
-    int mfd = process_fd_install(p, master);
-    int sfd = process_fd_install(p, slave);
-    if (mfd < 0 || sfd < 0) {
-        if (mfd >= 0) process_fd_close(p, mfd); else file_unref(master);
-        if (sfd >= 0) process_fd_close(p, sfd); else file_unref(slave);
-        return -EMFILE;
-    }
-    fds[0] = mfd;
-    fds[1] = sfd;
-    return 0;
+    return install_pair(master, slave, ufds);
 }
 
-static long sys_poll(struct user_pollfd *fds, uint64_t nfds, int timeout)
+static long sys_poll(struct user_pollfd *ufds, uint64_t nfds, int timeout)
 {
     if (nfds > POLL_TABLE_MAX)
         return -EINVAL;
-    if (nfds && !user_range_ok((uint64_t)fds, nfds * sizeof(*fds)))
+    struct user_pollfd fds[POLL_TABLE_MAX];
+    if (copy_from_user(fds, ufds, nfds * sizeof(*fds)) < 0)
         return -EFAULT;
 
     struct process *p = process_current();
@@ -289,8 +317,14 @@ static long sys_poll(struct user_pollfd *fds, uint64_t nfds, int timeout)
             wait_ms = deadline - now;
         }
         poll_table_sleep(pt, wait_ms);
+        if (signal_pending_current()) {
+            ret = -EINTR;
+            break;
+        }
     }
     kfree(pt);
+    if (ret >= 0 && copy_to_user(ufds, fds, nfds * sizeof(*fds)) < 0)
+        return -EFAULT;
     return ret;
 }
 
@@ -317,22 +351,30 @@ static long sys_kill(int pid, int sig)
     return process_kill(pid, sig);
 }
 
-static long sys_rt_sigaction(int sig, const struct user_sigaction *act, struct user_sigaction *old)
+static long sys_rt_sigaction(int sig, const struct user_sigaction *uact, struct user_sigaction *uold)
 {
-    if (act && !user_range_ok((uint64_t)act, sizeof(*act)))
+    struct user_sigaction act, old;
+    if (uact && copy_from_user(&act, uact, sizeof(act)) < 0)
         return -EFAULT;
-    if (old && !user_range_ok((uint64_t)old, sizeof(*old)))
+    if (uold && !user_range_ok((uint64_t)uold, sizeof(old)))
         return -EFAULT;
-    return signal_sigaction(sig, act, old);
+    long r = signal_sigaction(sig, uact ? &act : NULL, uold ? &old : NULL);
+    if (r == 0 && uold && copy_to_user(uold, &old, sizeof(old)) < 0)
+        return -EFAULT;
+    return r;
 }
 
-static long sys_rt_sigprocmask(int how, const uint64_t *set, uint64_t *old)
+static long sys_rt_sigprocmask(int how, const uint64_t *uset, uint64_t *uold)
 {
-    if (set && !user_range_ok((uint64_t)set, sizeof(*set)))
+    uint64_t set, old;
+    if (uset && copy_from_user(&set, uset, sizeof(set)) < 0)
         return -EFAULT;
-    if (old && !user_range_ok((uint64_t)old, sizeof(*old)))
+    if (uold && !user_range_ok((uint64_t)uold, sizeof(old)))
         return -EFAULT;
-    return signal_procmask(how, set, old);
+    long r = signal_procmask(how, uset ? &set : NULL, uold ? &old : NULL);
+    if (r == 0 && uold && copy_to_user(uold, &old, sizeof(old)) < 0)
+        return -EFAULT;
+    return r;
 }
 
 static void fill_stat(const struct vfs_node *n, uint32_t mode, struct user_stat *st)
@@ -347,31 +389,32 @@ static void fill_stat(const struct vfs_node *n, uint32_t mode, struct user_stat 
     st->st_blksize = 4096;
 }
 
-static long sys_stat(const char *path, struct user_stat *st)
+static long sys_stat(const char *upath, struct user_stat *ust)
 {
-    if (!user_str_ok(path, 512) || !user_range_ok((uint64_t)st, sizeof(*st)))
-        return -EFAULT;
     char full[PROCESS_CWD_MAX];
-    if (!process_resolve_path(process_current(), path, full, sizeof(full)))
-        return -ENOENT;
+    long r = resolve_user(upath, full, sizeof(full));
+    if (r < 0)
+        return r;
+    if (!user_range_ok((uint64_t)ust, sizeof(*ust)))
+        return -EFAULT;
     struct vfs_node n;
     if (!vfs_lookup(full, &n))
         return -ENOENT;
-    fill_stat(&n, devfs_mode(full), st);
-    return 0;
+    struct user_stat st;
+    fill_stat(&n, devfs_mode(full), &st);
+    return copy_to_user(ust, &st, sizeof(st));
 }
 
-static long sys_fstat(int fd, struct user_stat *st)
+static long sys_fstat(int fd, struct user_stat *ust)
 {
     struct file *f = process_fd_get(process_current(), fd);
     if (!f)
         return -EBADF;
-    if (!user_range_ok((uint64_t)st, sizeof(*st)))
-        return -EFAULT;
-    fill_stat(f->has_node ? &f->node : NULL, f->mode, st);
+    struct user_stat st;
+    fill_stat(f->has_node ? &f->node : NULL, f->mode, &st);
     if (!f->has_node && !f->mode)
-        st->st_mode = S_IFIFO | 0600;
-    return 0;
+        st.st_mode = S_IFIFO | 0600;
+    return copy_to_user(ust, &st, sizeof(st));
 }
 
 static long sys_lseek(int fd, int64_t off, int whence)
@@ -470,26 +513,25 @@ static long sys_dup(int oldfd)
     return fd;
 }
 
-static long sys_getcwd(char *buf, size_t size)
+static long sys_getcwd(char *ubuf, size_t size)
 {
     struct process *p = process_current();
-    if (!user_range_ok((uint64_t)buf, size))
+    if (!user_range_ok((uint64_t)ubuf, size))
         return -EFAULT;
     size_t n = strlen(p->cwd) + 1;
     if (n > size)
         return -ERANGE;
-    memcpy(buf, p->cwd, n);
-    return (long)n;
+    long r = copy_to_user(ubuf, p->cwd, n);
+    return r < 0 ? r : (long)n;
 }
 
-static long sys_chdir(const char *path)
+static long sys_chdir(const char *upath)
 {
-    if (!user_str_ok(path, 512))
-        return -EFAULT;
     struct process *p = process_current();
     char full[PROCESS_CWD_MAX];
-    if (!process_resolve_path(p, path, full, sizeof(full)))
-        return -ENOENT;
+    long r = resolve_user(upath, full, sizeof(full));
+    if (r < 0)
+        return r;
     struct vfs_node n;
     if (!vfs_lookup(full, &n))
         return -ENOENT;
@@ -508,33 +550,32 @@ static long sys_arch_prctl(int code, uint64_t addr)
         thread_current()->fs_base = addr;
         wrmsr(MSR_IA32_FS_BASE, addr);
         return 0;
-    case ARCH_GET_FS:
-        if (!user_range_ok(addr, 8))
-            return -EFAULT;
-        *(uint64_t *)addr = thread_current()->fs_base;
-        return 0;
+    case ARCH_GET_FS: {
+        uint64_t v = thread_current()->fs_base;
+        return copy_to_user((void *)addr, &v, sizeof(v));
+    }
     default:
         return -EINVAL;
     }
 }
 
-static long sys_clock_gettime(int clk, struct user_timespec *ts)
+static long sys_clock_gettime(int clk, struct user_timespec *uts)
 {
-    if (!user_range_ok((uint64_t)ts, sizeof(*ts)))
-        return -EFAULT;
+    struct user_timespec ts;
     uint64_t us = time_now_us();
     switch (clk) {
     case CLOCK_REALTIME:
-        ts->tv_sec = (int64_t)(rtc_boot_epoch() + us / 1000000);
-        ts->tv_nsec = (int64_t)(us % 1000000) * 1000;
-        return 0;
+        ts.tv_sec = (int64_t)(rtc_boot_epoch() + us / 1000000);
+        ts.tv_nsec = (int64_t)(us % 1000000) * 1000;
+        break;
     case CLOCK_MONOTONIC:
-        ts->tv_sec = (int64_t)(us / 1000000);
-        ts->tv_nsec = (int64_t)(us % 1000000) * 1000;
-        return 0;
+        ts.tv_sec = (int64_t)(us / 1000000);
+        ts.tv_nsec = (int64_t)(us % 1000000) * 1000;
+        break;
     default:
         return -EINVAL;
     }
+    return copy_to_user(uts, &ts, sizeof(ts));
 }
 
 static long sys_dup2(int oldfd, int newfd)
@@ -583,59 +624,129 @@ static long sys_brk(uint64_t addr)
     return (long)addr;
 }
 
-struct timespec_user {
-    int64_t tv_sec;
-    int64_t tv_nsec;
-};
-
-static long sys_nanosleep(const struct timespec_user *req)
+static long sys_nanosleep(const struct user_timespec *ureq)
 {
-    if (!user_range_ok((uint64_t)req, sizeof(*req)))
+    struct user_timespec req;
+    if (copy_from_user(&req, ureq, sizeof(req)) < 0)
         return -EFAULT;
-    uint64_t ms = (uint64_t)req->tv_sec * 1000 + (uint64_t)req->tv_nsec / 1000000;
+    if (req.tv_sec < 0 || req.tv_nsec < 0 || req.tv_nsec >= 1000000000)
+        return -EINVAL;
+    uint64_t ms = (uint64_t)req.tv_sec * 1000 + (uint64_t)req.tv_nsec / 1000000;
     thread_sleep_ms(ms ? ms : 1);
     return 0;
 }
 
-static long sys_execve(const char *path, char *const *argv, char *const *envp, struct interrupt_frame *f)
+static void free_strv(char **v)
 {
-    if (!user_str_ok(path, 512) || !user_ptrs_ok(argv) || !user_ptrs_ok(envp))
-        return -EFAULT;
-    return process_execve(path, argv, envp, f);
+    if (!v)
+        return;
+    for (int i = 0; v[i]; i++)
+        kfree(v[i]);
+    kfree(v);
 }
 
-static long sys_wait4(int pid, int *status, int options)
+static long copy_strv(char *const *uv, char ***out)
 {
-    if (status && !user_range_ok((uint64_t)status, 4))
-        return -EFAULT;
-    int st = 0;
-    int r = process_waitpid(pid, &st, options);
-    if (r > 0 && status)
-        *status = st;
+    char **v = kzalloc((EXEC_MAX_ARGS + 1) * sizeof(char *));
+    char *tmp = kmalloc(EXEC_ARG_MAX);
+    if (!v || !tmp) {
+        kfree(v);
+        kfree(tmp);
+        return -ENOMEM;
+    }
+    long ret = 0;
+    for (int i = 0; uv; i++) {
+        if (i >= EXEC_MAX_ARGS) {
+            ret = -E2BIG;
+            break;
+        }
+        uint64_t up;
+        if (copy_from_user(&up, &uv[i], sizeof(up)) < 0) {
+            ret = -EFAULT;
+            break;
+        }
+        if (!up)
+            break;
+        long n = strncpy_from_user(tmp, (const char *)up, EXEC_ARG_MAX);
+        if (n < 0) {
+            ret = n == -ENAMETOOLONG ? -E2BIG : n;
+            break;
+        }
+        v[i] = kmalloc((size_t)n + 1);
+        if (!v[i]) {
+            ret = -ENOMEM;
+            break;
+        }
+        memcpy(v[i], tmp, (size_t)n + 1);
+    }
+    kfree(tmp);
+    if (ret < 0) {
+        free_strv(v);
+        return ret;
+    }
+    *out = v;
+    return 0;
+}
+
+static long sys_execve(const char *upath, char *const *uargv, char *const *uenvp,
+                       struct interrupt_frame *f)
+{
+    char path[USER_PATH_MAX];
+    long r = strncpy_from_user(path, upath, sizeof(path));
+    if (r < 0)
+        return r;
+    char **argv = NULL, **envp = NULL;
+    r = copy_strv(uargv, &argv);
+    if (r < 0)
+        return r;
+    r = copy_strv(uenvp, &envp);
+    if (r < 0) {
+        free_strv(argv);
+        return r;
+    }
+    r = process_execve(path, argv, envp, f);
+    free_strv(argv);
+    free_strv(envp);
     return r;
 }
 
-static long sys_readdir(int fd, struct user_dirent *out, uint64_t index)
+static long sys_wait4(int pid, int *ustatus, int options)
+{
+    if (ustatus && !user_range_ok((uint64_t)ustatus, sizeof(int)))
+        return -EFAULT;
+    int st = 0;
+    int r = process_waitpid(pid, &st, options);
+    if (r > 0 && ustatus && copy_to_user(ustatus, &st, sizeof(st)) < 0)
+        return -EFAULT;
+    return r;
+}
+
+static long sys_readdir(int fd, struct user_dirent *uout, uint64_t index)
 {
     struct file *f = process_fd_get(process_current(), fd);
     if (!f)
         return -EBADF;
-    if (!user_range_ok((uint64_t)out, sizeof(*out)))
+    if (!user_range_ok((uint64_t)uout, sizeof(*uout)))
         return -EFAULT;
     struct vfs_node n;
     int r = file_readdir(f, index, &n);
     if (r <= 0)
         return r;
-    out->size = n.size;
-    out->is_dir = n.is_dir;
-    strlcpy(out->name, n.name, sizeof(out->name));
+    struct user_dirent d;
+    memset(&d, 0, sizeof(d));
+    d.size = n.size;
+    d.is_dir = n.is_dir;
+    strlcpy(d.name, n.name, sizeof(d.name));
+    if (copy_to_user(uout, &d, sizeof(d)) < 0)
+        return -EFAULT;
     return 1;
 }
 
-void syscall_dispatch(struct interrupt_frame *f)
+bool syscall_dispatch(struct interrupt_frame *f)
 {
     sti();
     long ret;
+    bool full_restore = false;
     switch (f->rax) {
     case SYS_READ:        ret = sys_read((int)f->rdi, (void *)f->rsi, (size_t)f->rdx); break;
     case SYS_WRITE:       ret = sys_write((int)f->rdi, (const void *)f->rsi, (size_t)f->rdx); break;
@@ -650,14 +761,14 @@ void syscall_dispatch(struct interrupt_frame *f)
     case SYS_DUP:         ret = sys_dup((int)f->rdi); break;
     case SYS_GETCWD:      ret = sys_getcwd((char *)f->rdi, (size_t)f->rsi); break;
     case SYS_CHDIR:       ret = sys_chdir((const char *)f->rdi); break;
-    case SYS_GETPPID:     ret = process_current()->parent ? (long)process_current()->parent->pid : 0; break;
+    case SYS_GETPPID:     ret = process_getppid(); break;
     case SYS_ARCH_PRCTL:  ret = sys_arch_prctl((int)f->rdi, f->rsi); break;
     case SYS_CLOCK_GETTIME: ret = sys_clock_gettime((int)f->rdi, (struct user_timespec *)f->rsi); break;
     case SYS_BRK:         ret = sys_brk(f->rdi); break;
     case SYS_PIPE:        ret = sys_pipe((int *)f->rdi); break;
     case SYS_SCHED_YIELD: thread_yield(); ret = 0; break;
     case SYS_DUP2:        ret = sys_dup2((int)f->rdi, (int)f->rsi); break;
-    case SYS_NANOSLEEP:   ret = sys_nanosleep((const struct timespec_user *)f->rdi); break;
+    case SYS_NANOSLEEP:   ret = sys_nanosleep((const struct user_timespec *)f->rdi); break;
     case SYS_GETPID:      ret = process_current()->pid; break;
     case SYS_FORK:        ret = process_fork(f); break;
     case SYS_EXECVE:      ret = sys_execve((const char *)f->rdi, (char *const *)f->rsi, (char *const *)f->rdx, f); break;
@@ -670,7 +781,7 @@ void syscall_dispatch(struct interrupt_frame *f)
     case SYS_KILL:        ret = sys_kill((int)f->rdi, (int)f->rsi); break;
     case SYS_RT_SIGACTION: ret = sys_rt_sigaction((int)f->rdi, (const struct user_sigaction *)f->rsi, (struct user_sigaction *)f->rdx); break;
     case SYS_RT_SIGPROCMASK: ret = sys_rt_sigprocmask((int)f->rdi, (const uint64_t *)f->rsi, (uint64_t *)f->rdx); break;
-    case SYS_RT_SIGRETURN: ret = signal_sigreturn(f); break;
+    case SYS_RT_SIGRETURN: ret = signal_sigreturn(f); full_restore = true; break;
     case SYS_ALARM:       ret = process_alarm(f->rdi); break;
     case SYS_SETPGID:     ret = process_setpgid((int)f->rdi, (int)f->rsi); break;
     case SYS_MKDIR:       ret = sys_mkdir((const char *)f->rdi); break;
@@ -695,6 +806,7 @@ void syscall_dispatch(struct interrupt_frame *f)
     }
     f->rax = (uint64_t)ret;
     signal_check(f);
+    return full_restore;
 }
 
 void syscall_init_cpu(void)
@@ -702,7 +814,7 @@ void syscall_init_cpu(void)
     uint64_t star = ((uint64_t)GDT_KERNEL_CODE << 32) | ((uint64_t)GDT_KERNEL_DATA << 48);
     wrmsr(MSR_IA32_STAR, star);
     wrmsr(MSR_IA32_LSTAR, (uint64_t)syscall_entry);
-    wrmsr(MSR_IA32_FMASK, RFLAGS_IF | (1 << 10) | (1 << 8));
+    wrmsr(MSR_IA32_FMASK, RFLAGS_IF | (1 << 8) | (1 << 10) | (1 << 14) | (1 << 18));
     wrmsr(MSR_IA32_EFER, rdmsr(MSR_IA32_EFER) | EFER_SCE);
 }
 

@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,16 +39,22 @@ int main(int argc, char **argv)
     int live = 0, started = 0, done = 0, bad = 0;
     memset(kids, 0, sizeof(kids));
 
+    pid_t me = getpid();
     while (done < total) {
         while (live < width && started < total) {
             pid_t pid = fork();
             if (pid < 0) {
-                printf("stress: fork falhou no %d\n", started);
+                fprintf(stderr, "stress %d: fork falhou no %d (errno %d)\n", me, started, errno);
                 bad++;
                 break;
             }
-            if (pid == 0)
+            if (pid == 0) {
+                if (getpid() == me) {
+                    fprintf(stderr, "stress: fork devolveu 0 no proprio pai (pid %d)\n", me);
+                    _exit(99);
+                }
                 _exit(child_work(started));
+            }
             for (int s = 0; s < width; s++)
                 if (!kids[s]) {
                     kids[s] = pid;
@@ -59,20 +66,32 @@ int main(int argc, char **argv)
         int st = 0;
         pid_t pid = waitpid(-1, &st, 0);
         if (pid <= 0) {
-            printf("stress: waitpid devolveu %d com %d vivos\n", pid, live);
+            fprintf(stderr, "stress %d: waitpid devolveu %d (errno %d) com %d vivos, %d feitos\n", me,
+                    pid, errno, live, done);
             bad++;
             break;
         }
+        int mine = 0;
         for (int s = 0; s < width; s++)
-            if (kids[s] == pid)
+            if (kids[s] == pid) {
                 kids[s] = 0;
+                mine = 1;
+            }
+        if (!mine) {
+            fprintf(stderr, "stress %d: waitpid devolveu %d, que nao e filho meu\n", me, pid);
+            bad++;
+        }
         live--;
         done++;
-        if (!WIFEXITED(st) || WEXITSTATUS(st) != 0)
+        if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) {
+            fprintf(stderr, "stress %d: filho %d terminou com status %x\n", me, pid, st);
             bad++;
+        }
         if (done % 500 == 0)
             printf("stress: %d/%d\n", done, total);
     }
     printf("stress: %d processos, %d falha(s) %s\n", done, bad, bad ? "FALHA" : "ok");
+    if (bad)
+        fprintf(stderr, "stress %d: %d processos, %d falha(s) FALHA\n", me, done, bad);
     return bad ? 1 : 0;
 }

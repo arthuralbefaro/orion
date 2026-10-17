@@ -44,6 +44,25 @@ static long now_ms(void)
     return ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+static int regs_survive_signal(void)
+{
+    int before = alarm_count;
+    unsigned long c, r;
+    alarm(1);
+    __asm__ volatile("movq $0x1234567890, %%rcx\n\t"
+                     "movq $0x0fedcba987, %%r11\n\t"
+                     "1:\n\t"
+                     "pause\n\t"
+                     "cmpl %[b], %[cnt]\n\t"
+                     "je 1b\n\t"
+                     "movq %%rcx, %[c]\n\t"
+                     "movq %%r11, %[r]\n\t"
+                     : [c] "=r"(c), [r] "=r"(r)
+                     : [b] "r"(before), [cnt] "m"(alarm_count)
+                     : "rcx", "r11", "cc", "memory");
+    return c == 0x1234567890ul && r == 0x0fedcba987ul;
+}
+
 int main(int argc, char **argv)
 {
     (void)argc;
@@ -81,6 +100,7 @@ int main(int argc, char **argv)
     long dt = now_ms() - t0;
     check("alarm(1) disparou SIGALRM", alarm_count == 1);
     check("alarm demorou perto de 1 s", dt >= 900 && dt < 2500);
+    check("rcx e r11 sobrevivem a um sinal", regs_survive_signal());
 
     pid_t pid = fork();
     if (pid == 0) {

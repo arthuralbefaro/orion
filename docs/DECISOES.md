@@ -341,3 +341,94 @@ Uma linha por decisao, na ordem em que foram tomadas.
 - O `panic` passou a imprimir a pilha de chamadas da thread atual (a mesma
   varredura do dump de excecao). Nesta maquina nao ha `llvm-addr2line`; o
   `llvm-symbolizer --obj=out\orion.elf <endereco>` faz o mesmo.
+
+## v1.9.1 (copia segura de memoria de usuario)
+
+- Todo acesso do kernel a memoria de usuario passa por tres funcoes:
+  `copy_from_user`, `copy_to_user` e `strncpy_from_user` (`mm/uaccess.c`). As
+  duas instrucoes que podem faltar (o `rep movsb` e a leitura byte a byte da
+  string) moram em `arch/x86_64/uaccess.S` e cada uma tem uma entrada na tabela
+  de excecoes (`.ex_table`, um par endereco-que-falta / endereco-de-retomada).
+  O handler de `#PF` e de `#GP` em ring 0 procura o RIP na tabela e, se achar,
+  desvia para a retomada, que devolve "faltaram N bytes"; a funcao em C vira
+  isso em `-EFAULT`. E o mesmo desenho do Linux.
+- A ordem no handler importa: primeiro a falta de COW (escrita do kernel numa
+  pagina copy-on-write do usuario e legitima e precisa ser resolvida), depois a
+  tabela de excecoes, e so entao o panico.
+- A faixa ainda e conferida antes (`user_range_ok`): endereco do kernel ou nao
+  canonico nunca chega ao `rep movsb`. A tabela cobre o resto (pagina nao
+  mapeada, pagina so de leitura, corrida com `munmap`).
+- `read` e `write` usam um buffer intermediario no kernel: ate 256 bytes na
+  pilha, acima disso paginas contiguas do PMM (ate 64 KiB) acessadas pelo HHDM,
+  sem mapear nada. Os drivers (`file_ops->read/write`) passaram a receber so
+  ponteiros do kernel, entao nenhum driver precisa saber de memoria de usuario.
+  O laco continua enquanto cada pedaco vem cheio; um pedaco curto (pipe, TTY)
+  encerra a chamada como antes.
+- Se a copia para o usuario falha depois de o driver ja ter consumido os dados
+  (um `read` de pipe num buffer invalido), os dados se perdem e a chamada
+  devolve `EFAULT`, como no Linux.
+- Os ioctls copiam a estrutura inteira para uma variavel local e de volta, em
+  vez de escrever campo a campo no ponteiro do usuario.
+- `execve` copia o caminho e cada string de `argv`/`envp` para o kernel antes de
+  tocar no processo (no maximo 256 argumentos de ate 4 KiB cada; acima disso
+  `E2BIG`). O `build_stack` recusa um conjunto que passe de metade da pilha de
+  64 KiB, em vez de escrever abaixo dela.
+- `rt_sigreturn` volta ao usuario por `iretq`, nao por `sysret`: o `sysret`
+  sobrescreve RCX e R11 com RIP e RFLAGS, e o codigo interrompido pelo sinal
+  (por uma IRQ, no meio de qualquer conta) perdia esses dois registradores.
+  O `syscall_dispatch` devolve `true` quando o quadro inteiro precisa ser
+  restaurado, e o `syscall_entry` desvia para o `user_return`.
+- O quadro restaurado pelo `rt_sigreturn` e higienizado: RIP e RSP precisam
+  estar na metade de usuario (um RIP nao canonico num `iretq` vira `#GP` em ring
+  0) e o RFLAGS so aproveita os bits aritmeticos e o DF (nada de IOPL, TF, NT,
+  AC), com IF sempre ligado.
+- Handler ou restorer de sinal fora da metade de usuario mata o processo com
+  SIGSEGV na hora de entregar, em vez de deixar o `sysret` voltar para um
+  endereco nao canonico.
+- O carregador ELF confere estouro de inteiro nas contas de segmento e de
+  tabela de cabecalhos, `p_filesz <= p_memsz` e a entrada na metade de usuario.
+- `poll` passou a devolver `EINTR` quando um sinal chega durante a espera.
+  Antes ele voltava a dormir e o sinal so era tratado quando algum fd ficasse
+  pronto.
+- `FMASK` (as flags que a instrucao `syscall` zera na entrada) passou a incluir
+  NT e AC, como no Linux. O usuario pode ligar NT com `popfq`; enquanto toda
+  syscall voltava por `sysret` isso era inofensivo, mas um `iretq` com NT ligado
+  em modo longo da `#GP` em ring 0, e com o GS do usuario ja carregado o sistema
+  morria em silencio. Achado por uma revisao do proprio diff antes do commit;
+  o `badptr` tem um caso que liga NT dentro de um handler de sinal.
+- Falta sincrona (`#PF`, `#UD`, `#DE`...) em ring 3 com o sinal correspondente
+  ignorado ou bloqueado mata o processo, como o "force signal" do Linux. Antes o
+  processo voltava para a mesma instrucao e faltava de novo para sempre, enchendo
+  o log.
+- A tabela de excecoes so recupera falta de pagina em endereco de usuario
+  (`CR2 < USER_ADDR_MAX`). Uma falta no lado do kernel dentro da copia e bug do
+  kernel e continua virando panico em vez de um `EFAULT` silencioso.
+- `execve` que falha depois de criar o espaco novo devolve o processo exatamente
+  como estava (`pages`, `mmap_next`, `entry`, pilha e `brk`).
+- O laco do `read` so busca um segundo pedaco em arquivo regular. Em pipe, TTY
+  ou dispositivo, um pedaco cheio nao garante que haja mais dados, e uma segunda
+  leitura podia bloquear com dados ja entregues.
+- `thread_current()` le o `current` da CPU com uma unica instrucao relativa ao
+  GS (`movq %gs:current`). Antes eram duas leituras (`percpu_get()` e depois
+  `->current`): uma thread preemptada entre as duas e migrada de CPU lia o
+  `current` da CPU antiga, ou seja, outra thread. Com interrupcoes ligadas
+  dentro das syscalls isso acontecia de verdade no estresse: um filho
+  terminava "como" o `sh` (o `sh` aparecia zumbi com a thread bloqueada) e o
+  filho de verdade ficava `running` sem thread, travando o `waitpid` do pai.
+  Regra: nunca dereferenciar `percpu_get()` com interrupcoes ligadas.
+- Fechar a ultima ponta de um pipe ou PTY acorda a outra ponta **segurando** a
+  trava do pipe, e so libera a estrutura depois de soltar a trava. Antes o
+  `wake_up_all` vinha depois de soltar a trava, e a outra ponta podia fechar e
+  liberar a estrutura nesse intervalo (uso apos liberacao).
+- Quem termina deixa os filhos orfaos na hora (`orphan_children_locked` em
+  `process_terminate`): o filho perde o ponteiro para o pai e, se ja for zumbi,
+  passa a ser liberado sozinho. Antes os filhos de um zumbi colhido ficavam com
+  `parent` apontando para memoria liberada.
+- `execve` monta o espaco de enderecos novo numa variavel local e so publica em
+  `p->pml4_phys` junto com o `write_cr3`, com interrupcoes desligadas. Antes uma
+  preempcao no meio do `setup_image` fazia a thread voltar com o CR3 do espaco
+  ainda em construcao, e se o `exec` falhasse ela retornava ao usuario com o
+  CR3 do kernel.
+- `poll_table_sleep` nao dorme se houver sinal pendente. Um `signal_send` no
+  meio do registro das filas desfazia as entradas sem acordar a thread, que
+  depois dormia sem estar em fila nenhuma.

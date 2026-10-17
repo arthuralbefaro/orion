@@ -6,6 +6,7 @@
 #include <lib/string.h>
 #include <mm/memory.h>
 #include <mm/vmm.h>
+#include <mm/uaccess.h>
 
 static uint64_t mapped_pages;
 static uint32_t graphics_users;
@@ -55,11 +56,10 @@ static long fb_ioctl(struct file *f, uint64_t request, uint64_t arg)
     }
     if (request != FBIOGET_INFO)
         return -EINVAL;
-    if (arg >= USER_ADDR_MAX || arg + sizeof(struct fb_info) > USER_ADDR_MAX)
-        return -EFAULT;
-    if (!fbdev_get_info((struct fb_info *)arg))
+    struct fb_info info;
+    if (!fbdev_get_info(&info))
         return -ENODEV;
-    return 0;
+    return copy_to_user((void *)arg, &info, sizeof(info));
 }
 
 static int64_t fb_mmap(struct file *f, uint64_t len, int prot, uint64_t offset)

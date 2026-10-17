@@ -59,6 +59,7 @@ if ($runAll -or $OnlyA) {
         "cmd:memtest", "wait:2",
         "cmd:crash", "wait:2",
         "cmd:sigtest", "wait:10",
+        "cmd:badptr", "until:40:badptr: ",
         "cmd:sleep 100", "wait:2", "key:03", "wait:2",
         "cmd:hello um dois", "wait:1",
         "cmd:date", "wait:1",
@@ -113,6 +114,11 @@ if ($runAll -or $OnlyA) {
     Expect $a "#PF Page Fault" "crash levou page fault"
     Expect $a "morto por sinal 11" "crash morto com SIGSEGV"
     Expect $a "sigtest: TUDO OK" "sigtest TUDO OK"
+    Expect $a "rcx e r11 sobrevivem a um sinal\s+ok" "rt_sigreturn devolve todos os registradores"
+    Expect $a "badptr: (\d+)/\1 TUDO OK" "badptr: ponteiros invalidos devolvem EFAULT sem panico"
+    Expect $a "handler de sinal nao canonico\s+SIGSEGV" "handler nao canonico vira SIGSEGV"
+    Expect $a "flag NT ligada dentro do handler\s+ok" "flag NT do usuario nao derruba o iretq do rt_sigreturn"
+    Expect $a "Copias de usuario: [1-9]\d* falta\(s\) recuperada\(s\)" "tabela de excecoes recuperou as faltas"
     Expect $a "morto por sinal 2" "Ctrl\+C matou o sleep com SIGINT"
     Expect $a "hello from ring 3" "hello rodou"
     Expect $a "argv\[2\] = dois" "argumentos chegaram ao hello"

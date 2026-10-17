@@ -27,6 +27,7 @@
 #include <net/net.h>
 #include <mm/heap.h>
 #include <mm/memory.h>
+#include <mm/uaccess.h>
 #include <lib/string.h>
 
 #define LINE_MAX 128
@@ -68,6 +69,8 @@ static void cmd_mem(const char *args)
     vmm_cow_stats(&faults, &copies);
     kprintf("COW: %lu pagina(s) compartilhada(s), %lu falta(s), %lu copia(s)\n",
             pmm_shared_pages(), faults, copies);
+    kprintf("Copias de usuario: %lu falta(s) recuperada(s) pela tabela de excecoes\n",
+            uaccess_fault_count());
     kprintf("HHDM offset: %016lx | kernel fisico: %016lx virtual: %016lx\n",
             boot_info.hhdm_offset, boot_info.kernel_phys_base, boot_info.kernel_virt_base);
 }

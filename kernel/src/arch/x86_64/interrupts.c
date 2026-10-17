@@ -12,6 +12,7 @@
 #include <kernel/signal.h>
 #include <mm/vmm.h>
 #include <mm/heap.h>
+#include <mm/uaccess.h>
 #include <kernel/smp.h>
 #include <arch/x86_64/percpu.h>
 
@@ -221,6 +222,10 @@ static void handle_exception(struct interrupt_frame *f)
             return;
     }
 
+    if ((f->int_no == EXC_PAGE_FAULT || f->int_no == EXC_GENERAL_PROTECTION) && (f->cs & 3) == 0 &&
+        uaccess_fixup(f))
+        return;
+
     if ((f->cs & 3) == 3 && f->int_no != EXC_DOUBLE_FAULT) {
         struct process *p = process_current();
         int sig = f->int_no == EXC_DIVIDE_ERROR ? SIGFPE
@@ -228,7 +233,8 @@ static void handle_exception(struct interrupt_frame *f)
         log_error("proc", "pid %u '%s': %s em RIP=%016lx (err=%lx, CR2=%016lx) -> %s",
                   p->pid, p->name, exception_name((uint8_t)f->int_no), f->rip, f->err_code,
                   read_cr2(), signal_name(sig));
-        if (p->sig_handlers[sig].sa_handler == SIG_DFL)
+        uint64_t action = p->sig_handlers[sig].sa_handler;
+        if (action == SIG_DFL || action == SIG_IGN || (p->sig_blocked & SIGMASK(sig)))
             process_exit_signal(sig);
         signal_send(p, sig);
         return;

@@ -26,18 +26,18 @@ static uint32_t next_pid = 1;
 static spinlock_t proc_lock = SPINLOCK_INIT;
 static struct waitqueue child_exit_wq = WAITQUEUE_INIT;
 
-static bool map_user_range(struct process *p, uint64_t virt, uint64_t len, uint64_t flags)
+static bool map_user_range(struct process *p, uint64_t pml4, uint64_t virt, uint64_t len, uint64_t flags)
 {
     uint64_t start = PAGE_ALIGN_DOWN(virt);
     uint64_t end = PAGE_ALIGN_UP(virt + len);
     for (uint64_t v = start; v < end; v += PAGE_SIZE) {
-        if (vmm_virt_to_phys_in(p->pml4_phys, v))
+        if (vmm_virt_to_phys_in(pml4, v))
             continue;
         uint64_t phys = pmm_alloc_page();
         if (!phys)
             return false;
         memset(phys_to_virt(phys), 0, PAGE_SIZE);
-        vmm_map_page_in(p->pml4_phys, v, phys, flags);
+        vmm_map_page_in(pml4, v, phys, flags);
         p->pages++;
     }
     return true;
@@ -57,7 +57,7 @@ static void copy_to_space(uint64_t pml4, uint64_t virt, const void *src, size_t 
     }
 }
 
-static bool load_elf(struct process *p, const uint8_t *image, size_t size, uint64_t *brk_out)
+static bool load_elf(struct process *p, uint64_t pml4, const uint8_t *image, size_t size, uint64_t *brk_out)
 {
     if (size < sizeof(struct elf64_ehdr))
         return false;
@@ -65,7 +65,8 @@ static bool load_elf(struct process *p, const uint8_t *image, size_t size, uint6
     if (memcmp(eh->e_ident, ELF_MAGIC, 4) != 0 || eh->e_ident[4] != ELFCLASS64 ||
         eh->e_ident[5] != ELFDATA2LSB || eh->e_type != ET_EXEC || eh->e_machine != EM_X86_64)
         return false;
-    if (eh->e_phoff + (uint64_t)eh->e_phnum * eh->e_phentsize > size)
+    if (eh->e_phentsize < sizeof(struct elf64_phdr) || eh->e_phoff > size ||
+        (uint64_t)eh->e_phnum * eh->e_phentsize > size - eh->e_phoff)
         return false;
 
     uint64_t highest = 0;
@@ -73,26 +74,29 @@ static bool load_elf(struct process *p, const uint8_t *image, size_t size, uint6
         const struct elf64_phdr *ph = (const void *)(image + eh->e_phoff + i * eh->e_phentsize);
         if (ph->p_type != PT_LOAD)
             continue;
-        if (ph->p_vaddr + ph->p_memsz > USER_STACK_TOP - USER_STACK_SIZE ||
-            ph->p_offset + ph->p_filesz > size)
+        if (ph->p_memsz > USER_STACK_TOP || ph->p_vaddr > USER_STACK_TOP - ph->p_memsz ||
+            ph->p_vaddr + ph->p_memsz > USER_STACK_TOP - USER_STACK_SIZE ||
+            ph->p_filesz > ph->p_memsz || ph->p_offset > size || ph->p_filesz > size - ph->p_offset)
             return false;
         uint64_t flags = PTE_PRESENT | PTE_USER;
         if (ph->p_flags & PF_W)
             flags |= PTE_WRITABLE;
         if (!(ph->p_flags & PF_X))
             flags |= PTE_NX;
-        if (!map_user_range(p, ph->p_vaddr, ph->p_memsz, flags))
+        if (!map_user_range(p, pml4, ph->p_vaddr, ph->p_memsz, flags))
             return false;
-        copy_to_space(p->pml4_phys, ph->p_vaddr, image + ph->p_offset, ph->p_filesz);
+        copy_to_space(pml4, ph->p_vaddr, image + ph->p_offset, ph->p_filesz);
         if (ph->p_vaddr + ph->p_memsz > highest)
             highest = ph->p_vaddr + ph->p_memsz;
     }
+    if (eh->e_entry >= USER_STACK_TOP)
+        return false;
     p->entry = eh->e_entry;
     *brk_out = PAGE_ALIGN_UP(highest);
     return true;
 }
 
-static uint64_t build_stack(struct process *p, const char *const *argv, const char *const *envp)
+static uint64_t build_stack(uint64_t pml4, const char *const *argv, const char *const *envp)
 {
     uint64_t argc = 0, envc = 0;
     uint64_t strings_size = 0;
@@ -106,6 +110,8 @@ static uint64_t build_stack(struct process *p, const char *const *argv, const ch
     uint64_t str_base = sp;
 
     uint64_t nptrs = 1 + (argc + 1) + (envc + 1);
+    if (strings_size + nptrs * 8 + 64 > USER_STACK_SIZE / 2)
+        return 0;
     if (nptrs & 1)
         sp -= 8;
     sp -= nptrs * 8;
@@ -115,35 +121,38 @@ static uint64_t build_stack(struct process *p, const char *const *argv, const ch
     uint64_t cur = str_base;
     for (uint64_t i = 0; i < argc; i++) {
         size_t n = strlen(argv[i]) + 1;
-        copy_to_space(p->pml4_phys, cur, argv[i], n);
+        copy_to_space(pml4, cur, argv[i], n);
         vec[1 + i] = cur;
         cur += n;
     }
     vec[1 + argc] = 0;
     for (uint64_t i = 0; i < envc; i++) {
         size_t n = strlen(envp[i]) + 1;
-        copy_to_space(p->pml4_phys, cur, envp[i], n);
+        copy_to_space(pml4, cur, envp[i], n);
         vec[2 + argc + i] = cur;
         cur += n;
     }
     vec[2 + argc + envc] = 0;
-    copy_to_space(p->pml4_phys, sp, vec, nptrs * 8);
+    copy_to_space(pml4, sp, vec, nptrs * 8);
     kfree(vec);
     return sp;
 }
 
-static bool setup_image(struct process *p, const void *image, size_t size, const char *const *argv,
+static bool setup_image(struct process *p, uint64_t pml4, const void *image, size_t size, const char *const *argv,
                         const char *const *envp)
 {
     uint64_t brk;
-    if (!load_elf(p, image, size, &brk))
+    if (!load_elf(p, pml4, image, size, &brk))
         return false;
-    if (!map_user_range(p, USER_STACK_TOP - USER_STACK_SIZE, USER_STACK_SIZE,
+    if (!map_user_range(p, pml4, USER_STACK_TOP - USER_STACK_SIZE, USER_STACK_SIZE,
                         PTE_PRESENT | PTE_USER | PTE_WRITABLE | PTE_NX))
         return false;
+    uint64_t sp = build_stack(pml4, argv, envp);
+    if (!sp)
+        return false;
+    p->stack_top = sp;
     p->brk_start = brk;
     p->brk = brk;
-    p->stack_top = build_stack(p, argv, envp);
     return true;
 }
 
@@ -243,15 +252,9 @@ static void process_register(struct process *p)
     spin_unlock_irqrestore(&proc_lock, flags);
 }
 
-static void unregister_locked(struct process *p)
+static void orphan_children_locked(struct process *p)
 {
     struct process **pp = &processes;
-    while (*pp && *pp != p)
-        pp = &(*pp)->next;
-    if (*pp)
-        *pp = p->next;
-
-    pp = &processes;
     while (*pp) {
         struct process *c = *pp;
         if (c->parent == p) {
@@ -265,6 +268,16 @@ static void unregister_locked(struct process *p)
         }
         pp = &c->next;
     }
+}
+
+static void unregister_locked(struct process *p)
+{
+    struct process **pp = &processes;
+    while (*pp && *pp != p)
+        pp = &(*pp)->next;
+    if (*pp)
+        *pp = p->next;
+    orphan_children_locked(p);
 }
 
 static void process_unregister(struct process *p)
@@ -299,7 +312,7 @@ struct process *process_create_elf(const char *name, const void *image, size_t s
     if (!p)
         return NULL;
     const char *argv[] = { name, NULL };
-    if (!setup_image(p, image, size, argv, NULL)) {
+    if (!setup_image(p, p->pml4_phys, image, size, argv, NULL)) {
         log_error("proc", "'%s': ELF invalido", name);
         vmm_destroy_address_space(p->pml4_phys);
         kfree(p);
@@ -326,7 +339,7 @@ struct process *process_spawn_path(const char *path, const char *const *argv)
         return NULL;
     }
     const char *def[] = { name, NULL };
-    bool ok = setup_image(p, image, size, argv ? argv : def, NULL);
+    bool ok = setup_image(p, p->pml4_phys, image, size, argv ? argv : def, NULL);
     kfree(image);
     if (!ok) {
         vmm_destroy_address_space(p->pml4_phys);
@@ -482,32 +495,23 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
         return -ENOENT;
     path = full;
 
-    char **kargv = NULL, **kenvp = NULL;
-    int argc = 0, envc = 0;
-    while (argv && argv[argc]) argc++;
-    while (envp && envp[envc]) envc++;
-    kargv = kzalloc((argc + 1) * sizeof(char *));
-    kenvp = kzalloc((envc + 1) * sizeof(char *));
-    for (int i = 0; i < argc; i++) {
-        size_t n = strlen(argv[i]) + 1;
-        kargv[i] = kmalloc(n);
-        memcpy(kargv[i], argv[i], n);
-    }
-    for (int i = 0; i < envc; i++) {
-        size_t n = strlen(envp[i]) + 1;
-        kenvp[i] = kmalloc(n);
-        memcpy(kenvp[i], envp[i], n);
-    }
-
     uint64_t old_pml4 = p->pml4_phys;
-    p->pml4_phys = vmm_create_address_space();
+    uint64_t old_pages = p->pages, old_mmap = p->mmap_next, old_entry = p->entry;
+    uint64_t old_stack = p->stack_top, old_brk_start = p->brk_start, old_brk = p->brk;
+    uint64_t new_pml4 = vmm_create_address_space();
     p->pages = 0;
     p->mmap_next = USER_MMAP_BASE;
     int ret = 0;
-    if (!p->pml4_phys || !setup_image(p, image, size, (const char *const *)kargv, (const char *const *)kenvp)) {
-        if (p->pml4_phys)
-            vmm_destroy_address_space(p->pml4_phys);
-        p->pml4_phys = old_pml4;
+    if (!new_pml4 ||
+        !setup_image(p, new_pml4, image, size, (const char *const *)argv, (const char *const *)envp)) {
+        if (new_pml4)
+            vmm_destroy_address_space(new_pml4);
+        p->pages = old_pages;
+        p->mmap_next = old_mmap;
+        p->entry = old_entry;
+        p->stack_top = old_stack;
+        p->brk_start = old_brk_start;
+        p->brk = old_brk;
         ret = -ENOEXEC;
     } else {
         const char *name = path;
@@ -520,7 +524,8 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
         thread_current()->fs_base = 0;
         wrmsr(MSR_IA32_FS_BASE, 0);
         cli();
-        write_cr3(p->pml4_phys);
+        p->pml4_phys = new_pml4;
+        write_cr3(new_pml4);
         sti();
         vmm_destroy_address_space(old_pml4);
 
@@ -534,10 +539,6 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
         frame->ss = GDT_USER_DATA | GDT_RPL_USER;
     }
 
-    for (int i = 0; i < argc; i++) kfree(kargv[i]);
-    for (int i = 0; i < envc; i++) kfree(kenvp[i]);
-    kfree(kargv);
-    kfree(kenvp);
     kfree(image);
     return ret;
 }
@@ -598,6 +599,7 @@ static NORETURN void process_terminate(int status)
         }
     uint64_t flags = spin_lock_irqsave(&proc_lock);
     p->state = PROC_ZOMBIE;
+    orphan_children_locked(p);
     if (p->parent)
         signal_send(p->parent, SIGCHLD);
     else
@@ -720,6 +722,15 @@ void process_thread_reaped(struct process *p)
     if (autofree)
         kfree(p);
     wake_up_all(&child_exit_wq);
+}
+
+int process_getppid(void)
+{
+    struct process *me = process_current();
+    uint64_t flags = spin_lock_irqsave(&proc_lock);
+    int ppid = me->parent ? (int)me->parent->pid : 0;
+    spin_unlock_irqrestore(&proc_lock, flags);
+    return ppid;
 }
 
 int process_count(void)

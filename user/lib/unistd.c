@@ -188,6 +188,7 @@ static const char *const errors[] = {
     [ENOSYS] = "Funcao nao implementada", [EIO] = "Erro de entrada/saida",
     [EEXIST] = "Arquivo ja existe", [ENOTEMPTY] = "Diretorio nao vazio",
     [EROFS] = "Sistema de arquivos somente leitura", [EINTR] = "Chamada interrompida",
+    [ENAMETOOLONG] = "Nome muito longo",
 };
 
 const char *strerror(int err)

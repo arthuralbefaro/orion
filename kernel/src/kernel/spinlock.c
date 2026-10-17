@@ -11,7 +11,7 @@ static uint64_t tsc_per_second;
 
 static struct thread *current_or_null(void)
 {
-    return percpu_ready() ? percpu_get()->current : NULL;
+    return percpu_ready() ? thread_current() : NULL;
 }
 
 void spin_set_timeout(uint64_t tsc_hz)

@@ -38,6 +38,11 @@ SECTIONS
     .rodata : {
         *(.rodata .rodata.*)
     } :rodata
+    .ex_table : {
+        __ex_table_start = .;
+        KEEP(*(.ex_table))
+        __ex_table_end = .;
+    } :rodata
     __rodata_end = .;
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));

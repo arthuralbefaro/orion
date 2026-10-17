@@ -27,6 +27,24 @@ uma vez e ganhamos `dash`, `lua`, `tcc`, `sbase`, Doom, jogos e utilitarios.
 A libc propria (`user/lib`) continua existindo enquanto a migracao acontece e
 some no fim da fase 1.
 
+## Linguagens
+
+O kernel central (escalonador, memoria, interrupcoes, processos, VFS) continua
+em C: ja esta estavel e reescrever traria so risco. As outras linguagens entram
+onde pagam o custo:
+
+| Linguagem | Onde | Por que |
+|---|---|---|
+| **Assembly** | so onde e obrigatorio ou mais rapido: entradas de interrupcao e syscall, troca de contexto, copias de memoria de usuario com tabela de excecoes (0.2), `memcpy`/`memset` com `rep movsb` (8.7) | o clang ja gera codigo tao bom quanto o feito a mao no resto |
+| **Zig (como ferramenta)** | `zig cc -target x86_64-linux-musl` compila os programas de usuario contra a musl a partir do Windows (1.5); `zig c++` faz o mesmo para C++ | o Zig ja traz a musl e os cabecalhos prontos, o que elimina o maior risco da fase 1 |
+| **Rust** | piloto no ext2 (2.5); se aprovado, TCP (3.1 a 3.4), USB (5.5 a 5.7) e parsers de dados vindos de fora | seguranca de memoria onde um ponteiro errado vira falha grave; entra como biblioteca estatica `no_std` chamada pelo C |
+| **C++** | `libgui` e apps do desktop (fase 6), no espaco de usuario | classes ajudam a organizar janelas, botoes e listas; nunca no kernel |
+| **Lua** | scripts e configuracao do sistema, depois da 1.9 | linguagem pequena, embutivel, ja portada no plano |
+
+Toda linguagem segue as mesmas regras do C: sem comentarios no codigo,
+`.\check.ps1` limpo (ele passa a checar `.rs`, `.zig` e `.cpp` quando
+existirem) e regressao verde.
+
 ## Regras que valem para todas as etapas
 
 - Codigo sem comentarios, arquivos inteiros, `.\check.ps1` limpo.
@@ -64,7 +82,7 @@ Fecha o que ficou aberto e tira os riscos que derrubam o kernel hoje.
 | 1.2 | **Syscalls basicas que a musl chama na partida**: `set_tid_address`, `exit_group`, `uname`, `getuid`/`geteuid`/`getgid`/`getegid` (todos 0 por enquanto), `writev`, `readv`, `ioctl(TIOCGWINSZ)`, `rt_sigprocmask` completo, `sigaltstack` (stub) | M | tabela de syscalls em `docs/SYSCALLS.md` com estado de cada uma |
 | 1.3 | **Arquivos no formato do Linux**: `struct stat` com o layout do Linux, `newfstatat`, `openat`, `getdents64`, `lseek` com `SEEK_END`, `access`, `faccessat`, `readlink` (devolve `ENOENT`), `fcntl(F_DUPFD, F_GETFD, F_SETFD)`, `dup3`, `pipe2`, `O_CLOEXEC` | M | `ls` da libc propria continua funcionando com o `getdents64` |
 | 1.4 | **Memoria do jeito Linux**: lista de areas (VMA) por processo substituindo o `mmap_next`; `mmap` com `MAP_FIXED`, `MAP_PRIVATE` de arquivo, `mprotect`, `munmap` parcial, `madvise` (stub) | G (2 partes: VMAs; mmap de arquivo) | `memtest` novo cobrindo cada caso |
-| 1.5 | **Construir a musl** pelo `build.ps1`: baixar o fonte da musl 1.2.x para `third_party\musl`, gerar `bits/alltypes.h` e `bits/syscall.h` uma vez (script PowerShell) e compilar `libc.a` com o clang | M | `hello` compilado contra a musl roda no Orion |
+| 1.5 | **Programas contra a musl com o Zig**: instalar o Zig numa versao fixa (`winget install zig.zig` ou zip oficial em `third_party\zig`), e o `build.ps1` passa a compilar os programas de usuario com `zig cc -target x86_64-linux-musl -static`. Plano B: compilar os `.c` da musl pelo proprio `build.ps1` com o clang | M | `hello` compilado contra a musl roda no Orion |
 | 1.6 | **Threads**: `clone` com `CLONE_VM|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID`; processo deixa de ter uma thread so (`p->thread` vira lista) | G (2 partes: varias threads por processo; `clone`) | `pthread_create` da musl com 8 threads somando num contador |
 | 1.7 | **futex** (`FUTEX_WAIT`, `FUTEX_WAKE`, com `FUTEX_PRIVATE_FLAG`) em cima das filas de espera | M | mutex e condvar da musl entre 8 threads, 1 milhao de operacoes |
 | 1.8 | Tempo e sinais completos: `clock_nanosleep`, `gettimeofday`, `CLOCK_*` restantes, `sigsuspend`, `rt_sigtimedwait`, `tgkill`, `getrusage` | M | `sigtest` reescrito contra a musl passa |
@@ -81,7 +99,7 @@ Fecha o que ficou aberto e tira os riscos que derrubam o kernel hoje.
 | 2.2 | **tmpfs** em `/tmp` e `/run` | P | 1000 arquivos criados e apagados sem vazar pagina |
 | 2.3 | **procfs** em `/proc`: `/proc/<pid>/{status,cmdline,maps,fd}`, `/proc/meminfo`, `/proc/cpuinfo`, `/proc/uptime`, `/proc/mounts`; `ps`, `top`, `free` passam a ler dele e as syscalls 1002/1003 sao removidas | M | `cat /proc/self/maps` mostra as VMAs |
 | 2.4 | **Cache de paginas unificado**: leitura de arquivo e `mmap` de arquivo usando as mesmas paginas | M | ler o mesmo arquivo duas vezes nao vai ao disco na segunda |
-| 2.5 | **ext2 com leitura** | M | disco ext2 criado no host (ou pelo 2.6) montado e lido |
+| 2.5 | **ext2 com leitura, piloto em Rust**: `kernel/rust/ext2` como `staticlib` `no_std` (`--target x86_64-unknown-none`, `panic = "abort"`), alocador ligado ao `kmalloc`, interface C declarada num `.h`; `build.ps1` chama o `cargo` e liga o `.a`. Ao fim, registrar em `DECISOES.md` se o Rust continua (tempo de build, tamanho, facilidade de depurar) | M | disco ext2 criado no host (ou pelo 2.6) montado e lido; decisao do piloto registrada |
 | 2.6 | **ext2 com escrita**, `mkfs.ext2` proprio, `fsck` basico | G (2 partes) | `fstest -a` passa em ext2 |
 | 2.7 | Links simbolicos, `chmod`, `chown`, `utime`, permissoes guardadas no ext2 | M | `ln -s`, `ls -l` mostra dono e modo |
 | 2.8 | **GPT** e o disco do sistema: tabela GPT, particao EFI (FAT) + raiz (ext2); `build.ps1 -Image` gera `out\orion.img` pronto para bootar; o Orion boota com a raiz em ext2 e o `vvfat` sai da rotina | M | regressao inteira rodando com raiz em ext2, arquivos sobrevivem a reboot |
@@ -153,6 +171,7 @@ Fecha o que ficou aberto e tira os riscos que derrubam o kernel hoje.
 | 8.4 | Falta de memoria: o kernel recusa em vez de travar; matador de processo (OOM) | M |
 | 8.5 | Perfilador por amostragem (NMI do timer guarda RIPs; `perf` mostra as funcoes mais quentes) | M |
 | 8.6 | Pilhas do kernel de 16 KiB medidas com o canario; trocar para 32 KiB se alguma passar de 75% | P |
+| 8.7 | `memcpy`, `memset` e `memmove` do kernel em assembly com `rep movsb`/`rep stosb` | P |
 
 ---
 
@@ -187,9 +206,13 @@ Sugestao de turnos noturnos:
 
 ## Riscos conhecidos
 
-- **Construir a musl no Windows**: o build oficial usa `sh` e `make`. O plano e
-  gerar os dois cabecalhos uma vez com PowerShell e compilar os `.c` pelo
-  `build.ps1`. Se emperrar, o caminho B e o WSL so para gerar o `libc.a`.
+- **musl no Windows**: resolvido pelo `zig cc`, que ja traz a musl. Se a versao
+  da musl do Zig tiver alguma diferenca que atrapalhe, o plano B e compilar os
+  `.c` da musl pelo `build.ps1` com o clang, e o plano C e o WSL so para
+  gerar o `libc.a`.
+- **Rust no kernel**: exige o `rustup` com o alvo `x86_64-unknown-none`, um
+  alocador e um `panic` que chamem o kernel. Se o piloto (2.5) nao valer a
+  pena, o ext2 e reescrito em C e o Rust sai do plano.
 - **Fase 1.6 (threads)** mexe no coracao do escalonador e dos processos. Vai
   com o estresse 5x e um teste de threads novo antes do commit.
 - **USB (5.5)** e o driver mais trabalhoso do plano; sem ele, PCs novos sem
