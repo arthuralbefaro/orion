@@ -71,7 +71,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 83 | mkdir | parcial | sem modo de permissao |
 | 84 | rmdir | completa | |
 | 87 | unlink | completa | |
-| 89 | readlink | parcial | sem links simbolicos: `EINVAL` para o que existe, `ENOENT` para o que nao existe |
+| 89 | readlink | parcial | le links do ext2 (2.5); `EINVAL` para o que nao e link; o caminho ainda nao segue links (2.7) |
 | 96 | gettimeofday | completa | fuso sempre zero |
 | 97 | getrlimit | completa | `RLIMIT_NOFILE`, `RLIMIT_NPROC`, `RLIMIT_STACK`; os outros sao infinitos |
 | 98 | getrusage | parcial | `RUSAGE_SELF`, `RUSAGE_CHILDREN`, `RUSAGE_THREAD`; so `ru_utime` e `ru_stime` |
@@ -90,7 +90,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 158 | arch_prctl | parcial | `ARCH_SET_FS` e `ARCH_GET_FS` |
 | 160 | setrlimit | completa | subir o maximo da `EPERM` |
 | 162 | sync | completa | |
-| 165 | mount | parcial | tipos `vfat` (`fat`, `msdos`) com dispositivo de bloco, `devfs` (`devtmpfs`), `tmpfs` (opcoes `size=` e `nr_inodes=`) e `proc`; `MS_RDONLY`; `MS_NOSUID`, `MS_NODEV`, `MS_NOEXEC`, `MS_SYNCHRONOUS`, `MS_SILENT` e os de `atime` aceitos sem efeito; `MS_REMOUNT`, `MS_BIND` e `MS_MOVE` dao `EINVAL`; um ponto de montagem por diretorio |
+| 165 | mount | parcial | tipos `vfat` (`fat`, `msdos`) e `ext2` (so leitura) com dispositivo de bloco, `devfs` (`devtmpfs`), `tmpfs` (opcoes `size=` e `nr_inodes=`) e `proc`; `MS_RDONLY`; `MS_NOSUID`, `MS_NODEV`, `MS_NOEXEC`, `MS_SYNCHRONOUS`, `MS_SILENT` e os de `atime` aceitos sem efeito; `MS_REMOUNT`, `MS_BIND` e `MS_MOVE` dao `EINVAL`; um ponto de montagem por diretorio |
 | 166 | umount2 | parcial | `EBUSY` com arquivo aberto, cwd ou montagem dentro; so a flag `UMOUNT_NOFOLLOW` (`MNT_FORCE`, `MNT_DETACH`, `MNT_EXPIRE` dao `EINVAL`) |
 | 186 | gettid | completa | tid de cada thread; a principal tem o pid |
 | 200 | tkill | completa | |

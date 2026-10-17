@@ -64,11 +64,12 @@ def port_free(port):
 
 
 class Machine:
-    def __init__(self, smp=4, memory=512, disk=False, serial_port=4444, monitor_port=4445,
+    def __init__(self, smp=4, memory=512, disk=False, extra_disks=(), serial_port=4444, monitor_port=4445,
                  boot_timeout=60.0):
         self.smp = smp
         self.memory = memory
         self.disk = disk
+        self.extra_disks = list(extra_disks)
         self.serial_port = serial_port
         self.monitor_port = monitor_port
         self.boot_timeout = boot_timeout
@@ -107,6 +108,8 @@ class Machine:
         ]
         if self.disk:
             args += ["-drive", "format=raw,file=out/disk.img"]
+        for extra in self.extra_disks:
+            args += ["-drive", f"format=raw,file={extra}"]
         self.stderr = open(OUT / "test-qemu.log", "wb")
         self.proc = subprocess.Popen(args, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=self.stderr)
         self.serial = self._connect(self.serial_port, self.boot_timeout)
@@ -283,13 +286,13 @@ def write_autostart(gui):
         shutil.copyfile(ROOT / "etc" / "autostart", target)
 
 
-def run(steps, smp=4, memory=512, disk=False, gui=False, no_build=False, boot_timeout=60.0,
+def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_build=False, boot_timeout=60.0,
         command_delay=1.0, settle=2.0, log_path="out/test-serial.log", kernel_shell=False):
     if not no_build:
         build(gui)
     elif gui:
         write_autostart(True)
-    m = Machine(smp=smp, memory=memory, disk=disk, boot_timeout=boot_timeout)
+    m = Machine(smp=smp, memory=memory, disk=disk, extra_disks=extra_disks, boot_timeout=boot_timeout)
     code = 0
     try:
         m.start()

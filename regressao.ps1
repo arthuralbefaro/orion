@@ -427,6 +427,13 @@ if ($runAll -or $OnlyB) {
 if ($runAll -or $OnlyC) {
     Write-Host "== Sequencia C (disco cru, escrita e shell) ==" -ForegroundColor Cyan
     Remove-Item (Join-Path $Root "out\disk.img") -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $Root "out\ext2-*.img") -ErrorAction SilentlyContinue
+    $py = & (Join-Path $Root "tools\python.ps1")
+    $pyArgs = @($py | Select-Object -Skip 1)
+    & $py[0] @pyArgs (Join-Path $Root "tools\mkext2.py") out/ext2-4k.img --test --size 32 --block 4096 --add /bin/hello=out/hello.elf
+    if ($LASTEXITCODE -ne 0) { throw "mkext2 falhou" }
+    & $py[0] @pyArgs (Join-Path $Root "tools\mkext2.py") out/ext2-1k.img --test --size 32 --block 1024 --add /bin/hello=out/hello.elf
+    if ($LASTEXITCODE -ne 0) { throw "mkext2 falhou" }
     $stepsC = @(
         "cmd:mkfs /dev/sdb ORION", "wait:10",
         "key:0B", "cmd:mount", "cmd:mem", "key:0B", "wait:1",
@@ -453,9 +460,13 @@ if ($runAll -or $OnlyC) {
         "cmd:umount /mnt", "cmd:mount /dev/sdb /mnt",
         "cmd:echo rw-ok > /mnt/rw.txt", "cmd:cat /mnt/rw.txt", "cmd:rm /mnt/rw.txt",
         "cmd:mkdir /mnt/q", "cmd:mount /dev/sdb /mnt/q", "cmd:rm -r /mnt/q", "wait:1",
+        "cmd:mkdir /tmp/e4", "cmd:mount -t ext2 /dev/sdc /tmp/e4", "cmd:ext2test /tmp/e4", "until:300:falha(s))",
+        "cmd:/tmp/e4/bin/hello ext2", "wait:2",
+        "cmd:mkdir /tmp/e1", "cmd:mount -t ext2 /dev/sdd /tmp/e1", "cmd:ext2test /tmp/e1", "until:300:falha(s))",
+        "cmd:umount /tmp/e4", "cmd:umount /tmp/e1", "wait:1",
         "key:0B", "cmd:mem", "cmd:lsblk", "cmd:mutex"
     )
-    & (Join-Path $Root "test.ps1") -Smp $Smp -NoBuild -Disk -LogPath "out\reg-c.log" `
+    & (Join-Path $Root "test.ps1") -Smp $Smp -NoBuild -Disk -ExtraDisks @("out/ext2-4k.img", "out/ext2-1k.img") -LogPath "out\reg-c.log" `
         -Script $stepsC -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $c = Get-Log "out\reg-c.log"
     if ($Verbose) { Write-Output $c }
@@ -503,6 +514,13 @@ if ($runAll -or $OnlyC) {
     Expect $c "/mnt/ro\.txt: Sistema de arquivos somente leitura" "escrita em montagem so de leitura da EROFS"
     Expect $c "(?s)cat /mnt/rw\.txt\s*\n\s*rw-ok" "remontado com escrita"
     Expect $c "mount: /dev/sdb em /mnt/q: Recurso ocupado" "o mesmo disco nao monta duas vezes"
+    Expect $c "ext2\s+sdc: rev 1, blocos de 4096 bytes" "ext2 de blocos de 4 KiB montado (leitor em Rust)"
+    Expect $c "ext2\s+sdd: rev 1, blocos de 1024 bytes, \d+ blocos \(\d+ livres\), \d+ inodes, 4 grupo\(s\)" "ext2 de blocos de 1 KiB com 4 grupos"
+    Expect $c "(?s)ext2test /tmp/e4.*?todos os arquivos batem com o MANIFEST\s+ok.*?ext2test: TUDO OK" "ext2test no ext2 de 4 KiB"
+    Expect $c "(?s)ext2test /tmp/e1.*?fim de huge-sparse\.bin\s+ok.*?ext2test: TUDO OK" "ext2test no ext2 de 1 KiB (indireto triplo)"
+    Expect $c "link longlink\s+ok" "ext2: link simbolico lento lido pelo readlink"
+    Expect $c "argv\[1\] = ext2" "binario do ext2 roda"
+    Expect $c "/dev/sdc desmontado de /tmp/e4" "umount do ext2"
     Test-MemDelta $c "memoria estavel na sequencia C" 24
 }
 

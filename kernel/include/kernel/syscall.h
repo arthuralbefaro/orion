@@ -237,6 +237,8 @@ struct user_pollfd {
 #define S_IFCHR 0020000
 #define S_IFBLK 0060000
 #define S_IFIFO 0010000
+#define S_IFLNK 0120000
+#define S_IFSOCK 0140000
 
 struct user_dirent {
     uint64_t size;
@@ -276,6 +278,9 @@ struct linux_dirent64 {
 #define DT_UNKNOWN 0
 #define DT_CHR     2
 #define DT_DIR     4
+#define DT_FIFO 1
+#define DT_LNK 10
+#define DT_SOCK 12
 #define DT_BLK     6
 #define DT_REG     8
 

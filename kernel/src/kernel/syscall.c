@@ -688,15 +688,32 @@ static long sys_faccessat2(int dirfd, const char *upath, int mode, int flags)
 
 static long sys_readlinkat(int dirfd, const char *upath, char *ubuf, uint64_t size)
 {
-    (void)ubuf;
-    (void)size;
     struct upath up;
     struct vnode *v;
     long r = walk_user(dirfd, upath, &v, &up);
     if (r < 0)
         return r;
+    if ((v->mode & S_IFMT) != S_IFLNK || !v->mnt->type->readlink) {
+        vnode_put(v);
+        return -EINVAL;
+    }
+    if ((int64_t)size <= 0) {
+        vnode_put(v);
+        return -EINVAL;
+    }
+    if (size > VFS_PATH_MAX)
+        size = VFS_PATH_MAX;
+    char *buf = kmalloc(size);
+    if (!buf) {
+        vnode_put(v);
+        return -ENOMEM;
+    }
+    int64_t n = v->mnt->type->readlink(v, buf, size);
     vnode_put(v);
-    return -EINVAL;
+    if (n >= 0 && copy_to_user(ubuf, buf, (size_t)n) < 0)
+        n = -EFAULT;
+    kfree(buf);
+    return n;
 }
 
 static uint8_t dirent_type(uint32_t mode)
@@ -705,6 +722,9 @@ static uint8_t dirent_type(uint32_t mode)
     case S_IFDIR: return DT_DIR;
     case S_IFCHR: return DT_CHR;
     case S_IFBLK: return DT_BLK;
+    case S_IFLNK: return DT_LNK;
+    case S_IFIFO: return DT_FIFO;
+    case S_IFSOCK: return DT_SOCK;
     default:      return DT_REG;
     }
 }

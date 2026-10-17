@@ -92,6 +92,14 @@ QEMU). Para exercitar o FAT de verdade use um disco cru:
     umount /mnt                      # EBUSY se houver arquivo aberto ou cwd dentro
     mount -r /dev/sdb /mnt           # so leitura
 
+Imagens ext2 (so leitura por enquanto; o leitor e o piloto em Rust do
+kernel) saem do `tools\mkext2.py`, a partir de um diretorio ou da arvore de
+teste, e entram no QEMU com `test.ps1 -ExtraDisks`:
+
+    python tools\mkext2.py out\e.img --test --size 32 --block 4096
+    mount -t ext2 /dev/sdb /tmp/e    # dentro do Orion
+    ext2test /tmp/e
+
 ### Testes
 `test.ps1` roda o QEMU com `-display none`, serial em TCP 4444 e monitor em
 TCP 4445. Ele envia comandos ao shell, injeta teclado e mouse pelo monitor,
@@ -119,7 +127,7 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
     ifconfig ping nslookup dhcp mkfs mount umount
-    testes: memtest fstest vfstest tmptest proctest pctest polltest forktest ptytest limtest stress sctest filetest
+    testes: memtest fstest vfstest tmptest proctest pctest ext2test polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
 
@@ -179,3 +187,5 @@ readdir (1000) e openpty (1001); memoria e processos vem do `/proc`.
 Kernel: clang/lld como cross-compiler (`--target=x86_64-unknown-none-elf`), sem
 libc, sem SSE/x87 no kernel, red zone desligada, modelo de codigo "kernel".
 Programas: `zig cc -target x86_64-linux-musl -static`.
+Rust no kernel (`kernel/rust/`): `cargo` com o alvo `x86_64-unknown-none`
+(`rustup target add x86_64-unknown-none`; o `setup.ps1` faz isso).

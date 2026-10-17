@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -31,6 +32,7 @@ def parse_sequences():
         if end:
             body = body[:end.start()]
         seq = {"name": name, "steps": [], "expect": [], "memdelta": None, "shots": [], "disk": False, "gui": False,
+               "extra": [], "prep": [],
                "delay": 1.0, "boot": 60.0, "remove_disk": False, "log": f"out/reg-{name.lower()}.log",
                "stress": None}
         m = re.search(r"\$steps" + name + r"\s*=\s*@\((.*?)^\s*\)\s*$", body, flags=re.S | re.M)
@@ -40,6 +42,9 @@ def parse_sequences():
         if call:
             c = call.group(1)
             seq["disk"] = "-Disk" in c
+            ex = re.search(r"-ExtraDisks\s+@\(([^)]*)\)", c)
+            if ex:
+                seq["extra"] = [ps_string(s) for s in STRING.finditer(ex.group(1))]
             seq["gui"] = "-Gui" in c
             d = re.search(r"-CommandDelay\s+([\d.]+)", c)
             if d:
@@ -50,6 +55,9 @@ def parse_sequences():
             lp = re.search(r'-LogPath\s+"([^"]+)"', c)
             if lp:
                 seq["log"] = lp.group(1).replace("\\", "/")
+        for mk in re.finditer(r'tools\\mkext2\.py"\)\s+(.+)$', body, flags=re.M):
+            seq["prep"].append([ps_string(s) if s.group(0).startswith(('"', "'")) else s.group(0)
+                                for s in re.finditer(r'"(?:[^"`]|`.)*"|\'(?:[^\']|\'\')*\'|\S+', mk.group(1))])
         seq["remove_disk"] = bool(re.search(r'Remove-Item \(Join-Path \$Root "out\\disk\.img"\)', body))
         for e in re.finditer(r'^\s*(Expect|ExpectNot) \$\w+ ("(?:[^"`]|`.)*"|\'(?:[^\']|\'\')*\') ("(?:[^"`]|`.)*"|\'(?:[^\']|\'\')*\')\s*$',
                              body, flags=re.M):
@@ -164,10 +172,16 @@ def main():
             continue
         if seq["remove_disk"]:
             (ROOT / "out" / "disk.img").unlink(missing_ok=True)
+        if seq["prep"] and not built:
+            qrun.build(False)
+            built = True
+        for args in seq["prep"]:
+            subprocess.run([sys.executable, str(ROOT / "tools" / "mkext2.py")] + args, check=True, cwd=ROOT)
         no_build = built and not seq["gui"]
         if seq["gui"] and a.no_build:
             no_build = True
-        _, log = qrun.run(seq["steps"], smp=a.smp, disk=seq["disk"], gui=seq["gui"], no_build=no_build,
+        _, log = qrun.run(seq["steps"], smp=a.smp, disk=seq["disk"], extra_disks=seq["extra"], gui=seq["gui"],
+                          no_build=no_build,
                           boot_timeout=seq["boot"], command_delay=seq["delay"], log_path=seq["log"])
         built = built or not seq["gui"]
         if seq["gui"]:

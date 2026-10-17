@@ -1000,6 +1000,10 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
     char full[PROCESS_CWD_MAX];
     if (!process_resolve_path(p, path, full, sizeof(full)))
         strlcpy(full, path, sizeof(full));
+    if (vnode_is_reg(v) && v->size > VFS_READ_ALL_MAX) {
+        vnode_put(v);
+        return -ENOEXEC;
+    }
     uint64_t size;
     void *image = vnode_is_reg(v) ? vfs_read_vnode(v, &size) : NULL;
     bool regular = vnode_is_reg(v);

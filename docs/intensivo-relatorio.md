@@ -90,3 +90,69 @@ Nenhuma etapa ficou `[!]`. Pendencias registradas (nas entradas de
   Freedoom (24 MB), os dois com SHA-256 conferido e fora do git.
 - **Etapa 7.4 (hardware real)** continua reservada para voce.
 - Opcional: avisar o sbase do `rev` quebrado no commit `3de61ef`.
+
+## Sessao 2 - 2026-10-17 08:51 a 15:56 (pausada pelo dono)
+
+Fase 2 do `docs/PLANO.md`: quatro etapas fechadas, uma por commit, todas com
+`.\check.ps1` limpo, regressao verde e estresse 5x verde; a quinta (2.5) esta
+pronta no arvore de trabalho, sem commit, esperando a regressao final (ver
+"Como retomar" no diario).
+
+### Etapas
+
+| Etapa | Versao | Commit | Regressao depois |
+|---|---|---|---|
+| 2.1 VFS com vnodes e montagens, `mount`/`umount`, `..` atravessando montagens | 2.1.0-a1 | `9f729b3` | 243 |
+| 2.2 tmpfs em `/tmp` e `/run` | 2.1.0-a2 | `3b80cdc` | 254 |
+| 2.3 procfs em `/proc`; syscalls 1002/1003 removidas | 2.1.0-a3 | `b0a87e9` | 263 |
+| 2.4 Cache de paginas unificado (read, exec e mmap) | 2.1.0-a4 | `c485b85` | 271 |
+| 2.5 ext2 so leitura, piloto em Rust | 2.1.0-a5 | (sem commit, pausada) | 278 antes da ultima rodada de correcoes |
+
+### Como o trabalho foi feito
+
+Cada etapa teve de duas a quatro rodadas de revisao adversarial (revisores
+independentes procurando defeito, cada achado conferido por outro agente que
+tenta derruba-lo; as correcoes de uma rodada sao revisadas na seguinte, ate a
+rodada nao achar mais nada grave). Numeros de achados reais corrigidos:
+2.1: 16 + 10 + 6 + 2; 2.2: 7 + 2; 2.3: 6 + 2; 2.4: 8 + 4 + 2 + 1;
+2.5: 14 + 7. Os mais graves, todos antes do commit: `..` a partir de
+diretorio apagado escrevendo em cluster livre do FAT; `rename` por cima que
+perdia o destino numa falha; uso de memoria liberada no `/proc/<pid>/fd` de
+processo saindo; contador de referencia de pagina de 16 bits estourando com
+`mmap` repetido (virou 32 bits); mutex de montagem liberado e ainda no
+registro global; imagem ext2 forjada fazendo o kernel alocar o heap inteiro.
+
+### Os tres problemas que mais custaram
+
+1. **Coerencia do cache de paginas.** A primeira versao atualizava o cache
+   depois de soltar a trava do FAT; duas escritas, ou escrita e leitura,
+   podiam deixar cache e disco diferentes para sempre. Foram quatro rodadas
+   ate chegar no desenho final: o sistema de arquivos poe a pagina no cache e
+   atualiza o cache dentro da propria trava.
+2. **Ler outro processo pelo `/proc`.** Exigiu pinos no processo (a
+   liberacao espera o ultimo leitor) e passar a trocar a lista de VMAs sempre
+   com `mm_lock`; a saida de processo soltava descritores sem trava.
+3. **Imagem ext2 hostil.** Cada limite que a revisao pedia (tamanho da tabela
+   de grupos, tamanho de diretorio, tamanho de arquivo) tinha um jeito de
+   contornar; o que resolveu foi limitar o trabalho e nao so o valor
+   declarado, e testar o parser no hospedeiro com centenas de imagens
+   corrompidas.
+
+### Bloqueios e pendencias
+
+- Nenhuma etapa `[!]`. A 2.5 so falta a regressao final e o commit.
+- O mutex nao e justo e nao ha IPI para acordar CPU ociosa: o `bdflush`
+  chega a esperar 10 s atras de escritas seguidas, e a partida do estresse
+  espera a trava do FAT (registrado em `docs/DECISOES.md`).
+- `/proc/<pid>/fd/N` ainda e arquivo com o caminho; vira link na 2.7, junto
+  com seguir links no caminho.
+
+### Para o dono fazer
+
+- Fechar a 2.5 (passos no "Como retomar" do diario) ou pedir para eu fechar.
+- O `Makefile` e o CI agora precisam do Rust com o alvo `x86_64-unknown-none`
+  (o workflow ja roda `rustup target add`); nada disso foi testado no
+  GitHub (push continua proibido).
+- O WSL desta maquina nao sobe (sem a distribuicao Linux), entao as imagens
+  ext2 foram conferidas pelo 7-Zip e nao pelo `e2fsck`; vale rodar
+  `e2fsck -fn` numa imagem do `tools\mkext2.py` quando houver um Linux a mao.

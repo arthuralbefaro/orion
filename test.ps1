@@ -15,6 +15,7 @@ param(
     [switch]$NoPrint,
     [switch]$KernelShell,
     [switch]$Disk,
+    [string[]]$ExtraDisks = @(),
     [switch]$Gui
 )
 
@@ -88,6 +89,7 @@ $qemuArgs = @(
 $qemuArgs += @("-netdev", "user,id=n0", "-device", "e1000,netdev=n0",
                "-object", "filter-dump,id=d0,netdev=n0,file=out/net.pcap")
 if ($Disk) { $qemuArgs += @("-drive", "format=raw,file=out/disk.img") }
+foreach ($extra in $ExtraDisks) { $qemuArgs += @("-drive", "format=raw,file=$extra") }
 
 $qemuErr = Join-Path $OutDir "test-qemu.log"
 $quoted = $qemuArgs | Where-Object { $_ } | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }

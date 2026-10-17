@@ -8,6 +8,7 @@
 #define VFS_NAME_MAX   256
 #define VFS_PATH_MAX   512
 #define VFS_SOURCE_MAX 32
+#define VFS_READ_ALL_MAX (64ull * 1024 * 1024)
 
 #define MNT_RDONLY 1u
 
@@ -36,6 +37,7 @@ struct fs_type {
     int (*readdir)(struct vnode *dir, uint64_t *pos, vfs_dir_cb cb, void *ctx);
     int64_t (*read)(struct vnode *v, uint64_t offset, void *buf, uint64_t len);
     int (*readpage)(struct vnode *v, uint64_t idx, uint64_t *page);
+    int64_t (*readlink)(struct vnode *v, char *buf, uint64_t size);
     int64_t (*write)(struct vnode *v, uint64_t *offset, const void *buf, uint64_t len, bool append);
     int (*truncate)(struct vnode *v, uint64_t size);
     int (*create)(struct vnode *dir, const char *name, uint32_t mode, struct vnode **out);

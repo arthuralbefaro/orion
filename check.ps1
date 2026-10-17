@@ -33,4 +33,40 @@ if (Test-Path user\musl) {
         }
     }
 }
+if (Test-Path kernel\rust) {
+    $cargo = Get-Command cargo.exe -ErrorAction SilentlyContinue
+    $cargo = if ($cargo) { $cargo.Source } else { Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe" }
+    if (-not (Test-Path $cargo)) {
+        $errors++
+        "cargo nao encontrado (rode .\setup.ps1)"
+    } else {
+        Get-ChildItem kernel\rust -Directory | ForEach-Object {
+            $manifest = Join-Path $_.FullName "Cargo.toml"
+            if (-not (Test-Path $manifest)) { return }
+            $prevFlags = $env:RUSTFLAGS
+            $env:RUSTFLAGS = "-C code-model=kernel -C relocation-model=static -D warnings"
+            $out = & $cargo clippy --release --quiet --target x86_64-unknown-none --manifest-path $manifest `
+                --target-dir build\rust -- -D warnings 2>&1 | Select-String "error|warning"
+            $clippyExit = $LASTEXITCODE
+            $env:RUSTFLAGS = $prevFlags
+            if ($out -or $clippyExit -ne 0) { $errors++; $out; "clippy saiu com $clippyExit em $($_.Name)" }
+            $py = & (Join-Path $PSScriptRoot "tools\python.ps1")
+            $pyArgs = @($py | Select-Object -Skip 1)
+            $prevPython = $env:PYTHON
+            $env:PYTHON = & $py[0] @pyArgs -c "import sys; print(sys.executable)"
+            $env:RUSTFLAGS = "-D warnings"
+            $out = & $cargo test --quiet --manifest-path $manifest --target-dir build\rust-test 2>&1
+            $testExit = $LASTEXITCODE
+            $env:RUSTFLAGS = $prevFlags
+            $env:PYTHON = $prevPython
+            if ($testExit -ne 0) { $errors++; $out | Select-Object -Last 30; "cargo test saiu com $testExit em $($_.Name)" }
+        }
+    }
+    Get-ChildItem -Recurse kernel\rust -File -Include *.rs | ForEach-Object {
+        if (Select-String -Path $_.FullName -Pattern '^\s*//|/\*|[^:"]//' -Quiet) {
+            $errors++
+            "comentario em $($_.FullName)"
+        }
+    }
+}
 if ($errors -eq 0) { Write-Host "Nenhum erro ou warning." -ForegroundColor Green }

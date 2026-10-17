@@ -1,6 +1,6 @@
 <#
   setup.ps1 - prepara o ambiente do Orion no Windows.
-    1. instala LLVM (clang + ld.lld), QEMU e Git via winget
+    1. instala LLVM (clang + ld.lld), QEMU, Git, Python e Rust via winget
     2. adiciona LLVM e QEMU ao PATH do usuario
     3. baixa o bootloader Limine (binarios + limine.h) para third_party\limine
 
@@ -20,7 +20,8 @@ $packages = @(
     @{ Id = "LLVM.LLVM";                       Nome = "LLVM (clang + ld.lld)" },
     @{ Id = "SoftwareFreedomConservancy.QEMU"; Nome = "QEMU" },
     @{ Id = "Git.Git";                         Nome = "Git" },
-    @{ Id = "Python.Python.3.13";              Nome = "Python 3" }
+    @{ Id = "Python.Python.3.13";              Nome = "Python 3" },
+    @{ Id = "Rustlang.Rustup";                 Nome = "Rust (rustup)" }
 )
 foreach ($p in $packages) {
     Write-Host ">> $($p.Nome)  [$($p.Id)]" -ForegroundColor Cyan
@@ -81,9 +82,16 @@ Set-Content -Path (Join-Path $LimineDir "VERSION") -Value $LimineVersion
 
 & (Join-Path $Root "tools\zig.ps1") | Out-Null
 
+$rustup = Get-Command rustup -ErrorAction SilentlyContinue
+if (-not $rustup -and (Test-Path "$env:USERPROFILE\.cargo\bin\rustup.exe")) { $rustup = "$env:USERPROFILE\.cargo\bin\rustup.exe" }
+if ($rustup) {
+    & $rustup toolchain install stable --profile minimal --component clippy
+    & $rustup target add x86_64-unknown-none
+}
+
 # ---------- Verificacao ----------
 Write-Host ""
-foreach ($t in "clang", "ld.lld", "qemu-system-x86_64") {
+foreach ($t in "clang", "ld.lld", "qemu-system-x86_64", "cargo") {
     $c = Get-Command $t -ErrorAction SilentlyContinue
     if ($c) { Write-Host ("ok    {0,-22} {1}" -f $t, $c.Source) -ForegroundColor Green }
     else    { Write-Host ("FALTA {0}" -f $t) -ForegroundColor Red }

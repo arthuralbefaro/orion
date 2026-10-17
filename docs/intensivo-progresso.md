@@ -8,21 +8,43 @@ Este arquivo manda: uma sessao nova retoma da primeira etapa que nao esta `[x]`.
 
     cd C:\dev\orion
     git log --oneline -10
+    git status --short                            # a 2.5 esta inteira no arvore, sem commit (ver abaixo)
     .\check.ps1                                   # precisa terminar com "Nenhum erro ou warning."
+                                                  # (agora inclui cargo clippy e o fuzz do ext2, uns 20 s)
     .\regressao.ps1                               # A (texto, rede, musl, dash, lua, tcc), B (grafica, Doom),
-                                                  # C (disco), D (GUI), E (estresse); exit 0 = verde
+                                                  # C (disco, ext2), D (GUI), E (estresse); exit 0 = verde
     .\regressao.ps1 -NoBuild -OnlyE -StressRuns 5 # estresse 5x seguidas (etapas de trava, memoria,
                                                   # processos, threads e sinais)
     python tools\regress.py ABCDE                 # a mesma regressao em Python (Linux e CI)
 
-O build precisa de Python 3 (`tools\python.ps1` acha; `setup.ps1` instala) e
-baixa sozinho o Zig 0.16.0 (`tools\zig.ps1`) e o Freedoom (`tools\freedoom.ps1`)
-na primeira vez, com SHA-256 conferido. Os programas ficam em `user/musl/<nome>`
-(um `main.c` e/ou um `build.txt`); a interface propria do Orion para eles esta
-em `user/include/orion.h`. A regressao demora uns 20 minutos; o estresse 5x,
-outros 10.
+O build precisa de Python 3 (`tools\python.ps1` acha; `setup.ps1` instala), do
+Rust com o alvo `x86_64-unknown-none` (`rustup target add x86_64-unknown-none`;
+o `setup.ps1` faz) e baixa sozinho o Zig 0.16.0 (`tools\zig.ps1`) e o Freedoom
+(`tools\freedoom.ps1`) na primeira vez, com SHA-256 conferido. Os programas
+ficam em `user/musl/<nome>` (um `main.c` e/ou um `build.txt`); a interface
+propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
+`kernel/rust/<crate>`. A regressao demora uns 25 minutos; o estresse 5x, outros
+10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
+(mesmas portas 4444/4445).
 
-Proxima etapa: 2.5.
+Estado na pausa (2026-10-17 15:56, pedido do dono): a etapa 2.5 esta pronta no
+arvore de trabalho e **sem commit**. O codigo com as correcoes da primeira
+revisao passou na regressao inteira (278 verificacoes) e no estresse 5x; as
+correcoes da segunda revisao (limite de entradas por passada no diretorio,
+`..` que aponta para si mesmo, `exec` acima de 64 MiB recusado, ponteiros de
+tabela indireta conferidos, fuzz mais forte) passaram no `check.ps1` e no fuzz
+com 4 sementes, mas a ultima regressao foi interrompida no meio pela pausa.
+Para fechar a 2.5:
+
+    .\check.ps1
+    .\regressao.ps1                               # tem que dar VERDE (278 verificacoes)
+    .\regressao.ps1 -NoBuild -OnlyE -StressRuns 5
+    git add -A                                    # conferir antes a checagem de comentarios
+    git commit                                    # "v2.1: 2.5 - ext2 so leitura com o leitor em Rust ..."
+
+e preencher a linha 2.5 da tabela (fim e commit). Versao no arvore: 2.1.0-a5.
+
+Proxima etapa: terminar a 2.5 (acima); depois 2.6.
 
 ## Checklist
 
@@ -50,8 +72,8 @@ Proxima etapa: 2.5.
 | 2.1 | VFS com inodes | [x] | 08:51 | 11:05 | 9f729b3 |
 | 2.2 | tmpfs | [x] | 11:06 | 11:47 | 3b80cdc |
 | 2.3 | procfs | [x] | 11:48 | 12:52 | b0a87e9 |
-| 2.4 | Cache de paginas unificado | [x] | 12:53 | 14:55 | (ver diario) |
-| 2.5 | ext2 leitura, piloto em Rust | [ ] | | | |
+| 2.4 | Cache de paginas unificado | [x] | 12:53 | 14:55 | c485b85 |
+| 2.5 | ext2 leitura, piloto em Rust | [~] | 14:56 | | |
 | 2.6 | ext2 escrita, mkfs.ext2, fsck | [ ] | | | |
 | 2.7 | Links simbolicos, chmod, chown, utime | [ ] | | | |
 | 2.8 | GPT e raiz em ext2 | [ ] | | | |
@@ -581,3 +603,22 @@ Regressao 263 -> 271, estresse 5x verde. Versao 2.1.0-a4.
 Observado: numa rodada do estresse o QEMU demorou mais de 60 s para mostrar o
 prompt e o harness digitou o comando antes de o shell ler (os bytes se
 perderam); o boot terminou normal e a rodada repetida passou inteira.
+
+#### 2.5 ext2 leitura, piloto em Rust - 14:56 a 15:56 - EM ANDAMENTO (pausado sem commit)
+O leitor de ext2 e o primeiro Rust do kernel: `kernel/rust/ext2`, `staticlib`
+`no_std` para `x86_64-unknown-none`, ligada pelo `build.ps1` e pelo `Makefile`;
+o `check.ps1` roda `cargo clippy -D warnings`, procura comentario nos `.rs` e
+roda o `cargo test` do crate no hospedeiro. A ponte com a VFS esta em
+`kernel/src/fs/ext2.c` (vnode por inode, `readpage` no cache de paginas,
+`readdir` com cookie, `readlink`, montado so leitura); `readlink` passou a
+funcionar. `tools/mkext2.py` gera imagens ext2 (o Windows nao tem `mkfs.ext2`),
+conferidas pelo 7-Zip; `test.ps1 -ExtraDisks` liga imagens extras ao QEMU, e o
+`regress.py` faz o mesmo. A regressao C monta duas imagens (blocos de 4 KiB e de
+1 KiB com 4 grupos, indireto triplo, esparsos, links rapido e lento) e roda o
+`ext2test` e um binario direto do ext2. Duas rodadas de revisao (a imagem e
+tratada como hostil): 14 problemas reais na primeira e 7 na segunda, todos
+corrigidos; o teste no hospedeiro monta e percorre centenas de imagens com bytes
+trocados ao acaso, com checagem de estouro, sem nenhum `panic`. Avaliacao do
+piloto em `docs/DECISOES.md`: o Rust continua (build de 0,8 s, ~12 KB no
+kernel, simbolos e `panic` funcionando, parser testavel fora do kernel).
+Falta: a regressao inteira e o estresse 5x com o codigo final, e o commit.

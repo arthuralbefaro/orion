@@ -1532,3 +1532,103 @@ Uma linha por decisao, na ordem em que foram tomadas.
   cache, cada falta no cache esvaziava a LRU inteira (a condicao de parada
   contava paginas que a LRU nao pode devolver). O despejo agora so tira o
   suficiente para cobrir o excesso, e so roda se ha algo reaproveitavel.
+
+## v2.1.0-a5 (ext2 so leitura, piloto em Rust)
+
+- O leitor de ext2 e o primeiro codigo em Rust do kernel: `kernel/rust/ext2`,
+  uma `staticlib` `no_std` compilada pelo `cargo` para `x86_64-unknown-none`
+  (sem SSE, sem red zone) com `-C code-model=kernel -C relocation-model=static`
+  e `-D warnings`, `panic = "abort"`. O `build.ps1` e o `Makefile` chamam o
+  `cargo` e ligam o `.a` junto com os objetos de C; o `check.ps1` roda o
+  `cargo clippy` com `-D warnings` e procura comentario nos `.rs`. A unica
+  regra do clippy desligada e `missing_safety_doc`, que pede comentario de
+  documentacao nas funcoes `unsafe` exportadas (comentario e proibido no
+  repositorio); o contrato delas e este: os ponteiros vem do C validos pelo
+  tempo da chamada, `fs` e o que o `ext2_mount` devolveu e so o
+  `ext2_umount` o libera.
+- Divisao: o Rust faz todo o trabalho com dados vindos do disco (superbloco,
+  descritores de grupo, inodes, blocos diretos e indiretos simples, duplos e
+  triplos, entradas de diretorio, links simbolicos rapidos e lentos), sempre
+  conferindo limites, porque a imagem pode ser hostil. O C (`fs/ext2.c`) faz
+  a ponte com a VFS: vnode por numero de inode, `readpage` para o cache de
+  paginas, `readdir` com o deslocamento no diretorio como cookie, `readlink`.
+  O acesso ao disco e um callback do C que le setores (metadados pelo cache
+  de blocos, dados direto); a memoria do Rust vem do `kmalloc` (alocador
+  global com alinhamento extra quando pedido) e um `panic` do Rust vira o
+  `panic` do kernel com a mensagem.
+- Suportado: revisao 0 e 1, blocos de 1, 2 e 4 KiB, varios grupos,
+  `filetype`, `sparse_super`, `large_file`, arquivos esparsos (inclusive
+  tabela indireta inteira faltando), so leitura (montado com `ro`).
+  Recusado: `extents` e o resto do ext4, `64bit`, `meta_bg` e journal que
+  precisa de recuperacao.
+- `readlink`/`readlinkat` passaram a funcionar para links do ext2 (o
+  caminho ainda nao segue links: 2.7).
+- Imagens de teste: o Windows nao tem `mkfs.ext2`, entao `tools/mkext2.py`
+  gera imagens rev 1 a partir de um diretorio ou de uma arvore de teste
+  (arquivo de 5 MiB, esparso, esparso de 70 MiB com dado so no fim para
+  forcar o indireto triplo em blocos de 1 KiB, 200 arquivos num diretorio,
+  links rapido e lento, um ELF) com um `MANIFEST` de tamanhos e CRC32. A
+  imagem foi conferida por um leitor independente: o 7-Zip extrai todos os
+  arquivos e os CRC32 batem, com uma excecao do proprio 7-Zip (ele nao aceita
+  ponteiro zero para uma tabela indireta inteira, o que o ext2 do Linux
+  aceita; criando a tabela vazia ele le o mesmo arquivo).
+- A regressao C gera duas imagens (blocos de 4 KiB e de 1 KiB com 4 grupos),
+  liga como `sdc` e `sdd` (`test.ps1 -ExtraDisks`, e o `regress.py` faz o
+  mesmo), monta em `/tmp` e roda o `ext2test` (todos os arquivos pelo CRC32,
+  links, contagem de diretorio, fim do esparso de 70 MiB, `mmap`, `EROFS`,
+  `..`, `st_dev`) e um binario direto do ext2.
+- Avaliacao do piloto: build limpo do crate em 0,8 s e sem mudanca em
+  0,13 s (sem dependencias; a `core`/`alloc` vem pronta com o alvo); o Rust
+  ocupa uns 12 KB no kernel; o `llvm-symbolizer` acha arquivo e linha das
+  funcoes Rust no `orion.elf` como acha as de C, e o `panic` chega ao log do
+  kernel com a mensagem. O custo foi o alvo `x86_64-unknown-none` (um
+  `rustup target add`) e o clippy brigando com a regra de nao comentar.
+  Decisao: o Rust continua, nos lugares que o plano lista (TCP, USB,
+  parsers de dados de fora).
+- Revisao adversarial (a imagem e entrada hostil), corrigido: a tabela de
+  descritores de grupo era alocada so com base no superbloco (ate o heap
+  inteiro); agora os campos tem limites (blocos por grupo entre 256 e
+  8 x tamanho do bloco, no maximo 65536 grupos) e o ultimo bloco que o
+  superbloco declara precisa existir no dispositivo. Diretorio com tamanho
+  absurdo fazia cada busca percorrer milhoes de blocos: acima de 64 MiB e
+  recusado. Tamanho de arquivo de 64 bits sem limite estourava o `kmalloc` no
+  `exec`: agora nao passa do que o mapa de blocos consegue enderecar (nem de
+  `i64::MAX`), e os bits altos so valem para arquivo regular. Link rapido com
+  bloco de atributos estendidos era lido como lento (o tamanho do bloco de
+  atributos e descontado, como no Linux). Blocos de 64 KiB eram aceitos e
+  depois as entradas de diretorio deles davam `EIO`: so ate 4 KiB agora.
+  Entrada de diretorio sem nome ou com `/` ou NUL e ignorada. Alocacoes do
+  Rust que nao podiam falhar (e virariam `panic` do kernel sem memoria)
+  passaram a devolver `ENOMEM`. O `getdents64` mostra `DT_LNK`, `DT_FIFO` e
+  `DT_SOCK`. Nas ferramentas: o `setup.ps1` tinha duas linhas corrompidas
+  pela edicao (barra invertida virando caractere de controle), o
+  `check.ps1` dizia "nenhum erro" sem conseguir rodar o `cargo`, o
+  `build.ps1` apagava o `RUSTFLAGS` de quem chamou, e a regressao nao
+  conferia se o `mkext2` deu certo.
+- Teste no hospedeiro: o mesmo crate compila com `std` para o Windows (ou o
+  Linux do CI) quando roda `cargo test` (`#![cfg_attr(not(test), no_std)]`,
+  o alocador e o `panic` do kernel so entram fora do teste). O teste gera as
+  imagens com o `mkext2.py`, monta e percorre tudo (diretorios, busca,
+  leitura no comeco, meio e fim, links), e depois faz o mesmo com 800 imagens
+  com bytes trocados ao acaso nos metadados, em build de depuracao (estouro
+  de inteiro vira `panic`, que reprova o teste). O `check.ps1` roda isso. E
+  uma vantagem concreta do Rust no piloto: o parser de dados hostis e testado
+  fora do kernel, sem QEMU.
+- Segunda rodada: limitar o tamanho declarado do diretorio nao limitava o
+  trabalho (todos os blocos podiam apontar para o mesmo bloco cheio de
+  entradas); agora cada passada no diretorio para com `EIO` depois de 65536
+  entradas e o limite de tamanho caiu para 16 MiB. Um `..` que devolve o
+  proprio diretorio fazia o `getcwd`/`fchdir` repetir a busca ate encher o
+  caminho; agora para com `ENOENT`. `exec` (e o `vfs_read_all` do shell do
+  kernel) de arquivo maior que 64 MiB e recusado antes de alocar: um arquivo
+  esparso de terabytes custava so alguns blocos na imagem e fazia o kernel
+  tentar alocar o heap inteiro com interrupcoes desligadas. Os ponteiros de
+  tabela indireta do inode tambem sao conferidos contra o tamanho do sistema
+  de arquivos. O fuzz ficou mais forte: muda bytes no comeco e em qualquer
+  ponto da imagem, grava valores de fronteira em campos de 16 e 32 bits, usa
+  tambem uma imagem de 4 grupos com inodes espalhados, chama a interface
+  exportada (cookies do `readdir` em lotes e valores absurdos, `read` em
+  deslocamentos extremos, `readlink` com buffers de 1, 59, 60 e 61 bytes),
+  sorteia a semente a cada rodada (`ORION_FUZZ_SEED` repete uma) e reprova a
+  imagem que passar de 400 mil leituras de disco (laco sem fim vira falha em
+  vez de travar o `check.ps1`).

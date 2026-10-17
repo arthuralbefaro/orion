@@ -81,6 +81,25 @@ foreach ($src in $sources) {
     $objects += $obj
 }
 
+$RustDir = Join-Path $Root "kernel\rust"
+foreach ($crate in Get-ChildItem $RustDir -Directory -ErrorAction SilentlyContinue) {
+    $manifest = Join-Path $crate.FullName "Cargo.toml"
+    if (-not (Test-Path $manifest)) { continue }
+    $Cargo = Find-Tool "cargo.exe" @("$env:USERPROFILE\.cargo\bin\cargo.exe")
+    $rustTarget = Join-Path $BuildDir "rust"
+    $prevFlags = $env:RUSTFLAGS
+    $env:RUSTFLAGS = "-C code-model=kernel -C relocation-model=static -D warnings"
+    try {
+        & $Cargo build --release --quiet --target x86_64-unknown-none --manifest-path $manifest --target-dir $rustTarget
+        $cargoExit = $LASTEXITCODE
+    } finally {
+        $env:RUSTFLAGS = $prevFlags
+    }
+    if ($cargoExit -ne 0) { throw "Erro compilando o Rust de $($crate.Name)" }
+    $libName = "lib" + ((Select-String -Path $manifest -Pattern '^name\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value) + ".a"
+    $objects += (Join-Path $rustTarget "x86_64-unknown-none\release\$libName")
+}
+
 New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 Write-Host "  LD   out\$Kernel.elf"
 & $Lld @LdFlags -o $KernelElf @objects

@@ -43,9 +43,15 @@ all: esp
 user:
 	python3 tools/musl_build.py
 
-$(ELF): $(OBJS) linker.ld
+RUST_LIB := $(BUILD_DIR)/rust/x86_64-unknown-none/release/liborion_ext2.a
+RUST_SRCS := $(shell find kernel/rust -name '*.rs' -o -name 'Cargo.toml')
+
+$(RUST_LIB): $(RUST_SRCS)
+	RUSTFLAGS="-C code-model=kernel -C relocation-model=static -D warnings" cargo build --release --quiet 		--target x86_64-unknown-none --manifest-path kernel/rust/ext2/Cargo.toml --target-dir $(BUILD_DIR)/rust
+
+$(ELF): $(OBJS) $(RUST_LIB) linker.ld
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) -o $@ $(OBJS)
+	$(LD) $(LDFLAGS) -o $@ $(OBJS) $(RUST_LIB)
 
 $(BUILD_DIR)/%.c.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)

@@ -3,6 +3,7 @@
 #include <fs/devfs.h>
 #include <fs/tmpfs.h>
 #include <fs/procfs.h>
+#include <fs/ext2.h>
 #include <fs/block.h>
 #include <kernel/file.h>
 #include <kernel/log.h>
@@ -31,7 +32,7 @@ static struct vnode *lru_tail;
 static uint32_t inactive_count;
 static uint64_t inactive_pages;
 
-static const struct fs_type *const fs_types[] = { &fat_fs_type, &devfs_type, &tmpfs_type, &procfs_type };
+static const struct fs_type *const fs_types[] = { &fat_fs_type, &devfs_type, &tmpfs_type, &procfs_type, &ext2_fs_type };
 
 const struct fs_type *vfs_find_type(const char *name)
 {
@@ -917,6 +918,11 @@ int vfs_getpath(struct vnode *v, char *buf, size_t size)
         r = v->mnt->type->lookup(v, "..", &parent);
         if (r < 0)
             break;
+        if (parent == v) {
+            vnode_put(parent);
+            r = -ENOENT;
+            break;
+        }
         struct name_ctx nc = { .ino = v->ino, .name = name, .found = false };
         uint64_t pos = 0;
         vfs_readdir_vnode(parent, &pos, name_cb, &nc);
@@ -948,7 +954,7 @@ int vfs_getpath(struct vnode *v, char *buf, size_t size)
 
 void *vfs_read_vnode(struct vnode *v, uint64_t *size_out)
 {
-    if (!vnode_is_reg(v))
+    if (!vnode_is_reg(v) || v->size > VFS_READ_ALL_MAX)
         return NULL;
     uint64_t size = v->size;
     void *buf = kmalloc(size ? size : 1);

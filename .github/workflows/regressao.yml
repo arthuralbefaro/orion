@@ -24,6 +24,9 @@ jobs:
           mkdir -p third_party/zig
           tar -xJf zig.tar.xz -C third_party/zig --strip-components=1
 
+      - name: Rust (no_std)
+        run: rustup target add x86_64-unknown-none
+
       - name: Build
         run: make -j"$(nproc)"
 
