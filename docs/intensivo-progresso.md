@@ -2,7 +2,8 @@
 
 Diario do trabalho sobre o `docs/PLANO.md`. Uma linha por etapa:
 `[x]` feita, `[~]` em andamento, `[!]` bloqueada, `[ ]` nao comecada.
-Este arquivo manda: uma sessao nova retoma da primeira etapa que nao esta `[x]`.
+Este arquivo manda: uma sessao nova retoma da primeira etapa que nao esta `[x]`,
+menos a 5.2 a 5.9, que vem depois da 6.7 (ver o paragrafo abaixo do Estado).
 
 ## Como retomar
 
@@ -27,20 +28,26 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 17:40, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
-`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.5 e a parte 1 da 6.6
-(`imgview`). Versao 2.4.0-a7. O
+Estado (2026-10-18, 19:55, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.5 e as partes 1 e 2 da 6.6
+(`imgview` e `monitor`). Versao 2.4.0-a8. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e
-na ISO na F, com 432 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+na ISO na F, com 439 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 6.6 parte 2, monitor do sistema, com captura na sequencia B
-como o `imgview`; depois arquivos, editor, configuracoes e terminal, um app
-por parte. Versao 2.4.0-a8 em diante.
+Proxima etapa: 6.6 parte 3, gerenciador de arquivos, com captura na
+sequencia B; depois editor, configuracoes e terminal, um app por parte, e a
+6.7. Versao 2.4.0-a9 em diante.
+
+As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
+proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
+Fase 5 (turno "10+": fase 6, fase 5, 7.3 a 7.5), e so a 5.1 veio antes, junto
+da 7.1 e da 7.2 (turno 7). Nenhuma etapa da Fase 6 depende delas. Entram
+logo depois da 6.7, de 5.2 a 5.9, antes da 7.3.
 
 ## Checklist
 
@@ -1160,6 +1167,33 @@ no codigo. O Windows tinha so 1,5 GB de memoria comprometida livre (muitos
 programas abertos, sem vazamento), e foi o bastante para o QEMU.
 Ficou de fora: zoom e rolagem em 1:1 (imagem maior que a area aparece cortada
 no centro), GIF e BMP.
+
+#### 6.6 parte 2 Monitor do sistema - 17:45 a 19:55 - FEITO
+Kernel: `/proc/stat` (novo, formato do Linux) com o total e uma linha por
+CPU; cada CPU conta no `sched_tick` os tiques em modo usuario, no kernel e
+ociosa. `libgui`: `on_tick`/`tick_ms` (o `gui_run` espera o socket com `poll`
+ate o proximo tique). `monitor` (novo): uma amostra por segundo, graficos de
+CPU e memoria com 60 amostras, lista de processos (pid, nome, estado, RSS e
+CPU de cada um) que guarda a escolha entre amostras, e "Encerrar" com
+`SIGTERM`. Criterio: a sequencia A le o `/proc/stat` (total, cpu0 a cpu3 e
+`ctxt`); na B o `monitor` abre, conta os processos, encerra pela lista um
+`sleep 100 &`, ve o pid sair, a captura tem os dois graficos e o `q` fecha
+com quadros parciais. Regressao 432 -> 439 (verde na terceira rodada completa, 26 minutos). Versao
+2.4.0-a8. RAM livre antes da regressao: 7,0 GB, 6,3 GB e 6,2 GB nas tres
+rodadas completas.
+Problemas: (1) o `wm` corta titulos em 31 caracteres e o titulo do sinal
+saiu cortado; ficou `monitor: TERM <pid> <nome>`. (2) O `sleep` morto fica
+zumbi ate o shell colher, entao o numero de processos nao cai; o monitor
+passou a avisar quando o pid encerrado sai ou vira `Z`. (3) A primeira
+regressao completa falhou so na ordem de duas linhas do log (a do kernel
+sobre o `SIGTERM` caiu entre os dois titulos); a verificacao aceita linhas no
+meio. (4) A segunda falhou em 13 verificacoes da sequencia D, sem relacao com
+o monitor: com a maquina lenta, o comeco da D, feito de esperas fixas, se
+atrasou uns 10 s e o `hello-gui` recebeu as teclas do `guidemo`. A D passou a
+esperar o `wm` pronto e o fim do `cpuuso` pelo log (`until:`). (5) A espera
+depois do `history` na A, de 1 s para 3 s, foi registrada no `DECISOES.md`.
+Ficou de fora: ordenar a lista por CPU ou memoria, sinais alem do `SIGTERM`,
+CPU por nucleo no grafico, rede e disco.
 
 ### Sessao 2 - 2026-10-17
 

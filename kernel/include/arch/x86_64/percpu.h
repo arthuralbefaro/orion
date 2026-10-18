@@ -24,6 +24,9 @@ struct percpu {
     uint64_t wd_seen;
     uint32_t wd_strikes;
     uint64_t switch_us;
+    uint64_t user_ticks;
+    uint64_t sys_ticks;
+    uint64_t idle_ticks;
 };
 
 void percpu_init_bsp(uint32_t lapic_id);

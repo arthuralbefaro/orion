@@ -9,6 +9,7 @@
 #include <kernel/log.h>
 #include <kernel/version.h>
 #include <arch/x86_64/cpu.h>
+#include <arch/x86_64/percpu.h>
 #include <mm/heap.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
@@ -27,6 +28,7 @@ enum pkind {
     P_LOADAVG,
     P_VERSION,
     P_DISKSTATS,
+    P_SYSSTAT,
     P_PIDDIR = 16,
     P_STATUS,
     P_CMDLINE,
@@ -44,7 +46,7 @@ struct pent {
 static const struct pent root_ents[] = {
     { "meminfo", P_MEMINFO }, { "cpuinfo", P_CPUINFO }, { "uptime", P_UPTIME },
     { "mounts", P_MOUNTS },   { "loadavg", P_LOADAVG }, { "version", P_VERSION },
-    { "diskstats", P_DISKSTATS },
+    { "diskstats", P_DISKSTATS }, { "stat", P_SYSSTAT },
 };
 
 static const struct pent pid_ents[] = {
@@ -396,6 +398,37 @@ static void gen_diskstats(struct pbuf *b)
     }
 }
 
+static void stat_line(struct pbuf *b, const char *name, uint64_t user, uint64_t sys, uint64_t idle)
+{
+    uint64_t div = TIME_TICK_HZ / 100;
+    pb_printf(b, "%s %lu 0 %lu %lu 0 0 0 0 0 0\n", name, user / div, sys / div, idle / div);
+}
+
+static void gen_sysstat(struct pbuf *b)
+{
+    uint64_t user = 0, sys = 0, idle = 0, ctxt = 0;
+    for (uint32_t i = 0; i < MAX_CPUS; i++) {
+        struct percpu *c = percpu_by_index(i);
+        if (!c || !c->online)
+            continue;
+        user += c->user_ticks;
+        sys += c->sys_ticks;
+        idle += c->idle_ticks;
+        ctxt += c->context_switches;
+    }
+    stat_line(b, "cpu ", user, sys, idle);
+    char name[16];
+    for (uint32_t i = 0; i < MAX_CPUS; i++) {
+        struct percpu *c = percpu_by_index(i);
+        if (!c || !c->online)
+            continue;
+        ksnprintf(name, sizeof(name), "cpu%u", c->cpu_id);
+        stat_line(b, name, c->user_ticks, c->sys_ticks, c->idle_ticks);
+    }
+    pb_printf(b, "ctxt %lu\n", ctxt);
+    pb_printf(b, "btime 0\n");
+}
+
 static void mount_line(const struct mount *m, void *ctx)
 {
     pb_printf(ctx, "%s %s %s %s 0 0\n", m->source, m->point, m->type->name,
@@ -560,6 +593,7 @@ static int proc_open(struct vnode *v, int flags, struct file **out)
     case P_LOADAVG: gen_loadavg(&b); break;
     case P_VERSION: gen_version(&b); break;
     case P_DISKSTATS: gen_diskstats(&b); break;
+    case P_SYSSTAT: gen_sysstat(&b); break;
     case P_STATUS:  gen_status(&b, p); break;
     case P_STAT:    gen_stat(&b, p); break;
     case P_CMDLINE: gen_cmdline(&b, p); break;

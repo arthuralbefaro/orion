@@ -2682,3 +2682,42 @@ Uma linha por decisao, na ordem em que foram tomadas.
   de parede. A sequencia B abre o `imgview` no JPEG de teste, confere os
   quadrantes vermelho e amarelo na captura, passa para o PNG pela seta e fecha
   com `q`.
+
+## v2.4.0-a8 (etapa 6.6 parte 2: monitor do sistema)
+
+- `/proc/stat` (novo): linha `cpu` com o total e uma `cpuN` por CPU, no
+  formato do Linux (user, nice, system, idle e zeros, em centesimos de
+  segundo), mais `ctxt`. Os tiques vem do proprio `sched_tick`: cada CPU conta
+  em `percpu` os tiques em modo usuario, no kernel e na thread ociosa. Contar
+  no tique, e nao pelo `run_us` da thread ociosa, deixa os tres numeros na
+  mesma base e sem trava extra. Nao ha `nice`, `iowait` nem `irq` separados.
+- `libgui`: `on_tick` e `tick_ms` na `struct gui`. O `gui_run` espera o socket
+  com `poll` ate o proximo tique (relogio `CLOCK_MONOTONIC`), chama o `on_tick`
+  e redesenha; sem `on_tick`, nada muda para os outros apps. O `version` da
+  6.6 parte 1 serve para qualquer componente: a lista do monitor o aumenta a
+  cada amostra, porque a assinatura nao olha o texto dos itens.
+- `monitor` (novo): uma amostra por segundo. CPU total pelo `/proc/stat`,
+  memoria pelo `/proc/meminfo` (usada = total - livre) e processos pelo
+  `/proc/<pid>/stat` (estado, RSS e CPU de cada um pela diferenca de tiques).
+  Graficos de 60 amostras em uma tela (`gui_canvas`). A lista guarda o
+  processo escolhido pelo pid entre amostras; "Encerrar" manda `SIGTERM` e
+  recusa o `init` e o proprio monitor. O titulo muda so quando muda o numero
+  de processos, quando manda o sinal e quando o processo sai, para nao encher
+  o log do `wm` a cada segundo; o processo morto conta como saido ja no estado
+  `Z`, porque o shell so o colhe no proximo prompt.
+- O `wm` corta o titulo em 31 caracteres; o titulo do sinal ficou curto
+  (`monitor: TERM <pid> <nome>`).
+- Regressao: a espera depois do `history` na sequencia A passou de 1 s para
+  3 s. Nesse ponto o historico ja tem dezenas de linhas, e com a maquina
+  carregada a lista ainda chegava pela serial quando o `forktest` era
+  digitado; a verificacao falhava sem erro no Orion. A sequencia A confere o
+  `/proc/stat`; a B abre o `monitor`, escolhe o `sleep 100 &` na lista pelo
+  teclado, encerra, ve o processo sair, captura a tela e fecha com `q`. A
+  linha do kernel sobre o `SIGTERM` pode cair entre os dois titulos do
+  monitor no log, entao a verificacao aceita qualquer linha no meio.
+- Regressao D: o comeco esperava tempos fixos (16 s de boot e 13 s para o
+  `cpuuso wm 10`). Numa rodada com a maquina lenta, o shell ainda estava no
+  `cpuuso` quando o `hello-gui &` foi digitado; ele abriu uns 10 s depois e
+  recebeu as teclas do `guidemo`, e 13 verificacoes cairam juntas. Os dois
+  passos agora esperam o que aconteceu de fato (`until:` pela linha do `wm`
+  pronto e pela linha do `cpuuso`).

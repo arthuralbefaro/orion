@@ -7,10 +7,12 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <poll.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #define WM_SOCKET  "/run/wmapp.sock"
@@ -652,11 +654,42 @@ void gui_quit(struct gui *g)
     g->running = false;
 }
 
+static long now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static bool wait_input(struct gui *g, long *next)
+{
+    if (!g->on_tick || g->tick_ms <= 0 || memchr(g->in, '\n', (size_t)g->inlen))
+        return true;
+    for (;;) {
+        long left = *next - now_ms();
+        if (left <= 0) {
+            *next = now_ms() + g->tick_ms;
+            return false;
+        }
+        struct pollfd p = { .fd = g->sock, .events = POLLIN };
+        int r = poll(&p, 1, (int)left);
+        if (r > 0 || (r < 0 && errno != EINTR))
+            return true;
+    }
+}
+
 void gui_run(struct gui *g)
 {
     gui_redraw(g);
     char line[256];
+    long next = now_ms() + g->tick_ms;
     while (g->running) {
+        if (!wait_input(g, &next)) {
+            g->on_tick(g);
+            if (g->running)
+                gui_redraw(g);
+            continue;
+        }
         int r = read_line(g, line, sizeof(line));
         if (r <= 0)
             break;

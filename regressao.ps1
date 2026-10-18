@@ -176,7 +176,7 @@ if ($runAll -or $OnlyA) {
         "cmd:touch /tmp/lsx", "cmd:chmod 640 /tmp/lsx", "cmd:chown 12:34 /tmp/lsx", "cmd:ln -s lsx /tmp/lsl",
         "cmd:ls -l /tmp/lsx /tmp/lsl", "wait:2", "cmd:rm /tmp/lsx /tmp/lsl", "cmd:ls -l /bin/ls", "wait:1",
         "cmd:ls -l /boot/efi/boot", "wait:1",
-        "cmd:cat /proc/self/maps", "wait:1", "cmd:cat /proc/mounts", "wait:1",
+        "cmd:cat /proc/self/maps", "wait:1", "cmd:cat /proc/mounts", "wait:1", "cmd:cat /proc/stat", "wait:1",
         "cmd:proctest um dois", "until:60:falha(s))",
         "cmd:pctest", "until:120:falha(s))",
         "cmd:polltest", "wait:6",
@@ -478,6 +478,7 @@ if ($runAll -or $OnlyA) {
     Expect $a "(?s)cat /proc/self/maps\s*\n\s*[0-9a-f]{8,}-[0-9a-f]{8,} r--p [0-9a-f]{8} 00:00 \d+\s+/bin/cat" "cat /proc/self/maps mostra as VMAs do proprio cat"
     Expect $a "[0-9a-f]+-7ff[0-9a-f]{9} rw-p 00000000 00:00 0\s+\[stack\]" "maps mostra a pilha"
     Expect $a "proc /proc proc ro 0 0" "/proc/mounts lista o procfs"
+    Expect $a "(?s)cat /proc/stat\s*\ncpu  \d+ 0 \d+ [1-9]\d* 0 0 0 0 0 0\s*\ncpu0 \d+ 0 \d+ \d+ [^\n]*\ncpu1 [^\n]*\ncpu2 [^\n]*\ncpu3 \d+ 0 \d+ \d+ [^\n]*\nctxt [1-9]\d*" "/proc/stat tem o total e uma linha por CPU"
     Expect $a "tmpfs /tmp tmpfs rw 0 0" "/proc/mounts lista o tmpfs"
     Expect $a "mprotect divide a area no maps\s+ok" "proctest: maps acompanha o mprotect"
     Expect $a "filho morto aparece como zumbi\s+ok" "proctest: zumbi em /proc/<pid>/status"
@@ -581,6 +582,9 @@ if ($runAll -or $OnlyB) {
         "mon:sendkey ctrl-q", "wait:1.5", "shot:out\shots\reg-wm-5-ctrl-q.ppm",
         "type:imgview /usr/share/imagens/teste.jpg &", "mon:sendkey ret", "wait:4",
         "shot:out\shots\reg-app-imgview.ppm", "mon:sendkey right", "wait:1", "mon:sendkey q", "wait:2",
+        "type:sleep 100 &", "mon:sendkey ret", "wait:1", "type:monitor &", "mon:sendkey ret", "wait:4",
+        "shot:out\shots\reg-app-monitor.ppm", "mon:sendkey pgdn", "mon:sendkey pgdn", "mon:sendkey pgdn", "mon:sendkey pgdn",
+        "mon:sendkey up", "wait:0.5", "mon:sendkey tab", "mon:sendkey ret", "wait:2.5", "mon:sendkey q", "wait:2",
         "mon:sendkey ctrl-alt-x", "wait:5",
         "cmd:echo TTY-DE-VOLTA", "wait:1", "shot:out\shots\reg-wm-6-tty.ppm",
         "key:0B", "cmd:mem", "cmd:pty", "cmd:procs",
@@ -613,6 +617,12 @@ if ($runAll -or $OnlyB) {
     Expect $b "wm: app da janela \d+ saiu \(pediu para fechar\) depois de \d+ quadro" "imgview fecha com q"
     Test-ShotPixel "out\shots\reg-app-imgview.ppm" 413 223 0xc82828 40 "captura do imgview: quadrante vermelho do JPEG"
     Test-ShotPixel "out\shots\reg-app-imgview.ppm" 698 413 0xdcc828 40 "captura do imgview: quadrante amarelo do JPEG"
+    Expect $b "wm: app abriu a janela \d+ \(640x470, 'monitor'\)" "monitor abre a janela"
+    Expect $b "agora se chama 'monitor: [1-9]\d* processos'" "monitor conta os processos pelo /proc"
+    Expect $b "(?s)agora se chama 'monitor: TERM (\d+) sleep'.*?wm: janela \d+ agora se chama 'monitor: pid \1 saiu'" "monitor encerra o sleep escolhido na lista e a lista se atualiza sozinha"
+    Expect $b "(?s)monitor: TERM \d+ sleep.*?wm: app da janela \d+ saiu \(pediu para fechar\) depois de \d+ quadro\(s\), [1-9]\d* parcial" "monitor fecha com q e redesenha por areas sujas"
+    Test-ShotPixel "out\shots\reg-app-monitor.ppm" 883 289 0xe0a040 30 "captura do monitor: grafico de memoria desenhado"
+    Test-ShotPixel "out\shots\reg-app-monitor.ppm" 276 245 0x141a26 12 "captura do monitor: fundo do grafico de CPU"
     Expect $b 'crash: pedindo ao kernel para executar codigo de usuario \(SMEP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?busca de instrucao[\s\S]*?SMEP: o kernel tentou executar codigo de usuario \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMEP: kernel executando pagina de usuario vira panico controlado"
     Expect $b 'crash: pedindo ao kernel para ler memoria de usuario sem copy_from_user \(SMAP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?SMAP: o kernel acessou memoria de usuario fora das copias de uaccess \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMAP: kernel lendo memoria de usuario fora do uaccess vira panico controlado"
     ExpectNot $b 'crash: o kernel voltou' "o kernel nunca volta de um acesso proibido a memoria de usuario"
@@ -757,8 +767,8 @@ if ($runAll -or $OnlyC) {
 if ($runAll -or $OnlyD) {
     Write-Host "== Sequencia D (boot direto na GUI) ==" -ForegroundColor Cyan
     $stepsD = @(
-        "wait:16", "shot:out\shots\reg-gui-1-boot.ppm",
-        "type:cpuuso wm 10 > /dev/tty", "mon:sendkey ret", "wait:13",
+        "until:60:wm: apps em /run/wmapp.sock", "wait:3", "shot:out\shots\reg-gui-1-boot.ppm",
+        "type:cpuuso wm 10 > /dev/tty", "mon:sendkey ret", "until:40:cpuuso: wm (pid", "wait:1",
         "type:wmctl ping", "mon:sendkey ret", "wait:2", "type:wmctl term", "mon:sendkey ret", "wait:3",
         "type:wmctl list", "mon:sendkey ret", "wait:2", "shot:out\shots\reg-gui-5-wmctl.ppm",
         "type:hello-gui &", "mon:sendkey ret", "wait:4", "mon:sendkey o", "wait:1", "mon:sendkey i", "wait:1",

@@ -79,6 +79,8 @@ struct gui {
     unsigned long partial_frames;
     bool (*on_key)(struct gui *g, int ascii, int scancode, int mods);
     int click_x, click_y;
+    void (*on_tick)(struct gui *g);
+    int tick_ms;
     bool running;
     char in[512];
     int inlen;

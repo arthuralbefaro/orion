@@ -465,10 +465,15 @@ void sched_tick(uint64_t now, bool user)
     struct thread *cur = cpu->current;
     cpu->ticks++;
     cur->total_ticks++;
-    if (user)
+    if (user) {
         cur->utime++;
-    else if (!cur->is_idle)
+        cpu->user_ticks++;
+    } else if (!cur->is_idle) {
         cur->stime++;
+        cpu->sys_ticks++;
+    } else {
+        cpu->idle_ticks++;
+    }
 
     if (cpu->cpu_id == 0) {
         struct thread **pp = &sleeping;
