@@ -29,7 +29,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 13 | rt_sigaction | completa | `sa_restorer` obrigatorio; `SA_RESTART`, `SA_SIGINFO` (siginfo e ucontext no formato do Linux), `SA_NODEFER`, `SA_RESETHAND`; `SA_ONSTACK` aceito e ignorado (`sigaltstack` e stub); `sigsetsize` = 8 |
 | 14 | rt_sigprocmask | completa | mascara no formato Linux (bit `sig-1`), 64 sinais; `sigsetsize` = 8 |
 | 15 | rt_sigreturn | completa | volta por `iretq`, restaura registradores e SSE |
-| 16 | ioctl | parcial | `TCGETS`, `TCSETS`/`W`/`F`, `TIOCGWINSZ`, `TIOCSWINSZ`, `TIOCGPGRP`, `TIOCSPGRP`, `TIOCINQ`, framebuffer, input e rede |
+| 16 | ioctl | parcial | `TCGETS`, `TCSETS`/`W`/`F`, `TIOCGWINSZ`, `TIOCSWINSZ`, `TIOCGPGRP`, `TIOCSPGRP`, `TIOCINQ`, framebuffer, input e rede (`SIOCGIFCONF_ORION` e `SIOCSIFCONF_ORION`; o `SIOCDHCP_ORION` saiu na 3.7 com o DHCP do kernel) |
 | 17 | pread64 | completa | arquivos regulares; `ESPIPE` em pipe, terminal e dispositivo |
 | 18 | pwrite64 | completa | idem; escrever depois do fim preenche o buraco com zeros |
 | 19 | readv | completa | ate 1024 pedacos |
@@ -51,7 +51,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 41 | socket | parcial | `AF_INET` com `SOCK_STREAM` (TCP, 3.2), `SOCK_DGRAM` e `SOCK_RAW`; `AF_UNIX` com `SOCK_STREAM` (3.5); `SOCK_NONBLOCK` e `SOCK_CLOEXEC` |
 | 42 | connect | parcial | UDP fixa o destino; TCP faz o handshake (o `SYN` e retransmitido com backoff e desiste em uns 63 s com `ETIMEDOUT`), `ECONNREFUSED` com `RST`, `EINPROGRESS` com `O_NONBLOCK` (3.3) |
 | 43 | accept | completa | bloqueia ate ter conexao na fila; endereco do cliente (3.4) |
-| 44 | sendto | parcial | UDP e ICMP; em TCP e um `write` (o endereco e ignorado); sem `SIGPIPE` com a conexao fechada, so `EPIPE` |
+| 44 | sendto | parcial | UDP e ICMP (broadcast so com `SO_BROADCAST`, senao `EACCES`, 3.7); em TCP e um `write` (o endereco e ignorado); sem `SIGPIPE` com a conexao fechada, so `EPIPE` |
 | 45 | recvfrom | parcial | UDP e ICMP; em TCP e um `read` (sem endereco de volta); `flags` ignoradas |
 | 46 | sendmsg | parcial | como o `sendto`, juntando ate 1024 `iovec`; sem dados de controle (3.2) |
 | 47 | recvmsg | parcial | como o `recvfrom`, espalhando nos `iovec`; `msg_controllen` volta 0, `MSG_TRUNC` em `msg_flags` (3.2) |
@@ -61,7 +61,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 51 | getsockname | completa | (3.4) |
 | 52 | getpeername | completa | (3.4) |
 | 53 | socketpair | parcial | so `AF_UNIX` com `SOCK_STREAM` (3.5) |
-| 54 | setsockopt | parcial | `SO_REUSEADDR`; `TCP_NODELAY` so ligado (nao ha Nagle); o resto da `ENOPROTOOPT` (3.4) |
+| 54 | setsockopt | parcial | `SO_REUSEADDR`; `SO_BROADCAST` em UDP e ICMP (3.7); `TCP_NODELAY` so ligado (nao ha Nagle); o resto da `ENOPROTOOPT` (3.4) |
 | 55 | getsockopt | parcial | `SO_REUSEADDR`, `SO_TYPE`, `SO_ERROR`, `SO_RCVBUF`/`SO_SNDBUF` (32 KiB) e `TCP_NODELAY`; o resto da `ENOPROTOOPT` (3.4) |
 | 56 | clone | parcial | `CLONE_THREAD` (com `CLONE_VM` e `CLONE_SIGHAND`), `CLONE_SETTLS`, `CLONE_PARENT_SETTID`, `CLONE_CHILD_SETTID`, `CLONE_CHILD_CLEARTID`; sem `CLONE_THREAD` e um fork com pilha opcional (sem `CLONE_VM` de verdade) |
 | 57 | fork | completa | copy-on-write; respeita `RLIMIT_NPROC` |

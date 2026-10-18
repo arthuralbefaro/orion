@@ -38,6 +38,7 @@ struct socket {
     bool     tcp_open;
     bool     listening;
     bool     reuse;
+    bool     broadcast;
     bool     shut_rd;
     bool     shut_wr;
     uint32_t tcp_id;
@@ -316,8 +317,6 @@ static long sock_ioctl(struct file *f, uint64_t request, uint64_t arg)
             return -EFAULT;
         net_set_config(r.ip, r.netmask, r.gateway, r.dns);
         return 0;
-    case SIOCDHCP_ORION:
-        return net_dhcp(5000);
     default:
         return -ENOTTY;
     }
@@ -532,6 +531,10 @@ static long send_kernel(struct file *f, struct socket *s, const uint8_t *data, u
     }
     if (!dst)
         return -EDESTADDRREQ;
+    struct netif *ni = net_interface();
+    bool bcast = dst == 0xFFFFFFFFu || (ni->netmask && ni->netmask != 0xFFFFFFFFu && (dst | ni->netmask) == 0xFFFFFFFFu);
+    if (bcast && !s->broadcast)
+        return -EACCES;
     int r;
     if (s->type == SOCK_RAW)
         r = net_send_ip(dst, (uint8_t)s->proto, data, (int)len);
@@ -1042,6 +1045,10 @@ long sys_setsockopt(int fd, int level, int name, const void *uval, uint32_t len)
         s->reuse = v != 0;
         return 0;
     }
+    if (level == SOL_SOCKET && name == SO_BROADCAST && s->type != SOCK_STREAM) {
+        s->broadcast = v != 0;
+        return 0;
+    }
     if (level == SOL_TCP && name == TCP_NODELAY && s->type == SOCK_STREAM)
         return v ? 0 : -ENOPROTOOPT;
     return -ENOPROTOOPT;
@@ -1067,6 +1074,8 @@ long sys_getsockopt(int fd, int level, int name, void *uval, uint32_t *ulen)
         v = s->reuse;
     } else if (level == SOL_SOCKET && name == SO_TYPE) {
         v = s->type;
+    } else if (level == SOL_SOCKET && name == SO_BROADCAST && s->type != SOCK_STREAM) {
+        v = s->broadcast;
     } else if (level == SOL_SOCKET && name == SO_ERROR) {
         v = 0;
         if (s->type == SOCK_STREAM && s->tcp_open) {

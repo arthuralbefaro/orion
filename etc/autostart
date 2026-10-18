@@ -11,7 +11,7 @@
 PATH=/bin
 HOME=/
 
-# /bin/dhcp
+/bin/netup
 # shell /bin/wm
 
 shell /bin/sh

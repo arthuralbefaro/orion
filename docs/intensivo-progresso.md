@@ -27,19 +27,17 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 03:35, sessao 2): Fase 2 inteira (tag `v2.1`), 8.7 e
-3.1 a 3.6 commitadas. Versao 2.2.0-a6. A regressao inteira roda no
-`out\orion.img` (GPT, raiz em ext2), com 342 verificacoes; a sequencia A sobe
-o `tools/hostweb.py` no hospedeiro e usa `hostfwd` (5555 e 8081).
+Estado (2026-10-18, 04:15, sessao 2): Fases 2 e 3 inteiras (tags `v2.1` e
+`v2.2`) e 8.7 commitadas; marco M3 fechado. Versao 2.2.0. A regressao inteira
+roda no `out\orion.img` (GPT, raiz em ext2), com 345 verificacoes; a
+sequencia A sobe o `tools/hostweb.py` no hospedeiro e usa `hostfwd` (5555 e
+8081).
 
-Proxima etapa: 3.7 (DHCP fora do kernel e configuracao em `/etc/network`;
-criterio: o boot pega IP sem codigo de DHCP no kernel). Plano: tirar o
-`net/dhcp.c`, o `ioctl` `SIOCDHCP_ORION`, o gancho da porta 68 no `net.c` e o
-comando `dhcp` do shell do kernel; exigir `SO_BROADCAST` para mandar a
-broadcast, como o Linux; o programa `dhcp` faz DISCOVER/OFFER/REQUEST/ACK por
-UDP e configura a interface pelo `SIOCSIFCONF_ORION`; um `netup` novo le o
-`/etc/network` (`eth0 dhcp`, `eth0 static ...` ou `eth0 off`) e o autostart o
-chama no boot. Fecha a Fase 3 (marco M3, tag `v2.2`, versao 2.2.0).
+Proxima etapa: 4.1 (`uid`/`gid` reais por processo, `setuid`/`setgid`,
+permissoes conferidas na VFS; criterio: usuario comum nao le o
+`/etc/shadow`). A versao da Fase 4 comeca em 2.3.0-a1. A sugestao de turnos
+do plano poe 4.1 e 4.2 logo depois da Fase 3; depois, pela ordem
+recomendada, 7.1 e 7.2 (ISO e sistema live) e 5.1.
 
 ## Checklist
 
@@ -78,7 +76,7 @@ chama no boot. Fecha a Fase 3 (marco M3, tag `v2.2`, versao 2.2.0).
 | 3.4 | TCP parte 4 | [x] | 01:48 | 02:25 | ver `git log` |
 | 3.5 | Loopback e AF_UNIX | [x] | 02:26 | 03:10 | ver `git log` |
 | 3.6 | wget, nc, httpd, telnet | [x] | 03:11 | 03:35 | ver `git log` |
-| 3.7 | DHCP fora do kernel | [ ] | | | |
+| 3.7 | DHCP fora do kernel | [x] | 03:36 | 04:15 | ver `git log` (tag `v2.2`) |
 | 4.1 | uid/gid e permissoes | [ ] | | | |
 | 4.2 | passwd, shadow, login | [ ] | | | |
 | 4.3 | SMEP e SMAP | [ ] | | | |
@@ -865,6 +863,26 @@ nao aceita `-An`. Os testes foram escritos sem esses recursos (`echo` em vez
 de `printf` com aspas, `od -b`).
 Ficou de fora: HTTPS (sem TLS no sistema), `chunked` (o `wget` pede HTTP/1.0),
 modo caractere e eco local no `telnet`, UDP no `nc`.
+
+#### 3.7 DHCP fora do kernel - 03:36 a 04:15 - FEITO (fecha o M3)
+O `net/dhcp.c` saiu do kernel, junto com o `ioctl` `SIOCDHCP_ORION`, o
+desvio da porta 68 e o comando `dhcp` do shell do kernel. O programa `dhcp`
+faz DISCOVER/OFFER/REQUEST/ACK por um socket UDP comum (porta 68,
+`SO_BROADCAST`, que agora e exigido para mandar a broadcast, como no Linux),
+configura a interface pelo `SIOCSIFCONF_ORION` e grava o `/etc/resolv.conf`.
+O `netup` (novo) le o `/etc/network` (`eth0 dhcp`, `static` ou `off`) e o
+`/etc/autostart` o chama no boot; o `ifconfig dhcp` chama o `/bin/dhcp`.
+Criterio: o boot pega IP pelo DHCP de usuario, e nenhuma linha do DHCP do
+kernel aparece. Regressao 342 -> 345, estresse 5x verde. Versao 2.2.0, tag
+`v2.2`.
+Problemas: (1) com o `netup` e o `dhcp` rodando antes do `sh`, o `sh` deixou
+de ser o pid 2, e dois padroes (do `top` e do `procs`) fixavam esse numero;
+passaram a aceitar qualquer pid. (2) O teste do `nc -l` da 3.6 falhou nesta
+rodada: o servidor em segundo plano herda o terminal como entrada, e o
+meio-fechamento automatico no fim da entrada fazia o cliente sair antes de
+mandar. O `nc` passou a so meio-fechar com `-N`, como o do OpenBSD, e o teste
+da ao servidor `/dev/null` de entrada.
+Ficou de fora: renovacao da concessao DHCP, mais de uma interface.
 
 ### Sessao 2 - 2026-10-17
 

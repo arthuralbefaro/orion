@@ -2177,8 +2177,10 @@ Uma linha por decisao, na ordem em que foram tomadas.
   do codigo.
 - `nc`: cliente (`nc host porta`) e servidor de uma conexao (`nc -l porta` ou
   `-l -p porta`), `-z` so testa a porta, `-w segundos` de espera sem dados. O
-  fim da entrada vira `shutdown(SHUT_WR)`, e o programa sai quando o outro lado
-  fecha, entao `echo ... | nc` funciona como no Linux.
+  programa sai quando o outro lado fecha; o fim da entrada so vira
+  `shutdown(SHUT_WR)` com `-N`, como no `nc` do OpenBSD (na 3.7 a regressao
+  achou a corrida que o meio-fechamento automatico causava num `nc -l` em
+  segundo plano, que herda o terminal como entrada).
 - `telnet`: liga, recusa toda opcao que o outro lado oferece (`WILL` ->
   `DONT`, `DO` -> `WONT`), pula subnegociacao, dobra o byte 255 e manda
   `\r\n` no fim de linha (NVT). Sem modo de caractere: a linha vai inteira.
@@ -2190,3 +2192,30 @@ Uma linha por decisao, na ordem em que foram tomadas.
   fechada; `nc` falando HTTP com o hospedeiro; `telnet` contra um `nc -l` que
   manda `IAC WILL ECHO`, conferindo que a tela mostra so o texto e que do outro
   lado chega `IAC DONT ECHO` seguido de `oi\r\n`.
+
+## v2.2.0 (etapa 3.7: DHCP fora do kernel; fecha o M3)
+
+- O cliente DHCP saiu do kernel: `net/dhcp.c`, o `ioctl` `SIOCDHCP_ORION`, o
+  desvio da porta 68 no `net.c` e o comando `dhcp` do shell do kernel foram
+  removidos. O programa `dhcp` faz o protocolo inteiro por um socket UDP comum
+  (porta 68, `SO_BROADCAST`): DISCOVER e REQUEST para 255.255.255.255 com o
+  bit de broadcast, espera OFFER e ACK com o mesmo `xid` (1, 2, 4 e 8 s por
+  tentativa, tres rodadas), recomeca no NAK, configura a interface pelo
+  `SIOCSIFCONF_ORION` (endereco, mascara, gateway, DNS) e grava o
+  `/etc/resolv.conf` (`-n` deixa como esta). Nao ha renovacao da concessao: o
+  SLIRP da 86400 s e o sistema nao fica ligado tanto tempo nos testes; quem
+  precisar roda o `dhcp` de novo.
+- O kernel ja sabia mandar para broadcast (o `net_resolve` devolve o MAC de
+  broadcast para 255.255.255.255 e para o broadcast da sub-rede) e entregar
+  UDP sem conferir o destino; o que faltava era o `SO_BROADCAST`: agora, como
+  no Linux, mandar para um desses enderecos sem a opcao da `EACCES`.
+- Configuracao em `/etc/network`, lida pelo `netup` (novo), que o
+  `/etc/autostart` chama no boot (antes a rede so subia com `dhcp` a mao, ou
+  no autostart grafico): `eth0 dhcp`, `eth0 static <ip> <mascara> <gateway>
+  [dns]` ou `eth0 off`. Um arquivo por sistema e uma linha por interface,
+  porque so ha uma placa; o formato e o do `/etc/network/interfaces` do Debian
+  em uma linha so. `ifconfig dhcp` passou a chamar o `/bin/dhcp`.
+- Criterio ("boot pega IP sem codigo de DHCP no kernel"): a regressao confere
+  no log do boot o `init` rodando o `netup`, o `netup` escolhendo DHCP e o
+  `dhcp` com o endereco, a mascara, o gateway, o DNS e o servidor, e que
+  nenhuma linha do DHCP do kernel aparece.

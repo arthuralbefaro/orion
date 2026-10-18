@@ -534,18 +534,6 @@ static void cmd_arp(const char *args)
     net_arp_dump();
 }
 
-static void cmd_dhcp(const char *args)
-{
-    (void)args;
-    kprintf("Pedindo endereco por DHCP...\n");
-    int r = net_dhcp(5000);
-    if (r < 0) {
-        kprintf("dhcp falhou: %d\n", r);
-        return;
-    }
-    net_dump();
-}
-
 static int split_words(const char *s, char out[4][24])
 {
     int n = 0;
@@ -615,7 +603,6 @@ static const struct command commands[] = {
     { "net",    "estado da rede",                       cmd_net },
     { "tcploss", "descarta 1 em N segmentos TCP (teste)", cmd_tcploss },
     { "arp",    "cache ARP",                            cmd_arp },
-    { "dhcp",   "pede um endereco por DHCP",            cmd_dhcp },
     { "ifconfig", "configura a rede a mao",             cmd_ifconfig },
     { "lsblk",  "discos e particoes",                   cmd_lsblk },
     { "mount",  "monta o primeiro FS extra em /mnt",     cmd_mount },

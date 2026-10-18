@@ -72,5 +72,4 @@ void net_dump(void);
 void net_deliver_icmp(uint32_t src, const void *data, int len);
 void net_deliver_udp(uint32_t src, uint16_t sport, uint16_t dport, const void *data, int len);
 
-int  net_dhcp(int timeout_ms);
-bool dhcp_input(uint32_t src, const void *data, int len);
+

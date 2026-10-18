@@ -253,7 +253,6 @@ static inline int orion_openpty(int *master, int *slave)
 
 #define SIOCGIFCONF_ORION 0x8900
 #define SIOCSIFCONF_ORION 0x8901
-#define SIOCDHCP_ORION    0x8902
 
 struct ifreq_orion {
     uint8_t mac[6];

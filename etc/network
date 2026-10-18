@@ -1,0 +1,7 @@
+# Lido pelo /bin/netup no boot (o /etc/autostart chama o netup).
+# Uma linha por interface:
+#   eth0 dhcp                                   endereco por DHCP
+#   eth0 static <ip> <mascara> <gateway> [dns]  endereco fixo
+#   eth0 off                                    nao configura
+
+eth0 dhcp

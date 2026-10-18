@@ -42,6 +42,8 @@ static int resolve(const char *host, int port, struct sockaddr_in *sa)
     return 0;
 }
 
+static int half_close;
+
 static int relay(int s, int idle_ms)
 {
     int in_open = 1;
@@ -67,7 +69,8 @@ static int relay(int s, int idle_ms)
             ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
             if (n <= 0) {
                 in_open = 0;
-                shutdown(s, SHUT_WR);
+                if (half_close)
+                    shutdown(s, SHUT_WR);
             } else if (write_all(s, buf, (size_t)n) < 0) {
                 return 1;
             }
@@ -83,6 +86,8 @@ int main(int argc, char **argv)
     for (; i < argc && argv[i][0] == '-'; i++) {
         if (strcmp(argv[i], "-l") == 0)
             listen_mode = 1;
+        else if (strcmp(argv[i], "-N") == 0)
+            half_close = 1;
         else if (strcmp(argv[i], "-z") == 0)
             scan = 1;
         else if (strcmp(argv[i], "-p") == 0 && i + 1 < argc)
@@ -97,7 +102,7 @@ int main(int argc, char **argv)
     if (i < argc)
         port = atoi(argv[i++]);
     if (port <= 0 || port > 65535 || (!listen_mode && !host) || i != argc) {
-        fprintf(stderr, "uso: nc [-z] [-w segundos] host porta | nc -l [-w segundos] [-p] porta\n");
+        fprintf(stderr, "uso: nc [-N] [-z] [-w segundos] host porta | nc -l [-N] [-w segundos] [-p] porta\n");
         return 2;
     }
     signal(SIGPIPE, SIG_IGN);

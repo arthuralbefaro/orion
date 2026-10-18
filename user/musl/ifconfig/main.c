@@ -42,15 +42,11 @@ int main(int argc, char **argv)
     }
 
     if (argc == 2 && strcmp(argv[1], "dhcp") == 0) {
-        printf("pedindo endereco por DHCP...\n");
-        if (ioctl(fd, SIOCDHCP_ORION, 0) < 0) {
-            fprintf(stderr, "ifconfig: dhcp falhou: %s\n", orion_strerror(errno));
-            return 1;
-        }
-        ioctl(fd, SIOCGIFCONF_ORION, &r);
-        show(&r);
         close(fd);
-        return 0;
+        char *args[] = { "dhcp", NULL };
+        execv("/bin/dhcp", args);
+        fprintf(stderr, "ifconfig: /bin/dhcp: %s\n", orion_strerror(errno));
+        return 1;
     }
 
     if (argc != 5) {

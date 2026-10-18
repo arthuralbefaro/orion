@@ -591,8 +591,6 @@ static void handle_ip(const uint8_t *data, int len)
         uint16_t dport = ntohs(uh->dport);
         const void *body = payload + sizeof(*uh);
         int blen = ulen - (int)sizeof(*uh);
-        if (dport == 68 && dhcp_input(src, body, blen))
-            return;
         net_deliver_udp(src, ntohs(uh->sport), dport, body, blen);
     } else {
         stats.rx_unknown++;
@@ -711,7 +709,7 @@ void net_init(void)
     if (tcp)
         thread_create("tcptimer", tcp_timer_thread, NULL);
     thread_create("netrx", rx_thread, NULL);
-    log_info("net", "pilha IPv4 no ar (ARP, ICMP, UDP, TCP); use 'dhcp' ou 'ifconfig'");
+    log_info("net", "pilha IPv4 no ar (ARP, ICMP, UDP, TCP); o endereco vem do netup, do dhcp ou do ifconfig");
 }
 
 void net_arp_dump(void)

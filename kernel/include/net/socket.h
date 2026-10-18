@@ -19,7 +19,6 @@ struct sockaddr_in {
 
 #define SIOCGIFCONF_ORION 0x8900
 #define SIOCSIFCONF_ORION 0x8901
-#define SIOCDHCP_ORION    0x8902
 
 struct ifreq_orion {
     uint8_t  mac[6];
@@ -50,6 +49,7 @@ long sys_recvfrom(int fd, void *buf, uint64_t len, int flags, struct sockaddr_in
 #define SO_SNDBUF     7
 #define SO_RCVBUF     8
 #define SO_KEEPALIVE  9
+#define SO_BROADCAST  6
 #define SOL_TCP       6
 #define TCP_NODELAY   1
 #define SHUT_RD   0

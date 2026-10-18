@@ -183,9 +183,9 @@ if ($runAll -or $OnlyA) {
         "cmd:cd /tmp", "cmd:wget http://example.com", "until:30:salvo", "cmd:grep Example index.html", "wait:1",
         "cmd:rm index.html", "cmd:wget -O /tmp/w.bin http://10.0.2.2:8088/big.bin", "until:30:salvo",
         "cmd:sha256sum /tmp/w.bin", "wait:3", "cmd:rm /tmp/w.bin", "cmd:wget http://10.0.2.2:8088/nada", "wait:3", "cmd:cd /",
-        "cmd:nc -l 7777 > /tmp/nc.out &", "wait:1", "cmd:echo transferido-pelo-nc | nc 127.0.0.1 7777", "wait:2",
+        "cmd:nc -l 7777 < /dev/null > /tmp/nc.out &", "wait:1", "cmd:echo transferido-pelo-nc | nc -N 127.0.0.1 7777", "wait:2",
         "cmd:cat /tmp/nc.out", "cmd:nc -z 127.0.0.1 7778", "wait:2",
-        "cmd:echo GET /index.html HTTP/1.0 | nc 10.0.2.2 8088", "wait:3",
+        "cmd:echo GET /index.html HTTP/1.0 | nc -N 10.0.2.2 8088", "wait:3",
         "cmd:printf \377\373\001ola\n | nc -l 7779 > /tmp/tn.out &", "wait:1", "cmd:echo oi | telnet 127.0.0.1 7779", "wait:3",
         "cmd:od -b /tmp/tn.out", "wait:2", "cmd:rm /tmp/nc.out /tmp/tn.out",
         "cmd:nslookup example.com", "wait:8",
@@ -386,7 +386,7 @@ if ($runAll -or $OnlyA) {
     Expect $a "wget: o servidor respondeu 404" "wget avisa o 404 e sai com erro"
     Expect $a "cat /tmp/nc\.out\s*\n\s*transferido-pelo-nc" "nc -l e nc cliente pelo loopback"
     Expect $a "nc: 127\.0\.0\.1 7778 fechada" "nc -z ve a porta fechada"
-    Expect $a "(?s)echo GET /index\.html HTTP/1\.0 \| nc 10\.0\.2\.2 8088.*?HTTP/1\.0 200 OK.*?ola do hospedeiro" "nc conversa HTTP com o hospedeiro"
+    Expect $a "(?s)echo GET /index\.html HTTP/1\.0 \| nc -N 10\.0\.2\.2 8088.*?HTTP/1\.0 200 OK.*?ola do hospedeiro" "nc conversa HTTP com o hospedeiro"
     Expect $a "telnet: conectado a 127\.0\.0\.1 7779\s*\nola\s*\n" "telnet tira a negociacao do que mostra"
     Expect $a "0000000 377 376\s+1 157 151\s+15\s+12" "telnet recusa a opcao (IAC DONT) e manda CR LF"
     Expect $a "(?s)----- reboot -----.*?cat /reboot\.txt\s*\n\s*sobrevive-ao-reboot" "arquivo gravado na raiz sobrevive a reboot"
@@ -426,6 +426,9 @@ if ($runAll -or $OnlyA) {
     Expect $a "COW: 0 pagina\(s\) compartilhada\(s\), \d{3,} falta" "compartilhamento volta a zero no fim"
     Expect $a "e1000\s+8086:100e.*link up" "placa de rede detectada com link up"
     Expect $a "ip 10\.0\.2\.15  mascara 255\.255\.255\.0" "dhcp pegou endereco, mascara e rotas"
+    Expect $a "init: autostart: /bin/netup" "init roda o netup no boot"
+    Expect $a "(?s)netup: eth0 por DHCP.*?dhcp: ip 10\.0\.2\.15 mascara 255\.255\.255\.0 gateway 10\.0\.2\.2 dns 10\.0\.2\.3 \(servidor 10\.0\.2\.2" "boot pega IP pelo DHCP de usuario, lendo o /etc/network"
+    ExpectNot $a "\[info\] dhcp " "nenhuma linha do DHCP do kernel (ele saiu do kernel)"
     Expect $a "eth0  52:54:00:12:34:56  link up" "ifconfig mostrou a interface"
     Expect $a "3 enviado\(s\), 3 recebido\(s\), 0% de perda" "ping ao gateway sem perda"
     Expect $a "servidor: 10\.0\.2\.3" "nslookup usou o servidor DNS que veio do DHCP"
@@ -436,7 +439,7 @@ if ($runAll -or $OnlyA) {
     Expect $a "\n/bin/sh" "printenv leu uma variavel"
     Expect $a "HOME=/" "env listou o ambiente"
     Expect $a "Orion top   \d+ processo\(s\)   4 CPU\(s\)" "top mostrou o resumo do sistema"
-    Expect $a "\n\s+2\s+1\s+2\s+\d+\s+rodando\s+sh" "top listou o sh"
+    Expect $a "\n\s+(\d+)\s+1\s+\1\s+\d+\s+rodando\s+sh" "top listou o sh"
     Expect $a "vazio\[\]" "unset apagou a variavel"
     Expect $a "\ne-ok" "&& roda o segundo comando quando o primeiro da certo"
     ExpectNot $a "\nNAO-DEVIA" "&& pula o segundo comando quando o primeiro falha"
@@ -511,7 +514,7 @@ if ($runAll -or $OnlyB) {
     Expect $b "wm: encerrando" "Ctrl\+Alt\+X encerrou o wm"
     Expect $b "TTY-DE-VOLTA\r?\nTTY-DE-VOLTA|echo TTY-DE-VOLTA[\s\S]{0,40}TTY-DE-VOLTA" "TTY respondeu depois do wm"
     Expect $b "0 pty\(s\) viva\(s\)" "nenhuma pty vazada"
-    Expect $b "(?s)pid\s+ppid\s+estado[^\n]*\n\s+2\s+1\s+running\s+\d+\s+sh\s*\n\s+1\s+0\s+running\s+\d+\s+init" "procs so tem init e sh"
+    Expect $b "(?s)pid\s+ppid\s+estado[^\n]*\n\s+\d+\s+1\s+running\s+\d+\s+sh\s*\n\s+1\s+0\s+running\s+\d+\s+init" "procs so tem init e sh"
     Test-MemDelta $b "memoria estavel na sequencia B" 16
 }
 
@@ -666,8 +669,8 @@ if ($runAll -or $OnlyD) {
     if ($Verbose) { Write-Output $d }
     & (Join-Path $Root "build.ps1") -Image | Out-Null
 
-    Expect $d "init: autostart: /bin/dhcp" "init executou o autostart"
-    Expect $d "ip 10\.0\.2\.15" "dhcp do autostart configurou a rede"
+    Expect $d "init: autostart: /bin/netup" "init executou o autostart"
+    Expect $d "dhcp: ip 10\.0\.2\.15" "netup do autostart configurou a rede pelo dhcp de usuario"
     Expect $d "init: iniciando /bin/wm" "init subiu direto na interface grafica"
     Expect $d "wm: \d+x\d+, celula" "wm abriu o framebuffer sem passar pelo sh"
     Expect $d "wm: terminal 0 -> sh pid \d+" "wm abriu um terminal com o sh dentro"

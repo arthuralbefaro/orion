@@ -82,9 +82,9 @@ O terminal grafico entende as sequencias ANSI de cursor, apagamento e cores.
 
 ### Boot direto na interface grafica
 O `init` le `/etc/autostart` no boot: uma linha por comando, `#` e comentario, e
-`shell <caminho>` troca o programa que ele mantem vivo no terminal. O padrao e
-`shell /bin/sh`; `.\build.ps1 -Gui` grava um autostart que roda `/bin/dhcp` e
-sobe direto no `wm`.
+`shell <caminho>` troca o programa que ele mantem vivo no terminal. O padrao
+roda o `/bin/netup` (rede) e mantem o `shell /bin/sh`; `.\build.ps1 -Gui`
+grava um autostart que roda o `/bin/netup` e sobe direto no `wm`.
 
 ### O disco do sistema
 Sem `-Image`, o QEMU expoe o `out\esp` como um disco FAT (`fat:rw:`, o vvfat),
@@ -173,7 +173,7 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
 ## Programas proprios em /bin
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
-    ifconfig ping nslookup wget nc telnet httpget httpd wmctl dhcp mkfs mkfs.ext2 fsck.ext2 mount umount
+    ifconfig ping nslookup wget nc telnet httpget httpd wmctl dhcp netup mkfs mkfs.ext2 fsck.ext2 mount umount
     testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest unixtest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
@@ -184,9 +184,11 @@ em `user/include/orion.h`.
 
 ### Rede
 O QEMU sobe uma e1000 com a rede de usuario (SLIRP): 10.0.2.15 para o Orion,
-10.0.2.2 de gateway e 10.0.2.3 de DNS.
+10.0.2.2 de gateway e 10.0.2.3 de DNS. No boot, o `/etc/autostart` chama o
+`netup`, que le o `/etc/network` (`eth0 dhcp`, `eth0 static <ip> <mascara>
+<gateway> [dns]` ou `eth0 off`). O DHCP e um programa comum, fora do kernel.
 
-    dhcp                      pega endereco, mascara, gateway e DNS
+    dhcp                      pega endereco, mascara, gateway e DNS (e grava o /etc/resolv.conf)
     ifconfig                  mostra a interface e os contadores da placa
     ping 10.0.2.2 4           ICMP echo
     nslookup example.com      consulta A no DNS
@@ -199,7 +201,7 @@ do kernel mostra os contadores, e `tcploss N` descarta 1 em N segmentos TCP
 para testar a retransmissao (o SLIRP do QEMU nao perde nada).
 
     wget http://example.com           salva index.html (-O arquivo, -q; so http://)
-    nc 10.0.2.2 8000 / nc -l 7000     liga a entrada e a saida a uma conexao TCP (-z testa a porta)
+    nc 10.0.2.2 8000 / nc -l 7000     liga a entrada e a saida a uma conexao TCP (-N fecha no fim da entrada, -z testa a porta)
     telnet host [porta]               cliente telnet simples
     httpget example.com               baixa e mostra a pagina (HTTP/1.0)
     httpget -o /tmp/x 10.0.2.2 8000 /arquivo   grava o corpo; 10.0.2.2 e o hospedeiro
