@@ -4,9 +4,10 @@ Sistema operacional x86_64 escrito do zero em C (gnu11), bootado pelo Limine.
 Kernel com SMP, memoria virtual com areas (VMAs) e paginas sob demanda, fork
 copy-on-write, threads, futex, sinais no formato do Linux, cache de paginas
 unificado (read, exec e mmap de arquivo), VFS com vnodes e
-montagens (`mount`/`umount`; FAT com leitura e escrita na raiz e em `/mnt`,
-devfs em `/dev`, tmpfs em `/tmp` e `/run`, procfs em `/proc`), rede IPv4 (UDP/ICMP) e um compositor de janelas em espaco de
-usuario.
+montagens (`mount`/`umount`; raiz em ext2 numa particao GPT, com a particao EFI
+em `/boot/efi`, FAT e ext2 em outros discos, devfs em `/dev`, tmpfs em `/tmp` e
+`/run`, procfs em `/proc`), rede IPv4 (UDP/ICMP) e um compositor de janelas em
+espaco de usuario.
 
 Desde a versao 2.0 o espaco de usuario e Linux: os programas sao binarios
 estaticos x86_64 ligados contra a musl, e o Orion roda software de terceiros
@@ -25,6 +26,8 @@ conferido; versoes e origens estao em `third_party\LICENSES.md`.
     .\build.ps1 -Run -Smp 4        # compila e roda no QEMU (UEFI, 4 CPUs)
     .\build.ps1 -Run -Smp 4 -Disk  # idem, com um segundo disco cru de 64 MiB
     .\build.ps1 -Run -Smp 4 -Gui   # boota direto na interface grafica
+    .\build.ps1 -Image            # gera out\orion.img: GPT, EFI em FAT16, raiz em ext2
+    .\build.ps1 -Run -Smp 4 -Image  # boota do out\orion.img (o que voce grava fica no disco)
     .\build.ps1 -Clean             # limpa
     .\check.ps1                    # analise do kernel e dos programas (erros e warnings)
     .\regressao.ps1                # bateria automatica (exit 0 = verde)
@@ -80,9 +83,22 @@ O `init` le `/etc/autostart` no boot: uma linha por comando, `#` e comentario, e
 `shell /bin/sh`; `.\build.ps1 -Gui` grava um autostart que roda `/bin/dhcp` e
 sobe direto no `wm`.
 
+### O disco do sistema
+Sem `-Image`, o QEMU expoe o `out\esp` como um disco FAT (`fat:rw:`, o vvfat),
+que aguenta pouca escrita. Com `-Image`, o build gera o `out\orion.img`: tabela
+GPT, particao EFI de 64 MiB em FAT16 (Limine e `orion.elf`, montada em
+`/boot/efi`) e a raiz em ext2 com `/bin`, `/lib`, `/usr`, `/etc` e o resto. O
+kernel acha a raiz pelo tipo da particao GPT (raiz Linux x86-64) e monta com
+escrita; o que voce grava sobrevive a desligar e ligar de novo (`sync` antes
+de fechar o QEMU). Cada `.\build.ps1 -Image` gera a imagem de novo, a partir do
+`out\esp`. `lsblk` (no shell do kernel) mostra as particoes.
+
+    .\build.ps1 -Run -Smp 4 -Image
+    echo ola > /nota.txt; sync      # depois feche o QEMU
+    .\test.ps1 -NoBuild -Image -Commands @("cat /nota.txt")   # boota a mesma imagem
+
 ### Disco de escrita
-O `out\esp` que o QEMU expoe com `fat:rw:` aguenta pouca escrita (o vvfat do
-QEMU). Para exercitar o FAT de verdade use um disco cru:
+Para exercitar o FAT de verdade use um disco cru:
 
     .\build.ps1 -Run -Smp 4 -Disk    # cria out\disk.img (64 MiB, zerado)
     mkfs /dev/sdb ORION              # formata em FAT16, dentro do Orion

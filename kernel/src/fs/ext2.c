@@ -390,7 +390,7 @@ static int ext2v_mount(struct mount *m, struct blockdev *dev, const char *data)
         return -ENOMEM;
     em->dev = dev;
     mutex_init(&em->lock, "ext2");
-    bool want_rw = !(m->flags & MNT_RDONLY) && dev->write;
+    bool want_rw = !(m->flags & MNT_RDONLY) && blockdev_writable(dev);
     int r = ext2_mount(dev, dev_read, want_rw ? dev_write : NULL, &em->fs, &em->info);
     if (r < 0) {
         mutex_deinit(&em->lock);

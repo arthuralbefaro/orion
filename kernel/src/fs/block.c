@@ -4,6 +4,7 @@
 #include <kernel/mutex.h>
 #include <mm/heap.h>
 #include <lib/string.h>
+#include <lib/crc32.h>
 
 static struct blockdev devices[BLOCK_MAX_DEVICES];
 static uint32_t device_count;
@@ -36,6 +37,13 @@ struct blockdev *blockdev_register(const char *name, uint32_t sector_size, uint6
     d->write = write;
     d->priv = priv;
     return d;
+}
+
+bool blockdev_writable(const struct blockdev *dev)
+{
+    while (dev->parent)
+        dev = dev->parent;
+    return dev->write != NULL;
 }
 
 static struct blockdev *resolve(struct blockdev *dev, uint64_t *lba)
@@ -249,6 +257,137 @@ uint32_t blockdev_count(void)
     return device_count;
 }
 
+#define GPT_MAX_ENTRY_BYTES (256u * 1024)
+
+struct gpt_header {
+    char sig[8];
+    uint32_t revision;
+    uint32_t header_size;
+    uint32_t header_crc;
+    uint32_t reserved;
+    uint64_t my_lba;
+    uint64_t alt_lba;
+    uint64_t first_usable;
+    uint64_t last_usable;
+    uint8_t disk_guid[16];
+    uint64_t entries_lba;
+    uint32_t entry_count;
+    uint32_t entry_size;
+    uint32_t entries_crc;
+} PACKED;
+
+struct gpt_entry {
+    uint8_t type[16];
+    uint8_t unique[16];
+    uint64_t first;
+    uint64_t last;
+    uint64_t attrs;
+    uint16_t name[36];
+} PACKED;
+
+static const uint8_t guid_esp[16] = { 0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,
+                                      0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B };
+static const uint8_t guid_root[16] = { 0xE3, 0xBC, 0x68, 0x4F, 0xCD, 0xE8, 0xB1, 0x4D,
+                                       0x96, 0xE7, 0xFB, 0xCA, 0xF9, 0x84, 0xB7, 0x09 };
+static const uint8_t guid_data[16] = { 0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47,
+                                       0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4 };
+static const uint8_t guid_zero[16];
+
+static uint8_t guid_kind(const uint8_t *g)
+{
+    if (memcmp(g, guid_esp, 16) == 0)
+        return PART_ESP;
+    if (memcmp(g, guid_root, 16) == 0)
+        return PART_ROOT;
+    if (memcmp(g, guid_data, 16) == 0)
+        return PART_DATA;
+    return PART_OTHER;
+}
+
+static uint8_t *gpt_load(struct blockdev *disk, uint64_t lba, struct gpt_header *h)
+{
+    uint32_t ss = disk->sector_size;
+    uint8_t *sec = kmalloc(ss);
+    if (!sec)
+        return NULL;
+    bool ok = blockdev_read(disk, lba, 1, sec);
+    if (ok) {
+        memcpy(h, sec, sizeof(*h));
+        ok = memcmp(h->sig, "EFI PART", 8) == 0 && h->header_size >= sizeof(*h) && h->header_size <= ss &&
+             h->my_lba == lba;
+    }
+    if (ok) {
+        memset(sec + 16, 0, 4);
+        ok = crc32(sec, h->header_size) == h->header_crc;
+    }
+    kfree(sec);
+    if (!ok)
+        return NULL;
+    uint64_t bytes = (uint64_t)h->entry_count * h->entry_size;
+    if (h->entry_size < sizeof(struct gpt_entry) || h->entry_size % 8 || h->entry_count == 0 ||
+        bytes > GPT_MAX_ENTRY_BYTES)
+        return NULL;
+    uint64_t sectors = (bytes + ss - 1) / ss;
+    if (h->first_usable > h->last_usable || h->last_usable >= disk->sector_count ||
+        h->entries_lba < 2 || h->entries_lba + sectors > disk->sector_count)
+        return NULL;
+    uint8_t *ents = kmalloc(sectors * ss);
+    if (!ents)
+        return NULL;
+    if (!blockdev_read(disk, h->entries_lba, (uint32_t)sectors, ents) || crc32(ents, bytes) != h->entries_crc) {
+        kfree(ents);
+        return NULL;
+    }
+    return ents;
+}
+
+static const char *kind_name(uint8_t kind)
+{
+    switch (kind) {
+    case PART_ESP: return "ESP";
+    case PART_ROOT: return "raiz Linux x86-64";
+    case PART_DATA: return "dados Linux";
+    default: return "outro tipo";
+    }
+}
+
+static void scan_gpt(struct blockdev *disk)
+{
+    struct gpt_header h;
+    uint8_t *ents = gpt_load(disk, 1, &h);
+    if (!ents) {
+        ents = gpt_load(disk, disk->sector_count - 1, &h);
+        if (!ents) {
+            log_warn("block", "%s: GPT invalida (cabecalho e copia de reserva)", disk->name);
+            return;
+        }
+        log_warn("block", "%s: GPT principal invalida, usando a copia do fim do disco", disk->name);
+    }
+    for (uint32_t i = 0; i < h.entry_count; i++) {
+        const struct gpt_entry *e = (const struct gpt_entry *)(ents + (uint64_t)i * h.entry_size);
+        if (memcmp(e->type, guid_zero, 16) == 0)
+            continue;
+        if (e->first > e->last || e->first < h.first_usable || e->last > h.last_usable) {
+            log_warn("block", "%s: particao GPT %u fora da area utilizavel", disk->name, i + 1);
+            continue;
+        }
+        char name[BLOCK_NAME_MAX];
+        ksnprintf(name, sizeof(name), "%s%u", disk->name, i + 1);
+        uint64_t count = e->last - e->first + 1;
+        struct blockdev *p = blockdev_register(name, disk->sector_size, count, NULL, NULL, NULL);
+        if (!p)
+            break;
+        p->parent = disk;
+        p->lba_offset = e->first;
+        p->part_type = PART_GPT;
+        p->part_kind = guid_kind(e->type);
+        memcpy(p->type_guid, e->type, 16);
+        log_info("block", "%s: GPT, LBA %lu, %lu setores (%lu MiB), %s", name, e->first, count,
+                 count * disk->sector_size / MiB(1), kind_name(p->part_kind));
+    }
+    kfree(ents);
+}
+
 void blockdev_scan_partitions(struct blockdev *disk)
 {
     uint8_t *mbr = kmalloc(disk->sector_size);
@@ -260,6 +399,13 @@ void blockdev_scan_partitions(struct blockdev *disk)
         log_info("block", "%s: sem tabela de particoes MBR", disk->name);
         kfree(mbr);
         return;
+    }
+    for (int i = 0; i < 4; i++) {
+        if (mbr[446 + i * 16 + 4] == PART_GPT) {
+            kfree(mbr);
+            scan_gpt(disk);
+            return;
+        }
     }
 
     for (int i = 0; i < 4; i++) {
@@ -293,6 +439,11 @@ void blockdev_dump(void)
     kprintf("  nome    setores      tamanho    tipo\n");
     for (uint32_t i = 0; i < device_count; i++) {
         struct blockdev *d = &devices[i];
+        if (d->parent && d->part_type == PART_GPT) {
+            kprintf("  %-6s  %10lu  %7lu MiB  gpt %s\n", d->name, d->sector_count,
+                    d->sector_count * d->sector_size / MiB(1), kind_name(d->part_kind));
+            continue;
+        }
         kprintf("  %-6s  %10lu  %7lu MiB  %s%02x%s\n", d->name, d->sector_count,
                 d->sector_count * d->sector_size / MiB(1), d->parent ? "particao 0x" : "disco ",
                 d->parent ? d->part_type : 0, d->write || d->parent ? "" : " (somente leitura)");

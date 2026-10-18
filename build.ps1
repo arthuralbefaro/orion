@@ -7,7 +7,8 @@ param(
     [string]$Cpu = "qemu64",
     [string]$Accel = "",
     [switch]$Disk,
-    [switch]$Gui
+    [switch]$Gui,
+    [switch]$Image
 )
 
 $ErrorActionPreference = "Stop"
@@ -231,6 +232,13 @@ Set-Content -Path (Join-Path $EspDir "etc\autostart") -Value $autostart -Encodin
 foreach ($name in @("passwd", "group")) { Copy-Item (Join-Path $Root "etc\$name") (Join-Path $EspDir "etc\$name") -Force }
 Write-Host "OK: out\$Kernel.elf ($compiled arquivo(s) do kernel recompilado(s)), $($userBins.Count) programa(s) em esp\bin" -ForegroundColor Green
 
+if ($Image) {
+    if (-not $PyCmd) { $PyCmd = & (Join-Path $Root "tools\python.ps1") }
+    $pyArgs = @($PyCmd | Select-Object -Skip 1)
+    & $PyCmd[0] @pyArgs (Join-Path $Root "tools\mkimage.py") (Join-Path $OutDir "orion.img") --esp $EspDir
+    if ($LASTEXITCODE -ne 0) { throw "mkimage falhou" }
+}
+
 if ($Run) {
 
 if ($Disk) {
@@ -258,7 +266,7 @@ if ($Disk) {
         "-m", "${Memory}M",
         "-drive", "if=pflash,format=raw,unit=0,file=$ovmfCode,readonly=on",
         "-drive", "if=pflash,format=raw,unit=1,file=$ovmfVars",
-        "-drive", "format=raw,file=fat:rw:out/esp",
+        "-drive", $(if ($Image) { "format=raw,file=out/orion.img" } else { "format=raw,file=fat:rw:out/esp" }),
             "-serial", "stdio",
         "-no-reboot", "-no-shutdown"
     )

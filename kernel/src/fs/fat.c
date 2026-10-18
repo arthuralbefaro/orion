@@ -1622,7 +1622,7 @@ static int fat_mount(struct mount *m, struct blockdev *dev, const char *data)
     f->fat_dirty_lo = 1;
     f->fat_dirty_hi = 0;
     f->next_free = 2;
-    f->writable = dev->write != NULL || (dev->parent && dev->parent->write != NULL);
+    f->writable = blockdev_writable(dev);
 
     struct fat_node *rn = kzalloc(sizeof(*rn));
     struct vnode *root = rn ? vnode_new(m, FAT_ROOT_INO, S_IFDIR | 0755) : NULL;

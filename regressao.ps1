@@ -91,7 +91,7 @@ $buildFlag = @{}
 if ($NoBuild) { $buildFlag = @{ NoBuild = $true } }
 if (-not $NoBuild -and -not ($runAll -or $OnlyA)) {
     Write-Host "== Build ==" -ForegroundColor Cyan
-    & (Join-Path $Root "build.ps1") | Out-Null
+    & (Join-Path $Root "build.ps1") -Image | Out-Null
 }
 
 # ---------------- Sequencia A: texto ----------------
@@ -132,6 +132,7 @@ if ($runAll -or $OnlyA) {
         "cmd:attrtest /tmp", "until:120:falha(s))", "cmd:attrtest -k /tmp", "until:60:falha(s))",
         "cmd:touch /tmp/lsx", "cmd:chmod 640 /tmp/lsx", "cmd:chown 12:34 /tmp/lsx", "cmd:ln -s lsx /tmp/lsl",
         "cmd:ls -l /tmp/lsx /tmp/lsl", "wait:2", "cmd:rm /tmp/lsx /tmp/lsl", "cmd:ls -l /bin/ls", "wait:1",
+        "cmd:ls -l /boot/efi/boot", "wait:1",
         "cmd:cat /proc/self/maps", "wait:1", "cmd:cat /proc/mounts", "wait:1",
         "cmd:proctest um dois", "until:60:falha(s))",
         "cmd:pctest", "until:120:falha(s))",
@@ -179,9 +180,11 @@ if ($runAll -or $OnlyA) {
         "cmd:ulimit -a", "cmd:stress 220 220 9000 &", "wait:6", "cmd:ps | wc", "cmd:wait", "until:120:pronto  stress",
         "key:0B", "cmd:heaptest", "wait:1", "cmd:preempt", "wait:2",
         "cmd:arp", "cmd:net",
-        "cmd:dev", "cmd:pty", "cmd:mutex", "cmd:mem"
+        "cmd:dev", "cmd:pty", "cmd:mutex", "cmd:mem", "key:0B",
+        "cmd:echo sobrevive-ao-reboot > /reboot.txt", "cmd:sync", "wait:3", "reboot:",
+        "cmd:cat /reboot.txt", "cmd:rm /reboot.txt", "cmd:mount", "wait:1"
     )
-    & (Join-Path $Root "test.ps1") -Smp $Smp @buildFlag -LogPath "out\reg-a.log" `
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image @buildFlag -LogPath "out\reg-a.log" `
         -Script $stepsA -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $a = Get-Log "out\reg-a.log"
     if ($Verbose) { Write-Output $a }
@@ -313,7 +316,14 @@ if ($runAll -or $OnlyA) {
     Expect $a "(?s)attrtest: conferindo at/keep em /tmp\s.*?attrtest: TUDO OK" "attrtest no tmpfs: atributos guardados"
     Expect $a "-rw-r-----\s+1\s+12\s+34\s+0 \w{3} [ \d]\d \d\d:\d\d /tmp/lsx" "ls -l mostra modo, dono e grupo (chmod e chown do sbase)"
     Expect $a "lrwxrwxrwx\s+1\s+root\s+root\s+3 \w{3} [ \d]\d \d\d:\d\d /tmp/lsl -> lsx" "ls -l mostra o link, o alvo e o nome do dono pelo /etc/passwd"
-    Expect $a "-rw-r--r--\s+1\s+root\s+root\s+\d+ \w{3} [ \d]\d( \d\d:\d\d|  \d{4}) /bin/ls" "ls -l no FAT com a data do diretorio"
+    Expect $a "-rwxr-xr-x\s+1\s+root\s+root\s+\d+ \w{3} [ \d]\d( \d\d:\d\d|  \d{4}) /bin/ls" "ls -l na raiz ext2: binario com modo 0755"
+    Expect $a "-rw-r--r--\s+1\s+root\s+root\s+\d+ \w{3} [ \d]\d( \d\d:\d\d|  \d{4}) orion\.elf" "ls -l no FAT da particao EFI com a data da entrada"
+    Expect $a "sda1: GPT, LBA 2048, \d+ setores \(64 MiB\), ESP" "GPT: particao EFI reconhecida"
+    Expect $a "sda2: GPT, LBA \d+, \d+ setores \(\d+ MiB\), raiz Linux x86-64" "GPT: particao de raiz reconhecida"
+    Expect $a "raiz montada: ext2 em sda2" "raiz em ext2 na particao GPT"
+    Expect $a "particao EFI sda1 montada em /boot/efi" "particao EFI montada em /boot/efi"
+    Expect $a "/dev/sda2 / ext2 rw 0 0" "raiz ext2 montada com escrita"
+    Expect $a "(?s)----- reboot -----.*?cat /reboot\.txt\s*\n\s*sobrevive-ao-reboot" "arquivo gravado na raiz sobrevive a reboot"
     Expect $a "(?s)cat /proc/self/maps\s*\n\s*[0-9a-f]{8,}-[0-9a-f]{8,} r--p [0-9a-f]{8} 00:00 \d+\s+/bin/cat" "cat /proc/self/maps mostra as VMAs do proprio cat"
     Expect $a "[0-9a-f]+-7ffffffff000 rw-p 00000000 00:00 0\s+\[stack\]" "maps mostra a pilha"
     Expect $a "proc /proc proc ro 0 0" "/proc/mounts lista o procfs"
@@ -419,7 +429,7 @@ if ($runAll -or $OnlyB) {
         "cmd:echo TTY-DE-VOLTA", "wait:1", "shot:out\shots\reg-wm-6-tty.ppm",
         "key:0B", "cmd:mem", "cmd:pty", "cmd:procs"
     )
-    & (Join-Path $Root "test.ps1") -Smp $Smp -NoBuild -LogPath "out\reg-b.log" `
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -LogPath "out\reg-b.log" `
         -Script $stepsB -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $b = Get-Log "out\reg-b.log"
     if ($Verbose) { Write-Output $b }
@@ -497,7 +507,7 @@ if ($runAll -or $OnlyC) {
         "cmd:fsck.ext2 /dev/sdd", 'cmd:echo FIM$X-FSCK4', "until:120:FIM-FSCK4",
         "key:0B", "cmd:mem", "cmd:lsblk", "cmd:mutex"
     )
-    & (Join-Path $Root "test.ps1") -Smp $Smp -NoBuild -Disk -ExtraDisks @("out/ext2-4k.img", "out/ext2-1k.img") -LogPath "out\reg-c.log" `
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Disk -ExtraDisks @("out/ext2-4k.img", "out/ext2-1k.img") -LogPath "out\reg-c.log" `
         -Script $stepsC -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $c = Get-Log "out\reg-c.log"
     if ($Verbose) { Write-Output $c }
@@ -582,11 +592,11 @@ if ($runAll -or $OnlyD) {
         "shot:out\shots\reg-gui-4-menu.ppm",
         "mon:sendkey ctrl-alt-x", "wait:6"
     )
-    & (Join-Path $Root "test.ps1") -Smp $Smp -Gui -LogPath "out\reg-d.log" `
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -Gui -LogPath "out\reg-d.log" `
         -Script $stepsD -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $d = Get-Log "out\reg-d.log"
     if ($Verbose) { Write-Output $d }
-    & (Join-Path $Root "build.ps1") | Out-Null
+    & (Join-Path $Root "build.ps1") -Image | Out-Null
 
     Expect $d "init: autostart: /bin/dhcp" "init executou o autostart"
     Expect $d "ip 10\.0\.2\.15" "dhcp do autostart configurou a rede"
@@ -606,7 +616,7 @@ if ($runAll -or $OnlyE) {
     for ($i = 1; $i -le $StressRuns; $i++) {
         $stepsE = @("cmd:$stressCmd", 'cmd:echo FIM$X-ESTRESSE', "until:1200:FIM-ESTRESSE",
                     "key:0B", "cmd:procs", "cmd:ps", "wait:1")
-        & (Join-Path $Root "test.ps1") -Smp $Smp -NoBuild -LogPath "out\reg-e-$i.log" `
+        & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -LogPath "out\reg-e-$i.log" `
             -Script $stepsE -CommandDelay 1.0 -BootTimeout 60 -NoPrint | Out-Null
         $e = Get-Log "out\reg-e-$i.log"
         if ($Verbose) { Write-Output $e }

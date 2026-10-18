@@ -1864,3 +1864,56 @@ Uma linha por decisao, na ordem em que foram tomadas.
   tambem e, para a hora do build na linha de boot (`__TIME__`) dizer de fato
   quando o kernel foi montado. Antes ela so mudava quando o proprio `main.c`
   mudava e nao servia para confirmar que o kernel testado era o novo.
+
+## v2.1.0 (etapa 2.8: GPT e raiz em ext2; fecha o M2)
+
+- O kernel le GPT: quando o MBR tem uma entrada do tipo `0xEE` (MBR
+  protetor), o cabecalho em LBA 1 e conferido (assinatura, tamanho, LBA dele
+  mesmo, CRC32 do cabecalho e do vetor de entradas, limites dentro do disco,
+  vetor de no maximo 256 KiB); se o principal estiver ruim, vale a copia do
+  ultimo setor, com aviso. Cada entrada com tipo diferente de zero e dentro da
+  area utilizavel vira um dispositivo `sdXN` (N e a posicao da entrada, como no
+  Linux). O tipo e guardado (`part_kind`): ESP, raiz Linux x86-64
+  (`4F68BCE3-...`), dados Linux ou outro. Disco sem `0xEE` continua lido como
+  MBR, como antes. O CRC32 e uma funcao nova em `lib/crc32.c`.
+- Escolha da raiz: primeiro uma particao GPT de raiz Linux x86-64 montada como
+  ext2; se nao houver (ou nao montar), o caminho antigo, que monta como FAT a
+  primeira particao que aceitar (o `vvfat` do QEMU continua funcionando). Com a
+  raiz em ext2, a ESP do mesmo disco e montada em `/boot/efi`, como nas
+  distribuicoes Linux: e onde ficam o Limine e o `orion.elf`. Nao ha opcao
+  `root=` na linha de comando ainda; a escolha pelo tipo da particao basta para
+  o disco que o `build.ps1 -Image` gera e para o instalador da 7.3.
+- Bug achado: o ext2 so montava com escrita se o proprio dispositivo tivesse a
+  funcao de escrita, e particao nao tem (a escrita passa pelo disco pai). Ate
+  aqui o ext2 so tinha sido montado em disco inteiro (`sdc`, `sdd`), por isso
+  nao aparecia. `blockdev_writable` resolve o disco de baixo; o FAT, que fazia
+  essa conta a mao com um nivel so, passou a usar a mesma funcao.
+- `tools/mkimage.py` gera o `out\orion.img` no hospedeiro, sem depender de
+  ferramenta do Windows: MBR protetor, GPT principal e de reserva (128
+  entradas), ESP de 64 MiB em FAT16 a partir de 1 MiB e a raiz em ext2 logo
+  depois (o conteudo e uma folga, no minimo 256 MiB, blocos de 4 KiB, 8192
+  inodes por grupo). O FAT16 e escrito pelo proprio script (setor de boot,
+  duas FATs, raiz de 512 entradas, nomes longos com o apelido 8.3), so com o
+  que o firmware e o Limine precisam: `EFI/BOOT/BOOTX64.EFI`,
+  `boot/limine/limine.conf` e `boot/orion.elf`. A raiz em ext2 sai do
+  `mkext2.py` (usado como modulo) com os diretorios que o build gerou em
+  `out\esp` (menos `boot` e `EFI`, e sem os arquivos soltos na raiz do
+  `out\esp`, que sao restos de testes antigos no `vvfat`), mais os pontos de
+  montagem (`/boot/efi`, `/dev`, `/proc`, `/tmp` com `01777`, `/run`, `/mnt`,
+  `/root`). Arquivo que comeca com o cabecalho ELF ganha `0755`, o resto
+  `0644`. Os GUIDs unicos sao sorteados a cada imagem.
+- FAT16 e nao FAT32 na ESP: o firmware do QEMU e o Limine leem os dois, o
+  kernel tambem, e o FAT16 e mais simples de gerar certo. A especificacao UEFI
+  pede FAT32 na ESP; a 7.3 (instalador) ou a 7.4 (hardware real) trocam se
+  algum firmware recusar.
+- `build.ps1 -Image` gera a imagem depois do build; `-Run -Image` boota dela.
+  `test.ps1 -Image` e `qrun.py --image` usam o `out\orion.img` no lugar do
+  `fat:rw:out/esp`, e os dois harness ganharam o passo `reboot:`: encerra o
+  QEMU pelo monitor, sobe de novo com os mesmos discos e espera o prompt,
+  anotando `----- reboot -----` no log. A regressao inteira (A a E) roda na
+  imagem; o `vvfat` saiu da rotina, mas continua sendo o padrao do
+  `build.ps1 -Run` e do `test.ps1` sem `-Image`.
+- Como a regressao escreve na raiz (testes que criam arquivos em `/`), a
+  imagem e regerada em todo build da regressao; `-NoBuild` reaproveita a
+  imagem com o que as rodadas anteriores deixaram, como acontecia com o
+  `out\esp`.

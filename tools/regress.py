@@ -31,7 +31,7 @@ def parse_sequences():
         end = re.search(r"^\}\s*$", body, flags=re.M)
         if end:
             body = body[:end.start()]
-        seq = {"name": name, "steps": [], "expect": [], "memdelta": None, "shots": [], "disk": False, "gui": False,
+        seq = {"name": name, "steps": [], "expect": [], "memdelta": None, "shots": [], "disk": False, "gui": False, "image": False,
                "extra": [], "prep": [],
                "delay": 1.0, "boot": 60.0, "remove_disk": False, "log": f"out/reg-{name.lower()}.log",
                "stress": None}
@@ -46,6 +46,7 @@ def parse_sequences():
             if ex:
                 seq["extra"] = [ps_string(s) for s in STRING.finditer(ex.group(1))]
             seq["gui"] = "-Gui" in c
+            seq["image"] = "-Image" in c
             d = re.search(r"-CommandDelay\s+([\d.]+)", c)
             if d:
                 seq["delay"] = float(d.group(1))
@@ -129,12 +130,12 @@ class Report:
             self.failures.append(desc)
 
 
-def run_stress(seq, rep, runs, smp):
+def run_stress(seq, rep, runs, smp, image=False):
     cmd = seq["stress"]
     for i in range(1, runs + 1):
         log_path = f"out/reg-e-{i}.log"
         _, log = qrun.run([f"cmd:{cmd}", "cmd:echo FIM$X-ESTRESSE", "until:1200:FIM-ESTRESSE"], smp=smp,
-                          no_build=True, log_path=log_path)
+                          no_build=True, log_path=log_path, image=image)
         rep.expect(log, r"\nFIM-ESTRESSE", f"estresse rodada {i}: pipeline terminou")
         rep.expect(log, r"stress: \d+ processos, 0 falha\(s\) ok", f"estresse rodada {i}: 0 falhas")
         rep.checks += 1
@@ -155,6 +156,7 @@ def main():
     a = ap.parse_args()
 
     seqs = parse_sequences()
+    image = any(s["image"] for s in seqs.values())
     rep = Report()
     built = a.no_build
     for name in a.which.upper():
@@ -166,14 +168,14 @@ def main():
         print(f"== Sequencia {name} ==")
         if seq["stress"]:
             if not built:
-                qrun.build(False)
+                qrun.build(False, image)
                 built = True
-            run_stress(seq, rep, a.stress_runs, a.smp)
+            run_stress(seq, rep, a.stress_runs, a.smp, seq["image"])
             continue
         if seq["remove_disk"]:
             (ROOT / "out" / "disk.img").unlink(missing_ok=True)
         if seq["prep"] and not built:
-            qrun.build(False)
+            qrun.build(False, image)
             built = True
         for args in seq["prep"]:
             subprocess.run([sys.executable, str(ROOT / "tools" / "mkext2.py")] + args, check=True, cwd=ROOT)
@@ -181,11 +183,13 @@ def main():
         if seq["gui"] and a.no_build:
             no_build = True
         _, log = qrun.run(seq["steps"], smp=a.smp, disk=seq["disk"], extra_disks=seq["extra"], gui=seq["gui"],
-                          no_build=no_build,
+                          no_build=no_build, image=seq["image"],
                           boot_timeout=seq["boot"], command_delay=seq["delay"], log_path=seq["log"])
         built = built or not seq["gui"]
         if seq["gui"]:
             qrun.write_autostart(False)
+            if image and qrun.make_image().returncode != 0:
+                rep.failures.append("mkimage depois da sequencia grafica")
         if a.verbose:
             print(log)
         for pat, desc, negate in seq["expect"]:

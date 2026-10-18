@@ -1432,17 +1432,43 @@ void vfs_init(void)
     spinlock_init(&vfs_lock);
     mutex_init(&mount_lock, "vfs-mount");
     pcache_init();
-    for (uint32_t i = 0; i < blockdev_count(); i++) {
+    for (uint32_t i = 0; i < blockdev_count() && !root_mount; i++) {
+        struct blockdev *dev = blockdev_at(i);
+        if (!dev->parent || dev->part_kind != PART_ROOT)
+            continue;
+        char src[VFS_SOURCE_MAX];
+        ksnprintf(src, sizeof(src), "/dev/%s", dev->name);
+        if (vfs_mount(&ext2_fs_type, dev, src, NULL, "/", 0, NULL) == 0)
+            log_info("vfs", "raiz montada: %s em %s", root_mount->subtype, dev->name);
+        else
+            log_warn("vfs", "%s e uma particao de raiz, mas nao montou como ext2", dev->name);
+    }
+    for (uint32_t i = 0; i < blockdev_count() && !root_mount; i++) {
         struct blockdev *dev = blockdev_at(i);
         if (!dev->parent)
             continue;
         char src[VFS_SOURCE_MAX];
         ksnprintf(src, sizeof(src), "/dev/%s", dev->name);
-        if (vfs_mount(&fat_fs_type, dev, src, NULL, "/", 0, NULL) == 0) {
+        if (vfs_mount(&fat_fs_type, dev, src, NULL, "/", 0, NULL) == 0)
             log_info("vfs", "raiz montada: %s em %s", root_mount->subtype, dev->name);
-            break;
-        }
     }
-    if (!root_mount)
+    if (!root_mount) {
         log_warn("vfs", "nenhum sistema de arquivos reconhecido");
+        return;
+    }
+    if (root_mount->type != &ext2_fs_type)
+        return;
+    for (uint32_t i = 0; i < blockdev_count(); i++) {
+        struct blockdev *dev = blockdev_at(i);
+        if (dev->part_kind != PART_ESP || dev->parent != root_mount->dev->parent)
+            continue;
+        char src[VFS_SOURCE_MAX];
+        ksnprintf(src, sizeof(src), "/dev/%s", dev->name);
+        int r = vfs_mount_kernel("vfat", dev, src, "/boot/efi");
+        if (r == 0)
+            log_info("vfs", "particao EFI %s montada em /boot/efi", dev->name);
+        else
+            log_warn("vfs", "particao EFI %s nao montou em /boot/efi (erro %d)", dev->name, -r);
+        break;
+    }
 }

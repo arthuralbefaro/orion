@@ -16,7 +16,8 @@ param(
     [switch]$KernelShell,
     [switch]$Disk,
     [string[]]$ExtraDisks = @(),
-    [switch]$Gui
+    [switch]$Gui,
+    [switch]$Image
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,10 +32,10 @@ function Find-Tool([string]$Name, [string[]]$Fallbacks) {
 }
 
 if (-not $NoBuild) {
-    if ($Gui) { & (Join-Path $Root "build.ps1") -Gui | Out-Null }
-    else      { & (Join-Path $Root "build.ps1") | Out-Null }
+    & (Join-Path $Root "build.ps1") -Gui:$Gui -Image:$Image | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "build.ps1 falhou" }
 }
+if ($Image -and -not (Test-Path (Join-Path $OutDir "orion.img"))) { throw "out\orion.img nao existe: rode .\build.ps1 -Image" }
 
 $Qemu = Find-Tool "qemu-system-x86_64.exe" @("$env:ProgramFiles\qemu\qemu-system-x86_64.exe")
 $QemuDir = Split-Path $Qemu -Parent
@@ -79,7 +80,7 @@ $qemuArgs = @(
     "-M", "q35", "-cpu", "qemu64", "-smp", "$Smp", "-m", "${Memory}M",
     "-drive", "if=pflash,format=raw,unit=0,file=$ovmfCode,readonly=on",
     "-drive", "if=pflash,format=raw,unit=1,file=$ovmfVars",
-    "-drive", "format=raw,file=fat:rw:out/esp",
+    "-drive", $(if ($Image) { "format=raw,file=out/orion.img" } else { "format=raw,file=fat:rw:out/esp" }),
     "-display", "none",
     "-serial", "tcp:127.0.0.1:$SerialPort,server,nowait",
     "-monitor", "tcp:127.0.0.1:$MonitorPort,server,nowait",
@@ -93,9 +94,13 @@ foreach ($extra in $ExtraDisks) { $qemuArgs += @("-drive", "format=raw,file=$ext
 
 $qemuErr = Join-Path $OutDir "test-qemu.log"
 $quoted = $qemuArgs | Where-Object { $_ } | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
-$proc = Start-Process -FilePath $Qemu -ArgumentList $quoted -PassThru -WindowStyle Hidden `
-    -WorkingDirectory $Root -RedirectStandardError $qemuErr
-Write-Host "QEMU pid $($proc.Id), smp $Smp" -ForegroundColor DarkGray
+function Start-Qemu {
+    $p = Start-Process -FilePath $Qemu -ArgumentList $quoted -PassThru -WindowStyle Hidden `
+        -WorkingDirectory $Root -RedirectStandardError $qemuErr
+    Write-Host "QEMU pid $($p.Id), smp $Smp" -ForegroundColor DarkGray
+    return $p
+}
+$proc = Start-Qemu
 
 $log = New-Object System.Text.StringBuilder
 $client = $null
@@ -303,6 +308,27 @@ try {
                 }
             }
             "shot" { Pump-Serial 0.4; Take-Screenshot $arg }
+            "reboot" {
+                Write-Host "  reboot" -ForegroundColor DarkGray
+                Pump-Serial 0.5
+                try { Send-Monitor "quit" } catch {}
+                try { $client.Close() } catch {}
+                try { if ($monitor) { $monitor.Close() } } catch {}
+                $monitor = $null
+                if (-not $proc.WaitForExit(10000)) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+                [void](Wait-PortFree $SerialPort 20)
+                [void](Wait-PortFree $MonitorPort 20)
+                [void]$log.Append("`n----- reboot -----`n")
+                $from = $log.Length
+                $proc = Start-Qemu
+                $client = Connect-Port $SerialPort $BootTimeout
+                if (Wait-After '$ ' $BootTimeout $from) {
+                    Write-Host "prompt do shell de usuario detectado" -ForegroundColor DarkGray
+                } else {
+                    Write-Host "AVISO: prompt do shell nao apareceu em $BootTimeout s depois do reboot" -ForegroundColor Yellow
+                }
+                $cmdPos = $log.Length
+            }
             default { Write-Host "  passo desconhecido: $step" -ForegroundColor Yellow }
         }
     }

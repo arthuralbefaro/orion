@@ -65,7 +65,8 @@ def port_free(port):
 
 class Machine:
     def __init__(self, smp=4, memory=512, disk=False, extra_disks=(), serial_port=4444, monitor_port=4445,
-                 boot_timeout=60.0):
+                 boot_timeout=60.0, image=False):
+        self.image = image
         self.smp = smp
         self.memory = memory
         self.disk = disk
@@ -98,7 +99,7 @@ class Machine:
             qemu, "-M", "q35", "-cpu", "qemu64", "-smp", str(self.smp), "-m", f"{self.memory}M",
             "-drive", f"if=pflash,format=raw,unit=0,file={code},readonly=on",
             "-drive", f"if=pflash,format=raw,unit=1,file={vars_copy}",
-            "-drive", "format=raw,file=fat:rw:out/esp",
+            "-drive", "format=raw,file=out/orion.img" if self.image else "format=raw,file=fat:rw:out/esp",
             "-display", "none",
             "-serial", f"tcp:127.0.0.1:{self.serial_port},server,nowait",
             "-monitor", f"tcp:127.0.0.1:{self.monitor_port},server,nowait",
@@ -256,15 +257,30 @@ class Machine:
         elif kind == "shot":
             self.pump(0.4)
             self.screenshot(arg)
+        elif kind == "reboot":
+            print("  reboot")
+            self.pump(0.5)
+            self.stop()
+            self.monitor = None
+            self.log += b"\n----- reboot -----\n"
+            start = len(self.log)
+            self.start()
+            if self.wait_for("$ ", self.boot_timeout, start):
+                print("prompt do shell de usuario detectado")
+            else:
+                print(f"AVISO: prompt do shell nao apareceu em {self.boot_timeout} s depois do reboot")
+            self.cmd_pos = len(self.log)
         else:
             print(f"  passo desconhecido: {step}")
 
 
-def build(gui=False):
+def build(gui=False, image=False):
     if platform.system() == "Windows":
         cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "build.ps1")]
         if gui:
             cmd.append("-Gui")
+        if image:
+            cmd.append("-Image")
         r = subprocess.run(cmd, cwd=ROOT, stdout=subprocess.DEVNULL)
     else:
         r = subprocess.run(["make", "-j", str(os.cpu_count() or 2)], cwd=ROOT, stdout=subprocess.DEVNULL)
@@ -273,8 +289,15 @@ def build(gui=False):
             import musl_build
             musl_build.build_all(quiet=True)
             write_autostart(gui)
+            if image:
+                r = make_image()
     if r.returncode != 0:
         raise SystemExit("build falhou")
+
+
+def make_image():
+    return subprocess.run([sys.executable, str(ROOT / "tools" / "mkimage.py"), str(OUT / "orion.img"),
+                           "--esp", str(OUT / "esp")], cwd=ROOT, stdout=subprocess.DEVNULL)
 
 
 def write_autostart(gui):
@@ -289,12 +312,17 @@ def write_autostart(gui):
 
 
 def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_build=False, boot_timeout=60.0,
-        command_delay=1.0, settle=2.0, log_path="out/test-serial.log", kernel_shell=False):
+        command_delay=1.0, settle=2.0, log_path="out/test-serial.log", kernel_shell=False, image=False):
     if not no_build:
-        build(gui)
+        build(gui, image)
     elif gui:
         write_autostart(True)
-    m = Machine(smp=smp, memory=memory, disk=disk, extra_disks=extra_disks, boot_timeout=boot_timeout)
+        if image and make_image().returncode != 0:
+            raise SystemExit("mkimage falhou")
+    if image and not (OUT / "orion.img").exists():
+        raise SystemExit("out/orion.img nao existe: rode o build com a imagem")
+    m = Machine(smp=smp, memory=memory, disk=disk, extra_disks=extra_disks, boot_timeout=boot_timeout,
+                image=image)
     code = 0
     try:
         m.start()
@@ -330,6 +358,7 @@ def main():
     ap.add_argument("--memory", type=int, default=512)
     ap.add_argument("--disk", action="store_true")
     ap.add_argument("--gui", action="store_true")
+    ap.add_argument("--image", action="store_true", help="boota do out/orion.img (GPT, raiz em ext2)")
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--kernel-shell", action="store_true")
     ap.add_argument("--boot-timeout", type=float, default=60.0)
@@ -341,7 +370,7 @@ def main():
     steps = [f"cmd:{c}" for c in a.command] + a.steps
     code, text = run(steps, smp=a.smp, memory=a.memory, disk=a.disk, gui=a.gui, no_build=a.no_build,
                      boot_timeout=a.boot_timeout, command_delay=a.delay, settle=a.settle,
-                     log_path=a.log, kernel_shell=a.kernel_shell)
+                     log_path=a.log, kernel_shell=a.kernel_shell, image=a.image)
     if not a.quiet:
         print(f"----- {a.log} -----")
         print(text)

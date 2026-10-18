@@ -27,13 +27,15 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-17, 22:40, sessao 2): 2.1 a 2.7 e 8.7 commitadas. A 2.7
-fechou em duas partes (links simbolicos; modo, dono e datas). Versao
-2.1.0-a7, regressao com 300 verificacoes.
+Estado (2026-10-17, 23:25, sessao 2): Fase 2 inteira (2.1 a 2.8) e 8.7
+commitadas; marco M2 fechado com a tag `v2.1`. Versao 2.1.0. A regressao
+inteira roda no `out\orion.img` (GPT, raiz em ext2), com 307 verificacoes.
 
-Proxima etapa: 2.8 (GPT, `build.ps1 -Image` gerando `out\orion.img` com ESP
-em FAT e raiz em ext2, boot com raiz em ext2, regressao inteira nessa imagem e
-arquivos que sobrevivem a reboot), que fecha o M2 (tag `v2.1`, versao 2.1.0).
+Proxima etapa: 3.1 (TCP parte 1: cabecalho, checksum, tabela de conexoes,
+`RST` para porta fechada). O plano poe o TCP em Rust; como dois `staticlib`
+Rust no mesmo kernel duplicariam `core`, alocador e `panic`, a ideia e um
+crate `staticlib` unico que junta `ext2` e `tcp` como `rlib` (o `kernel.rs`
+do ext2 muda para ele). A versao da Fase 3 comeca em 2.2.0-a1.
 
 A hora na linha de boot agora muda a cada build que recompila algo do kernel
 (o `main.c` e recompilado junto); antes so mudava com o proprio `main.c`.
@@ -68,7 +70,7 @@ A hora na linha de boot agora muda a cada build que recompila algo do kernel
 | 2.5 | ext2 leitura, piloto em Rust | [x] | 14:56 | 16:36 | ver `git log` |
 | 2.6 | ext2 escrita, mkfs.ext2, fsck | [x] | 16:36 | 19:00 | ver `git log` (3 partes) |
 | 2.7 | Links simbolicos, chmod, chown, utime | [x] | 20:20 | 22:40 | `921c465` e ver `git log` (parte 2) |
-| 2.8 | GPT e raiz em ext2 | [ ] | | | |
+| 2.8 | GPT e raiz em ext2 | [x] | 22:42 | 23:25 | ver `git log` (tag `v2.1`) |
 | 3.1 | TCP parte 1 | [ ] | | | |
 | 3.2 | TCP parte 2 | [ ] | | | |
 | 3.3 | TCP parte 3 | [ ] | | | |
@@ -691,6 +693,34 @@ e os scripts passaram a ir para arquivo no scratchpad.
 Ficou de fora: conferir permissao (todo processo e root ate a 4.1), `atime`
 na leitura (comportamento de `noatime`), `chmod`/`chown` no devfs e no procfs
 (`EPERM`), links fisicos (`link`, nao estao no plano).
+
+#### 2.8 GPT e raiz em ext2 - 22:42 a 23:25 - FEITO (fecha o M2)
+O kernel le GPT (MBR protetor, cabecalho e vetor de entradas com CRC32, copia
+de reserva no fim do disco quando o principal esta ruim) e guarda o tipo de
+cada particao. A raiz e a particao GPT de raiz Linux x86-64 montada como ext2;
+sem ela, vale o caminho antigo (primeira particao FAT, o `vvfat`). Com a raiz
+em ext2, a ESP do mesmo disco vai para `/boot/efi`. `tools/mkimage.py` (novo)
+gera o `out\orion.img` no hospedeiro: GPT, ESP de 64 MiB em FAT16 escrita pelo
+proprio script (Limine e `orion.elf`) e a raiz em ext2 pelo `mkext2.py` com o
+que o build pos no `out\esp`, mais os pontos de montagem. `build.ps1 -Image`,
+`-Run -Image`, `test.ps1 -Image` e `qrun.py --image`; os dois harness ganharam
+o passo `reboot:`. A regressao inteira (A a E) passou a bootar da imagem: o
+`vvfat` saiu da rotina. Verificacoes novas na A: GPT com as duas particoes,
+raiz ext2 montada com escrita, ESP em `/boot/efi`, `ls -l` na raiz (binario
+`0755`) e no FAT da ESP, e um arquivo gravado na raiz que sobrevive a um
+reboot (o criterio da etapa). Regressao 300 -> 307, estresse 5x verde.
+Versao 2.1.0, tag `v2.1`.
+Problema achado: o ext2 montava somente leitura numa particao, porque o
+`ext2v_mount` olhava `dev->write`, que e nulo em particao (a escrita passa
+pelo disco pai); ate aqui ele so tinha sido montado em disco inteiro.
+`blockdev_writable` resolve o disco de baixo, e o FAT passou a usar a mesma
+funcao. Fora isso a regressao inteira passou de primeira na raiz ext2, o que
+exercitou o ext2 com todos os testes que escrevem em `/`.
+Ficou de fora: opcao `root=` na linha de comando (a raiz e escolhida pelo tipo
+da particao), ESP em FAT32 (a especificacao UEFI pede FAT32; o QEMU e o Limine
+aceitam FAT16, a 7.3/7.4 trocam se algum firmware recusar) e desligar limpo
+(sem `poweroff` ate a 5.1, o ext2 fica marcado como nao desmontado; o `sync`
+antes de fechar garante os dados).
 
 ### Sessao 2 - 2026-10-17
 
