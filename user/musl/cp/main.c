@@ -13,7 +13,9 @@ static int copy_file(const char *from, const char *to)
         fprintf(stderr, "cp: %s: %s\n", from, orion_strerror(errno));
         return 1;
     }
-    int out = open(to, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    struct stat st;
+    mode_t mode = fstat(in, &st) == 0 ? (st.st_mode & 0777) : 0644;
+    int out = open(to, O_WRONLY | O_CREAT | O_TRUNC, mode);
     if (out < 0) {
         fprintf(stderr, "cp: %s: %s\n", to, orion_strerror(errno));
         close(in);

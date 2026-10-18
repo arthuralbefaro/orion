@@ -356,7 +356,7 @@ static int vnode_for_entry(struct mount *m, struct fat_fs *f, uint32_t dirc, con
         return make_vnode(m, dir_key(c), S_IFDIR | 0755, 0, c, dotdot ? 0 : dirc,
                           dotdot ? 0 : l->off, !dotdot, out);
     }
-    return make_vnode(m, file_key(dirc, l->off), S_IFREG | 0644, l->d.size, c, dirc, l->off, true, out);
+    return make_vnode(m, file_key(dirc, l->off), S_IFREG | 0755, l->d.size, c, dirc, l->off, true, out);
 }
 
 static int fat_lookup(struct vnode *dir, const char *name, struct vnode **out)
@@ -412,7 +412,7 @@ static bool readdir_cb(struct fat_fs *f, const struct fat_dirent *d, const char 
         e.size = 0;
     } else {
         e.ino = vcache_ino(r->m, file_key(r->dirc, dir_offset));
-        e.mode = S_IFREG | 0644;
+        e.mode = S_IFREG | 0755;
         e.size = d->size;
     }
     if (!r->cb(&e, r->ctx))
@@ -1207,7 +1207,8 @@ static void epoch_to_fat(int64_t sec, uint16_t *date, uint16_t *time)
 
 static uint32_t fat_perm(const struct vnode *v)
 {
-    return vnode_is_dir(v) ? 0755 : 0644;
+    (void)v;
+    return 0755;
 }
 
 static int fat_getattr(struct vnode *v, struct vattr *out)
@@ -1345,7 +1346,7 @@ static int fat_create(struct vnode *dir, const char *name, uint32_t mode, struct
     }
     bool flushed = fat_flush(f);
     int r = is_dir ? make_vnode(dir->mnt, dir_key(cluster), S_IFDIR | 0755, 0, cluster, dn->first, off, true, out)
-                   : make_vnode(dir->mnt, file_key(dn->first, off), S_IFREG | 0644, 0, 0, dn->first, off, true,
+                   : make_vnode(dir->mnt, file_key(dn->first, off), S_IFREG | 0755, 0, 0, dn->first, off, true,
                                 out);
     mutex_unlock(&f->lock);
     if (r == 0 && !flushed)

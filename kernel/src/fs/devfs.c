@@ -83,7 +83,7 @@ static struct file *random_open(void)
 static const struct device devices[] = {
     { "fb0",    fbdev_open,     fbdev_size, S_IFCHR | 0660 },
     { "input",  input_open,     size_zero,  S_IFCHR | 0640 },
-    { "tty",    file_open_tty,  size_zero,  S_IFCHR | 0620 },
+    { "tty",    file_open_tty,  size_zero,  S_IFCHR | 0666 },
     { "null",   null_open,      size_zero,  S_IFCHR | 0666 },
     { "zero",   zero_open,      size_zero,  S_IFCHR | 0666 },
     { "random", random_open,    size_zero,  S_IFCHR | 0444 },

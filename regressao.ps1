@@ -178,6 +178,8 @@ if ($runAll -or $OnlyA) {
         "cmd:httpd -n 3 -r / &", "wait:2", "hostget:8081:/etc/passwd", "hostget:8081:/nao-existe", "hostget:8081:/etc",
         "wait:2", "cmd:httpd -n 1 &", "wait:2", "hostget:8081:/etc/group", "wait:2",
         "cmd:unixtest /run", "until:60:falha(s))", "cmd:unixtest /", "until:60:falha(s))",
+        "cmd:permtest /tmp", "until:90:falha(s))", "cmd:permtest /", "until:90:falha(s))",
+        "cmd:ls -l /etc/shadow", "cmd:id", "wait:1",
         "cmd:ping 127.0.0.1 2", "wait:4",
         "cmd:httpd -p 8080 -n 1 &", "wait:2", "cmd:httpget 127.0.0.1 8080 /etc/group", "until:30:crc32", "wait:2",
         "cmd:cd /tmp", "cmd:wget http://example.com", "until:30:salvo", "cmd:grep Example index.html", "wait:1",
@@ -352,7 +354,7 @@ if ($runAll -or $OnlyA) {
     Expect $a "-rw-r-----\s+1\s+12\s+34\s+0 \w{3} [ \d]\d \d\d:\d\d /tmp/lsx" "ls -l mostra modo, dono e grupo (chmod e chown do sbase)"
     Expect $a "lrwxrwxrwx\s+1\s+root\s+root\s+3 \w{3} [ \d]\d \d\d:\d\d /tmp/lsl -> lsx" "ls -l mostra o link, o alvo e o nome do dono pelo /etc/passwd"
     Expect $a "-rwxr-xr-x\s+1\s+root\s+root\s+\d+ \w{3} [ \d]\d( \d\d:\d\d|  \d{4}) /bin/ls" "ls -l na raiz ext2: binario com modo 0755"
-    Expect $a "-rw-r--r--\s+1\s+root\s+root\s+\d+ \w{3} [ \d]\d( \d\d:\d\d|  \d{4}) orion\.elf" "ls -l no FAT da particao EFI com a data da entrada"
+    Expect $a "-rwxr-xr-x\s+1\s+root\s+root\s+\d+ \w{3} [ \d]\d( \d\d:\d\d|  \d{4}) orion\.elf" "ls -l no FAT da particao EFI com a data da entrada"
     Expect $a "sda1: GPT, LBA 2048, \d+ setores \(64 MiB\), ESP" "GPT: particao EFI reconhecida"
     Expect $a "sda2: GPT, LBA \d+, \d+ setores \(\d+ MiB\), raiz Linux x86-64" "GPT: particao de raiz reconhecida"
     Expect $a "raiz montada: ext2 em sda2" "raiz em ext2 na particao GPT"
@@ -377,6 +379,12 @@ if ($runAll -or $OnlyA) {
     Expect $a "(?s)httpd: fim, 3 conexao.*?\[hostget\] porta 8081 /etc/group: HTTP/1\.0 200 OK" "SO_REUSEADDR: segundo httpd na mesma porta com conexoes em TIME_WAIT"
     Expect $a "(?s)unixtest: sockets AF_UNIX em /run\s.*?unixtest: TUDO OK" "AF_UNIX no tmpfs: socketpair, bind, listen, connect, accept, poll, nomes"
     Expect $a "(?s)unixtest: sockets AF_UNIX em /\s*\n.*?unixtest: TUDO OK" "AF_UNIX com o no do socket na raiz ext2"
+    Expect $a "(?s)permtest: permissoes em /tmp\s.*?permtest: TUDO OK" "permtest no tmpfs: uid/gid, permissoes, sticky, setuid"
+    Expect $a "(?s)permtest: permissoes em /\s*\n.*?permtest: TUDO OK" "permtest na raiz ext2"
+    Expect $a "usuario comum nao le o /etc/shadow\s+ok" "usuario comum nao le o /etc/shadow"
+    Expect $a "binario setuid de root roda com euid 0\s+ok" "binario setuid troca o euid no exec"
+    Expect $a "-rw-------\s+1\s+root\s+root\s+\d+ [^\n]*/etc/shadow" "/etc/shadow e 0600 de root na imagem"
+    Expect $a "\nuid=0\(root\) gid=0\(root\)" "id mostra root pelo /etc/passwd"
     Expect $a "64 bytes de 127\.0\.0\.1: seq=2" "loopback: ping 127.0.0.1"
     Expect $a "httpd: 127\.0\.0\.1:\d+ GET /etc/group -> 200" "loopback: httpd atende o httpget em 127.0.0.1"
     Expect $a "(?s)httpget 127\.0\.0\.1 8080 /etc/group.*?root:x:0:.*?httpget: HTTP/1\.0 200 OK" "loopback: httpget recebe a resposta"
@@ -554,8 +562,8 @@ if ($runAll -or $OnlyC) {
         "cmd:mount -r /dev/sdb /mnt", "cmd:cat /mnt/f1.txt | grep TUDO | wc", "cmd:echo x > /mnt/ro.txt",
         "cmd:umount /mnt", "cmd:mount /dev/sdb /mnt",
         "cmd:echo rw-ok > /mnt/rw.txt", "cmd:cat /mnt/rw.txt", "cmd:rm /mnt/rw.txt",
-        "cmd:touch /mnt/t1", "cmd:chmod 444 /mnt/t1", "cmd:ls -l /mnt/t1", "cmd:chmod 600 /mnt/t1",
-        "cmd:chmod 644 /mnt/t1", "cmd:rm /mnt/t1", "wait:1",
+        "cmd:touch /mnt/t1", "cmd:chmod 555 /mnt/t1", "cmd:ls -l /mnt/t1", "cmd:chmod 600 /mnt/t1",
+        "cmd:chmod 755 /mnt/t1", "cmd:rm /mnt/t1", "wait:1",
         "cmd:mkdir /mnt/q", "cmd:mount /dev/sdb /mnt/q", "cmd:rm -r /mnt/q", "wait:1",
         "cmd:mkdir /tmp/e4", "cmd:mount -t ext2 /dev/sdc /tmp/e4", "cmd:ext2test /tmp/e4", "until:300:falha(s))",
         "cmd:/tmp/e4/bin/hello ext2", "wait:2",
@@ -644,7 +652,7 @@ if ($runAll -or $OnlyC) {
     Expect $c "(?s)attrtest: modo, dono e datas em /tmp/e1.*?attrtest: TUDO OK.*?FIM-ATTR" "attrtest no ext2"
     Expect $c "(?s)attrtest: conferindo at/keep em /tmp/e1.*?modo sobreviveu\s+ok.*?dono e grupo sobreviveram\s+ok.*?datas sobreviveram\s+ok.*?attrtest: TUDO OK.*?FIM-KEEP" "ext2: modo, dono e datas sobrevivem ao umount e mount"
     Expect $c "(?s)FIM-KEEP.*?fsck\.ext2: /dev/sdd: limpo.*?FIM-FSCK4" "ext2 limpo no fsck depois do fstest -a, do linktest e do attrtest"
-    Expect $c "-r--r--r--\s+1\s+root\s+root\s+0 \w{3} [ \d]\d \d\d:\d\d /mnt/t1" "FAT: chmod 444 liga o somente leitura"
+    Expect $c "-r-xr-xr-x\s+1\s+root\s+root\s+0 \w{3} [ \d]\d \d\d:\d\d /mnt/t1" "FAT: chmod 555 liga o somente leitura"
     Expect $c "chmod /mnt/t1: Operation not permitted" "FAT: chmod que o FAT nao guarda da EPERM"
     Test-MemDelta $c "memoria estavel na sequencia C" 24
 }

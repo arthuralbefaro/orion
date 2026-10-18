@@ -20,6 +20,7 @@
 #include <kernel/wait.h>
 #include <kernel/futex.h>
 #include <kernel/timesys.h>
+#include <kernel/cred.h>
 #include <kernel/signal.h>
 #include <mm/heap.h>
 #include <net/socket.h>
@@ -387,7 +388,9 @@ static long sys_truncate(const char *upath, uint64_t size)
     long r = walk_user(AT_FDCWD, upath, &v, &up);
     if (r < 0)
         return r;
-    r = vfs_truncate(v, size);
+    r = vnode_is_dir(v) ? -EISDIR : vfs_permission(v, VFS_MAY_WRITE);
+    if (r == 0)
+        r = vfs_truncate(v, size);
     vnode_put(v);
     return r;
 }
@@ -803,11 +806,23 @@ static long attr_target(int dirfd, const char *upath, int flags, struct vnode **
     return walk_user_ex(dirfd, upath, !(flags & AT_SYMLINK_NOFOLLOW), out, &up);
 }
 
+static long owner_or_root(struct vnode *v, struct cred *c, struct vattr *cur)
+{
+    cred_get(c);
+    vfs_getattr(v, cur);
+    return (c->euid == 0 || c->euid == cur->uid) ? 0 : -EPERM;
+}
+
 static long chmod_vnode(struct vnode *v, uint32_t mode)
 {
     long r = -EOPNOTSUPP;
-    if (!vnode_is_link(v)) {
-        struct vattr va = { .mask = VA_MODE, .mode = mode & 07777 };
+    struct cred c;
+    struct vattr cur;
+    if (!vnode_is_link(v) && (r = owner_or_root(v, &c, &cur)) == 0) {
+        mode &= 07777;
+        if (c.euid != 0 && !cred_member(&c, cur.gid))
+            mode &= ~(uint32_t)S_ISGID;
+        struct vattr va = { .mask = VA_MODE, .mode = mode };
         r = vfs_setattr(v, &va);
     }
     vnode_put(v);
@@ -841,7 +856,17 @@ static long chown_vnode(struct vnode *v, uint32_t uid, uint32_t gid)
     }
     if (!vnode_is_dir(v))
         va.mask |= VA_KILL_SUID;
-    long r = vfs_setattr(v, &va);
+    struct cred c;
+    struct vattr cur;
+    long r = owner_or_root(v, &c, &cur);
+    if (r == 0 && c.euid != 0) {
+        if ((va.mask & VA_UID) && va.uid != cur.uid)
+            r = -EPERM;
+        else if ((va.mask & VA_GID) && va.gid != cur.gid && !cred_member(&c, va.gid))
+            r = -EPERM;
+    }
+    if (r == 0)
+        r = vfs_setattr(v, &va);
     vnode_put(v);
     return r;
 }
@@ -894,8 +919,16 @@ static long set_times(int dirfd, const char *upath, int flags, const struct user
     }
     if (r < 0)
         return r;
-    if (va.mask)
-        r = vfs_setattr(v, &va);
+    if (va.mask) {
+        struct cred c;
+        struct vattr cur;
+        r = owner_or_root(v, &c, &cur);
+        bool to_now = !ts || (ts[0].tv_nsec == UTIME_NOW && ts[1].tv_nsec == UTIME_NOW);
+        if (r < 0 && to_now && vfs_permission(v, VFS_MAY_WRITE) == 0)
+            r = 0;
+        if (r == 0)
+            r = vfs_setattr(v, &va);
+    }
     vnode_put(v);
     return r;
 }
@@ -943,7 +976,7 @@ static long sys_utime(const char *upath, const int64_t *ubuf)
     return set_times(AT_FDCWD, upath, 0, ubuf ? ts : NULL);
 }
 
-static long faccess(int dirfd, const char *upath, int mode, bool follow)
+static long faccess(int dirfd, const char *upath, int mode, bool follow, bool effective)
 {
     if (mode & ~7)
         return -EINVAL;
@@ -954,13 +987,18 @@ static long faccess(int dirfd, const char *upath, int mode, bool follow)
         return r;
     if ((mode & 2) && (vnode_is_reg(v) || vnode_is_dir(v)) && vfs_is_rdonly(v))
         r = -EROFS;
+    if (r == 0 && mode) {
+        struct cred c;
+        cred_get(&c);
+        r = vfs_permission_as(v, mode, &c, !effective);
+    }
     vnode_put(v);
     return r;
 }
 
 static long sys_faccessat(int dirfd, const char *upath, int mode)
 {
-    return faccess(dirfd, upath, mode, true);
+    return faccess(dirfd, upath, mode, true, false);
 }
 
 static long sys_faccessat2(int dirfd, const char *upath, int mode, int flags)
@@ -979,7 +1017,7 @@ static long sys_faccessat2(int dirfd, const char *upath, int mode, int flags)
             return process_fd_pin(dirfd) ? 0 : -EBADF;
         }
     }
-    return faccess(dirfd, upath, mode, !(flags & AT_SYMLINK_NOFOLLOW));
+    return faccess(dirfd, upath, mode, !(flags & AT_SYMLINK_NOFOLLOW), (flags & AT_EACCESS) != 0);
 }
 
 static long sys_readlinkat(int dirfd, const char *upath, char *ubuf, uint64_t size)
@@ -1352,6 +1390,11 @@ static long sys_chdir(const char *upath)
         vnode_put(v);
         return -ENOTDIR;
     }
+    r = vfs_permission(v, VFS_MAY_EXEC);
+    if (r < 0) {
+        vnode_put(v);
+        return r;
+    }
     if (!up.full_ok && vfs_getpath(v, up.full, sizeof(up.full)) < 0)
         up.full[0] = '\0';
     process_set_cwd(p, up.full, v);
@@ -1365,6 +1408,9 @@ static long sys_fchdir(int fd)
         return -EBADF;
     if (!f->vn || !vnode_is_dir(f->vn))
         return -ENOTDIR;
+    long perm = vfs_permission(f->vn, VFS_MAY_EXEC);
+    if (perm < 0)
+        return perm;
     char path[PROCESS_CWD_MAX];
     if (vfs_getpath(f->vn, path, sizeof(path)) < 0)
         path[0] = '\0';
@@ -1384,6 +1430,8 @@ static long copy_type(char *out, size_t size, const char *utype)
 static long sys_mount(const char *usource, const char *utarget, const char *utype, uint64_t flags,
                       const void *data)
 {
+    if (!cred_is_root())
+        return -EPERM;
     if ((flags & MS_MGC_MSK) == MS_MGC_VAL)
         flags &= ~(uint64_t)MS_MGC_MSK;
     uint64_t known = MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_SYNCHRONOUS | MS_SILENT |
@@ -1447,6 +1495,8 @@ static long sys_mount(const char *usource, const char *utarget, const char *utyp
 
 static long sys_umount2(const char *utarget, int flags)
 {
+    if (!cred_is_root())
+        return -EPERM;
     if (flags & ~UMOUNT_NOFOLLOW)
         return -EINVAL;
     struct upath *up = kmalloc(sizeof(*up));
@@ -1998,10 +2048,20 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_READV:       ret = sys_readv((int)f->rdi, (const struct user_iovec *)f->rsi, (int)f->rdx); break;
     case SYS_WRITEV:      ret = sys_writev((int)f->rdi, (const struct user_iovec *)f->rsi, (int)f->rdx); break;
     case SYS_UNAME:       ret = sys_uname((struct user_utsname *)f->rdi); break;
-    case SYS_GETUID:
-    case SYS_GETGID:
-    case SYS_GETEUID:
-    case SYS_GETEGID:     ret = 0; break;
+    case SYS_GETUID:      ret = sys_getuid(); break;
+    case SYS_GETGID:      ret = sys_getgid(); break;
+    case SYS_GETEUID:     ret = sys_geteuid(); break;
+    case SYS_GETEGID:     ret = sys_getegid(); break;
+    case SYS_SETUID:      ret = sys_setuid((uint32_t)f->rdi); break;
+    case SYS_SETGID:      ret = sys_setgid((uint32_t)f->rdi); break;
+    case SYS_SETREUID:    ret = sys_setreuid((uint32_t)f->rdi, (uint32_t)f->rsi); break;
+    case SYS_SETREGID:    ret = sys_setregid((uint32_t)f->rdi, (uint32_t)f->rsi); break;
+    case SYS_SETRESUID:   ret = sys_setresuid((uint32_t)f->rdi, (uint32_t)f->rsi, (uint32_t)f->rdx); break;
+    case SYS_SETRESGID:   ret = sys_setresgid((uint32_t)f->rdi, (uint32_t)f->rsi, (uint32_t)f->rdx); break;
+    case SYS_GETRESUID:   ret = sys_getresuid((uint32_t *)f->rdi, (uint32_t *)f->rsi, (uint32_t *)f->rdx); break;
+    case SYS_GETRESGID:   ret = sys_getresgid((uint32_t *)f->rdi, (uint32_t *)f->rsi, (uint32_t *)f->rdx); break;
+    case SYS_GETGROUPS:   ret = sys_getgroups((int)f->rdi, (uint32_t *)f->rsi); break;
+    case SYS_SETGROUPS:   ret = sys_setgroups(f->rdi, (const uint32_t *)f->rsi); break;
     case SYS_GETTID:      ret = thread_current()->utid; break;
     case SYS_SET_TID_ADDRESS: thread_current()->clear_child_tid = f->rdi; ret = thread_current()->utid; break;
     case SYS_CLONE:       ret = process_clone(f, f->rdi, f->rsi, f->rdx, f->r10, f->r8); break;

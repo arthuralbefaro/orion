@@ -10,6 +10,7 @@
 #include <kernel/sched.h>
 #include <kernel/spinlock.h>
 #include <kernel/timesys.h>
+#include <kernel/cred.h>
 #include <drivers/rtc.h>
 #include <mm/heap.h>
 #include <lib/string.h>
@@ -424,6 +425,69 @@ uint32_t vattr_apply_mode(uint32_t old, const struct vattr *in)
     return m;
 }
 
+int vfs_permission_as(struct vnode *v, int mask, const struct cred *c, bool real)
+{
+    uint32_t uid = real ? c->uid : c->euid;
+    uint32_t gid = real ? c->gid : c->egid;
+    if (uid == 0) {
+        if (!(mask & VFS_MAY_EXEC) || vnode_is_dir(v))
+            return 0;
+        return (__atomic_load_n(&v->mode, __ATOMIC_ACQUIRE) & 0111) ? 0 : -EACCES;
+    }
+    struct vattr va;
+    vfs_getattr(v, &va);
+    uint32_t perm;
+    if (va.uid == uid)
+        perm = va.mode >> 6;
+    else if (va.gid == gid || cred_member(c, va.gid))
+        perm = va.mode >> 3;
+    else
+        perm = va.mode;
+    return ((perm & 7 & (uint32_t)mask) == (uint32_t)mask) ? 0 : -EACCES;
+}
+
+int vfs_permission(struct vnode *v, int mask)
+{
+    struct cred c;
+    cred_get(&c);
+    return vfs_permission_as(v, mask, &c, false);
+}
+
+static int may_delete(struct vnode *dir, struct vnode *victim)
+{
+    if (!(__atomic_load_n(&dir->mode, __ATOMIC_ACQUIRE) & S_ISVTX))
+        return 0;
+    struct cred c;
+    cred_get(&c);
+    if (c.euid == 0)
+        return 0;
+    struct vattr dv, vv;
+    vfs_getattr(dir, &dv);
+    vfs_getattr(victim, &vv);
+    return (c.euid == dv.uid || c.euid == vv.uid) ? 0 : -EPERM;
+}
+
+static void own_new(struct vnode *dir, struct vnode *v)
+{
+    struct cred c;
+    cred_get(&c);
+    bool sgid = __atomic_load_n(&dir->mode, __ATOMIC_ACQUIRE) & S_ISGID;
+    if (c.euid == 0 && c.egid == 0 && !sgid)
+        return;
+    struct vattr va = { .mask = VA_UID | VA_GID, .uid = c.euid, .gid = c.egid };
+    if (sgid) {
+        struct vattr dv;
+        vfs_getattr(dir, &dv);
+        va.gid = dv.gid;
+        if (vnode_is_dir(v)) {
+            va.mask |= VA_MODE;
+            va.mode = (v->mode & 07777) | S_ISGID;
+        }
+    }
+    if (v->mnt->type->setattr)
+        v->mnt->type->setattr(v, &va);
+}
+
 int vfs_setattr(struct vnode *v, const struct vattr *in)
 {
     if (vfs_is_rdonly(v))
@@ -481,6 +545,9 @@ static int step(struct vnode **cur, const char *name)
     struct vnode *v = *cur;
     if (!vnode_is_dir(v))
         return -ENOTDIR;
+    int perm = vfs_permission(v, VFS_MAY_EXEC);
+    if (perm < 0)
+        return perm;
     if (name[0] == '.' && !name[1])
         return 0;
     if (name[0] == '.' && name[1] == '.' && !name[2])
@@ -713,9 +780,11 @@ static int open_create(struct vnode *start, const char *path, int flags, uint32_
                 r = -EROFS;
             else if (!m->type->create)
                 r = -EPERM;
-            else {
+            else if ((r = vfs_permission(nd.dir, VFS_MAY_WRITE | VFS_MAY_EXEC)) == 0) {
                 r = m->type->create(nd.dir, nd.last, S_IFREG | (mode & 07777), &v);
                 *created = r == 0;
+                if (r == 0)
+                    own_new(nd.dir, v);
             }
         }
         mutex_unlock(&m->ns_lock);
@@ -780,6 +849,11 @@ static int open_path(struct vnode *start, const char *path, int flags, uint32_t 
         r = -ENOTDIR;
     } else if (vnode_is_reg(v) && writing && vfs_is_rdonly(v)) {
         r = -EROFS;
+    }
+    if (r == 0 && !created && !vnode_is_link(v)) {
+        int mask = (writing || (flags & O_TRUNC) ? VFS_MAY_WRITE : 0) | (acc != O_WRONLY ? VFS_MAY_READ : 0);
+        if (mask)
+            r = vfs_permission(v, mask);
     }
     if (r == 0 && (flags & O_TRUNC) && writing && vnode_is_reg(v) && !created && v->size)
         r = vfs_truncate(v, 0);
@@ -846,8 +920,11 @@ int vfs_mknod(struct vnode *start, const char *path, uint32_t mode, struct vnode
             r = -EROFS;
         else if (!m->type->create)
             r = -EPERM;
-        else
+        else if ((r = vfs_permission(nd.dir, VFS_MAY_WRITE | VFS_MAY_EXEC)) == 0) {
             r = m->type->create(nd.dir, nd.last, mode, &v);
+            if (r == 0)
+                own_new(nd.dir, v);
+        }
     }
     mutex_unlock(&m->ns_lock);
     vnode_put(nd.dir);
@@ -882,11 +959,13 @@ int vfs_mkdir(struct vnode *start, const char *path, uint32_t mode)
             r = -EROFS;
         else if (!m->type->create)
             r = -EPERM;
-        else {
+        else if ((r = vfs_permission(nd.dir, VFS_MAY_WRITE | VFS_MAY_EXEC)) == 0) {
             v = NULL;
             r = m->type->create(nd.dir, nd.last, S_IFDIR | (mode & 07777), &v);
-            if (r == 0)
+            if (r == 0) {
+                own_new(nd.dir, v);
                 vnode_put(v);
+            }
         }
     }
     mutex_unlock(&m->ns_lock);
@@ -923,11 +1002,13 @@ int vfs_symlink(struct vnode *start, const char *path, const char *target)
             r = -EROFS;
         else if (!m->type->symlink)
             r = -EPERM;
-        else {
+        else if ((r = vfs_permission(nd.dir, VFS_MAY_WRITE | VFS_MAY_EXEC)) == 0) {
             v = NULL;
             r = m->type->symlink(nd.dir, nd.last, target, &v);
-            if (r == 0)
+            if (r == 0) {
+                own_new(nd.dir, v);
                 vnode_put(v);
+            }
         }
     }
     mutex_unlock(&m->ns_lock);
@@ -968,7 +1049,7 @@ int vfs_unlink(struct vnode *start, const char *path, bool is_dir)
             r = -EROFS;
         else if (!m->type->unlink)
             r = -EPERM;
-        else
+        else if ((r = vfs_permission(nd.dir, VFS_MAY_WRITE | VFS_MAY_EXEC)) == 0 && (r = may_delete(nd.dir, v)) == 0)
             r = m->type->unlink(nd.dir, nd.last, v);
     }
     mutex_unlock(&m->ns_lock);
@@ -1043,6 +1124,14 @@ static int rename_locked(struct mount *m, struct nameidata *a, struct nameidata 
         else if (!vnode_is_dir(sv) && vnode_is_dir(dv))
             r = -EISDIR;
     }
+    if (r == 0)
+        r = vfs_permission(a->dir, VFS_MAY_WRITE | VFS_MAY_EXEC);
+    if (r == 0 && b->dir != a->dir)
+        r = vfs_permission(b->dir, VFS_MAY_WRITE | VFS_MAY_EXEC);
+    if (r == 0)
+        r = may_delete(a->dir, sv);
+    if (r == 0 && dv)
+        r = may_delete(b->dir, dv);
     if (r == 0 && vnode_is_dir(sv))
         r = check_not_ancestor(sv, b->dir);
     if (r == 0)

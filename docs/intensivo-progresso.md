@@ -8,7 +8,7 @@ Este arquivo manda: uma sessao nova retoma da primeira etapa que nao esta `[x]`.
 
     cd C:\dev\orion
     git log --oneline -10
-    git status --short                            # a 2.5 esta inteira no arvore, sem commit (ver abaixo)
+    git status --short                            # limpa entre uma etapa e outra
     .\check.ps1                                   # precisa terminar com "Nenhum erro ou warning."
                                                   # (agora inclui cargo clippy e o fuzz do ext2, uns 20 s)
     .\regressao.ps1                               # A (texto, rede, musl, dash, lua, tcc), B (grafica, Doom),
@@ -27,17 +27,14 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 04:15, sessao 2): Fases 2 e 3 inteiras (tags `v2.1` e
-`v2.2`) e 8.7 commitadas; marco M3 fechado. Versao 2.2.0. A regressao inteira
-roda no `out\orion.img` (GPT, raiz em ext2), com 345 verificacoes; a
-sequencia A sobe o `tools/hostweb.py` no hospedeiro e usa `hostfwd` (5555 e
-8081).
+Estado (2026-10-18, 04:46, sessao 2): Fases 2 e 3 inteiras (tags `v2.1` e
+`v2.2`), 8.7 e 4.1 commitadas. Versao 2.3.0-a1. A regressao inteira roda no
+`out\orion.img` (GPT, raiz em ext2), com 351 verificacoes; a sequencia A
+sobe o `tools/hostweb.py` no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 4.1 (`uid`/`gid` reais por processo, `setuid`/`setgid`,
-permissoes conferidas na VFS; criterio: usuario comum nao le o
-`/etc/shadow`). A versao da Fase 4 comeca em 2.3.0-a1. A sugestao de turnos
-do plano poe 4.1 e 4.2 logo depois da Fase 3; depois, pela ordem
-recomendada, 7.1 e 7.2 (ISO e sistema live) e 5.1.
+Proxima etapa: 4.2 (`/etc/passwd`, `/etc/shadow` com hash, `login`, `su`,
+`passwd`; o `init` sobe o `login`; criterio: o boot pede usuario e senha).
+Depois, pela ordem recomendada, 7.1 e 7.2 (ISO e sistema live) e 5.1.
 
 ## Checklist
 
@@ -77,7 +74,7 @@ recomendada, 7.1 e 7.2 (ISO e sistema live) e 5.1.
 | 3.5 | Loopback e AF_UNIX | [x] | 02:26 | 03:10 | ver `git log` |
 | 3.6 | wget, nc, httpd, telnet | [x] | 03:11 | 03:35 | ver `git log` |
 | 3.7 | DHCP fora do kernel | [x] | 03:36 | 04:15 | ver `git log` (tag `v2.2`) |
-| 4.1 | uid/gid e permissoes | [ ] | | | |
+| 4.1 | uid/gid e permissoes | [x] | 04:16 | 04:46 | ver `git log` |
 | 4.2 | passwd, shadow, login | [ ] | | | |
 | 4.3 | SMEP e SMAP | [ ] | | | |
 | 4.4 | ASLR basico | [ ] | | | |
@@ -883,6 +880,28 @@ meio-fechamento automatico no fim da entrada fazia o cliente sair antes de
 mandar. O `nc` passou a so meio-fechar com `-N`, como o do OpenBSD, e o teste
 da ao servidor `/dev/null` de entrada.
 Ficou de fora: renovacao da concessao DHCP, mais de uma interface.
+
+#### 4.1 uid, gid e permissoes - 04:16 a 04:46 - FEITO
+Credenciais por processo (`kernel/cred.c`: real, efetivo e salvo de usuario e
+grupo, mais ate 32 grupos suplementares), as dez syscalls `set*`/`get*` que
+faltavam com as regras do Linux, `setuid`/`setgid` no `exec` e permissoes
+conferidas na VFS: busca em diretorio, `open`, criar, apagar e renomear (com
+o *sticky* do `/tmp`), `exec`, `chdir`, `truncate`, `access` com os ids
+reais, `chmod`/`chown`/`utimensat` so para o dono, `kill` so para o mesmo
+usuario e `bind` abaixo de 1024 so para root. Arquivo novo fica com o
+`euid`/`egid` (e o grupo do diretorio quando ele tem `S_ISGID`). O
+`/etc/shadow` entrou na imagem como `0600`. Criterio: o `permtest` (novo)
+vira o usuario 1000 e confere umas 35 regras, inclusive "usuario comum nao le
+o `/etc/shadow`", no tmpfs e na raiz ext2; `id` (novo) mostra os ids.
+Regressao 345 -> 351, estresse 5x verde. Versao 2.3.0-a1.
+Problemas: (1) com o `exec` exigindo um bit `x`, os binarios do FAT (o
+`vvfat` do `build.ps1 -Run`) parariam de rodar, porque o FAT mostrava
+arquivos como `0644`; passaram a `0755`, como o `vfat` do Linux, e o teste do
+somente leitura do FAT virou `chmod 555`/`755`. (2) O `cp` criava tudo
+`0644`; um binario copiado deixava de ser executavel. Passou a copiar os bits
+da origem.
+Ficou de fora: `nosuid` na montagem, capacidades (root e tudo ou nada),
+`setfsuid`.
 
 ### Sessao 2 - 2026-10-17
 

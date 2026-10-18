@@ -367,6 +367,7 @@ static struct process *process_alloc(const char *name)
     p->fd_cap = PROCESS_FD_INITIAL;
     rlimits_default(p);
     p->umask = 022;
+    spinlock_init(&p->cred_lock);
     strlcpy(p->name, name, sizeof(p->name));
     p->pml4_phys = vmm_create_address_space();
     if (!p->pml4_phys) {
@@ -891,6 +892,7 @@ int process_fork_stack(struct interrupt_frame *frame, uint64_t newsp)
     child->parent = parent;
     memcpy(child->rlimits, parent->rlimits, sizeof(child->rlimits));
     child->umask = __atomic_load_n(&parent->umask, __ATOMIC_RELAXED);
+    cred_get(&child->cred);
     uint64_t tflags = spin_lock_irqsave(&parent->tlock);
     strlcpy(child->cwd, parent->cwd, sizeof(child->cwd));
     child->cwd_vn = parent->cwd_vn;
@@ -999,6 +1001,14 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
     vnode_put(start);
     if (r < 0)
         return r;
+    if (vnode_is_reg(v))
+        r = vfs_permission(v, VFS_MAY_EXEC);
+    if (r < 0) {
+        vnode_put(v);
+        return r;
+    }
+    struct vattr va;
+    vfs_getattr(v, &va);
     char full[PROCESS_CWD_MAX];
     if (!process_resolve_path(p, path, full, sizeof(full)))
         strlcpy(full, path, sizeof(full));
@@ -1057,6 +1067,7 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
         thread_current()->clear_child_tid = 0;
         thread_current()->utid = p->pid;
         close_on_exec(p);
+        cred_exec(va.mode, va.uid, va.gid);
         cli();
         p->pml4_phys = new_pml4;
         write_cr3(new_pml4);
@@ -1339,10 +1350,23 @@ void process_defer_free(struct process *p, uint64_t phys)
     p->free_batch[p->free_n++] = phys;
 }
 
+static bool may_signal(const struct cred *me, struct process *target)
+{
+    if (me->euid == 0)
+        return true;
+    uint64_t flags = spin_lock_irqsave(&target->cred_lock);
+    bool ok = me->uid == target->cred.uid || me->uid == target->cred.suid || me->euid == target->cred.uid ||
+              me->euid == target->cred.suid;
+    spin_unlock_irqrestore(&target->cred_lock, flags);
+    return ok;
+}
+
 int process_kill(int pid, int sig)
 {
     struct process *me = process_current();
-    int found = 0;
+    struct cred mc;
+    cred_get(&mc);
+    int found = 0, denied = 0;
     int err = 0;
     uint64_t flags = spin_lock_irqsave(&proc_lock);
     uint32_t group = pid == 0 ? me->pgid : (uint32_t)(-pid);
@@ -1350,8 +1374,12 @@ int process_kill(int pid, int sig)
         bool match = pid > 0 ? (int)c->pid == pid : c->pgid == group;
         if (!match || c->state == PROC_ZOMBIE)
             continue;
+        if (!may_signal(&mc, c)) {
+            denied++;
+            continue;
+        }
         found++;
-        struct sig_src src = { me ? SI_USER : SI_KERNEL, 0, me ? me->pid : 0, 0, 0 };
+        struct sig_src src = { me ? SI_USER : SI_KERNEL, 0, me ? me->pid : 0, mc.uid, 0 };
         int r = sig ? signal_send_info(c, sig, &src) : 0;
         if (r < 0)
             err = r;
@@ -1359,6 +1387,8 @@ int process_kill(int pid, int sig)
     spin_unlock_irqrestore(&proc_lock, flags);
     if (err)
         return err;
+    if (!found && denied)
+        return -EPERM;
     return found ? 0 : -ESRCH;
 }
 
@@ -1430,7 +1460,11 @@ long process_signal_thread(int tgid, int tid, int sig)
                 found = t;
                 break;
             }
-        if (found) {
+        struct cred mc;
+        cred_get(&mc);
+        if (found && !may_signal(&mc, c)) {
+            ret = -EPERM;
+        } else if (found) {
             ret = 0;
             if (sig) {
                 struct sig_src src = { SI_TKILL, 0, process_current()->pid, 0, 0 };

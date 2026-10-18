@@ -2,6 +2,7 @@
 #include <net/socket.h>
 #include <net/tcp.h>
 #include <net/unix.h>
+#include <kernel/cred.h>
 #include <kernel/time.h>
 #include <kernel/file.h>
 #include <kernel/log.h>
@@ -458,6 +459,8 @@ long sys_bind(int fd, const struct sockaddr_in *uaddr, uint32_t len)
             return -EAFNOSUPPORT;
         if (s->bound || s->tcp_open)
             return -EINVAL;
+        if (port && port < 1024 && !cred_is_root())
+            return -EACCES;
         uint32_t ip = ntohl(a.sin_addr);
         struct netif *ni = net_interface();
         if (ip && ip != ni->ip && (ip >> 24) != 127)
@@ -479,6 +482,8 @@ long sys_bind(int fd, const struct sockaddr_in *uaddr, uint32_t len)
         s->bound = true;
         return 0;
     }
+    if (port && port < 1024 && !cred_is_root())
+        return -EACCES;
     uint64_t flags = spin_lock_irqsave(&sock_lock);
     if (port && port != s->local_port && port_taken(port)) {
         spin_unlock_irqrestore(&sock_lock, flags);

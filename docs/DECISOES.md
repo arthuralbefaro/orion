@@ -2219,3 +2219,52 @@ Uma linha por decisao, na ordem em que foram tomadas.
   no log do boot o `init` rodando o `netup`, o `netup` escolhendo DHCP e o
   `dhcp` com o endereco, a mascara, o gateway, o DNS e o servidor, e que
   nenhuma linha do DHCP do kernel aparece.
+
+## v2.3.0-a1 (etapa 4.1: uid, gid e permissoes)
+
+- Credenciais por processo (`kernel/cred.c`): `uid`, `euid`, `suid`, `gid`,
+  `egid`, `sgid` e ate 32 grupos suplementares, sob uma trava giratoria
+  propria do processo; as threads compartilham (o `setuid` da musl chama a
+  syscall em todas, e todas mexem no mesmo lugar). O `init` nasce root e o
+  `fork` copia. No `exec`, arquivo com `S_ISUID` troca o `euid` pelo dono e
+  com `S_ISGID` (e execucao do grupo) troca o `egid`; o `suid`/`sgid` viram o
+  efetivo, como no Linux. A opcao `nosuid` da montagem continua sem efeito.
+- Syscalls: `getuid`, `geteuid`, `getgid`, `getegid` deixaram de ser stub;
+  `setuid`, `setgid`, `setreuid`, `setregid`, `setresuid`, `setresgid`,
+  `getresuid`, `getresgid`, `getgroups` e `setgroups` (so root), com as
+  regras do Linux para quem nao e root (so pode trocar para um dos tres ids
+  que ja tem).
+- `vfs_permission` confere os bits de dono, grupo (efetivo ou suplementar) e
+  outros com o `vfs_getattr`. Root passa sem consultar nada, menos na
+  execucao: arquivo comum precisa de algum bit `x`, como no Linux (por isso o
+  root continua sem custo nenhum de `getattr` na resolucao de caminho, e a
+  regressao inteira, que roda como root, nao mudou de tempo). Pontos
+  conferidos: busca em cada diretorio do caminho (`x`), `open` (`r`/`w`, e
+  `w` para `O_TRUNC`; o arquivo recem-criado nao e conferido), criar, apagar e
+  renomear (`w` e `x` no diretorio; com `S_ISVTX`, so o dono do arquivo, o do
+  diretorio ou root apagam e renomeiam), `exec` (`x`), `chdir`/`fchdir` (`x`),
+  `truncate` (`w`), `access`/`faccessat` com os ids reais (`AT_EACCESS` usa os
+  efetivos), `chmod` (so o dono ou root; quem nao e do grupo do arquivo perde o
+  `S_ISGID`), `chown` (so root troca o dono; o dono troca o grupo para um
+  grupo dele), `utimensat` (hora explicita so o dono ou root; "agora" tambem
+  quem pode escrever), `kill`/`tkill`/`tgkill` (mesmo usuario real ou efetivo,
+  ou root; o `si_uid` passou a ser o real), `mount`/`umount` (root) e `bind`
+  em porta abaixo de 1024 (root).
+- Arquivo, diretorio, link e socket novos sao do `euid`/`egid`; em diretorio
+  com `S_ISGID`, herdam o grupo do diretorio, e um subdiretorio herda o
+  proprio `S_ISGID`. O dono e gravado com um `setattr` logo depois do
+  `create` (so quando nao e root com grupo 0, para nao gastar nada no caso
+  comum).
+- FAT: arquivos passaram a `0755` (diretorios ja eram), que e o que o `vfat`
+  do Linux mostra com `umask` 022; com o `exec` exigindo `x`, binarios no FAT
+  (o `vvfat` do `build.ps1 -Run`) teriam parado de rodar. O somente leitura
+  virou `chmod 555`/`755`. O `cp` passou a copiar os bits de permissao da
+  origem (antes criava tudo `0644`), e o `mkext2.py` marca ELF como `0755`
+  nas imagens de teste.
+- `/etc/shadow` entrou (`0600` de root na imagem, pelo `mkimage.py`), com a
+  senha do root travada ate a 4.2. `/dev/tty` passou a `0666`, como no Linux.
+- Teste: `permtest` (novo) comeca como root, prepara arquivos e diretorios
+  com varios modos e donos, e um filho vira o usuario 1000 do grupo 100 e
+  confere cada regra acima, inclusive o criterio da etapa ("usuario comum nao
+  le o `/etc/shadow`") e um binario `setuid` de root rodando com `euid` 0;
+  roda no tmpfs e na raiz ext2. `id` (novo) mostra os ids com nomes.

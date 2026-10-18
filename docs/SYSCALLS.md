@@ -34,7 +34,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 18 | pwrite64 | completa | idem; escrever depois do fim preenche o buraco com zeros |
 | 19 | readv | completa | ate 1024 pedacos |
 | 20 | writev | completa | ate 1024 pedacos |
-| 21 | access | parcial | confere a existencia; `W_OK` em arquivo de montagem so de leitura da `EROFS` (permissoes na 4.1) |
+| 21 | access | completa | permissoes com os ids reais (4.1); `W_OK` em montagem so de leitura da `EROFS` |
 | 22 | pipe | completa | |
 | 23 | select | parcial | sobre o `poll`: ate 32 descritores marcados; prazo restante volta no `timeval` (3.4) |
 | 24 | sched_yield | completa | |
@@ -82,9 +82,9 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 83 | mkdir | completa | modo pedido menos o `umask` (2.7) |
 | 84 | rmdir | completa | |
 | 87 | unlink | completa | |
-| 90 | chmod | completa | grava no inode do ext2 e no tmpfs; no FAT so liga e desliga o somente leitura (`0644`/`0444`, `0755`/`0555`), o resto da `EPERM`, como o `vfat` do Linux; devfs e procfs dao `EPERM`; `EROFS` em montagem so de leitura; sem conferir dono ate a 4.1 (2.7) |
+| 90 | chmod | completa | grava no inode do ext2 e no tmpfs; no FAT so liga e desliga o somente leitura (`0644`/`0444`, `0755`/`0555`), o resto da `EPERM`, como o `vfat` do Linux; devfs e procfs dao `EPERM`; `EROFS` em montagem so de leitura; so o dono ou root (4.1) (2.7) |
 | 91 | fchmod | completa | como o `chmod`, pelo descritor; descritor sem vnode (pipe, socket) da `EINVAL` |
-| 92 | chown | completa | `-1` mantem o campo; tira `S_ISUID` (e `S_ISGID` com execucao do grupo) de quem nao e diretorio, como o Linux; dono de 32 bits no ext2; no FAT so aceita dono 0; sem conferir permissao ate a 4.1 (2.7) |
+| 92 | chown | completa | `-1` mantem o campo; tira `S_ISUID` (e `S_ISGID` com execucao do grupo) de quem nao e diretorio, como o Linux; dono de 32 bits no ext2; no FAT so aceita dono 0; so root troca o dono; o dono troca o grupo para um grupo dele (4.1) (2.7) |
 | 93 | fchown | completa | como o `chown`, pelo descritor |
 | 94 | lchown | completa | nao segue o ultimo link |
 | 95 | umask | completa | por processo, herdado no `fork`, 022 no boot (2.7) |
@@ -94,12 +94,22 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 97 | getrlimit | completa | `RLIMIT_NOFILE`, `RLIMIT_NPROC`, `RLIMIT_STACK`; os outros sao infinitos |
 | 98 | getrusage | parcial | `RUSAGE_SELF`, `RUSAGE_CHILDREN`, `RUSAGE_THREAD`; so `ru_utime` e `ru_stime` |
 | 100 | times | completa | em ticks de 100 Hz (o `CLK_TCK` da musl) |
-| 102 | getuid | stub | sempre 0 ate a 4.1 (plano: "todos 0 por enquanto") |
-| 104 | getgid | stub | idem |
-| 107 | geteuid | stub | idem |
-| 108 | getegid | stub | idem |
+| 102 | getuid | completa | (4.1) |
+| 104 | getgid | completa | (4.1) |
+| 105 | setuid | completa | regras do Linux; root troca os tres ids (4.1) |
+| 106 | setgid | completa | idem (4.1) |
+| 107 | geteuid | completa | (4.1) |
+| 108 | getegid | completa | (4.1) |
 | 109 | setpgid | completa | |
 | 110 | getppid | completa | |
+| 113 | setreuid | completa | (4.1) |
+| 114 | setregid | completa | (4.1) |
+| 115 | getgroups | completa | ate 32 grupos (4.1) |
+| 116 | setgroups | completa | so root; ate 32 grupos (4.1) |
+| 117 | setresuid | completa | (4.1) |
+| 118 | getresuid | completa | (4.1) |
+| 119 | setresgid | completa | (4.1) |
+| 120 | getresgid | completa | (4.1) |
 | 121 | getpgid | completa | |
 | 127 | rt_sigpending | completa | |
 | 128 | rt_sigtimedwait | completa | `siginfo` com a origem (`kill`, `tkill`, `SIGCHLD`, falta de pagina); `si_uid` sempre 0 |
@@ -135,13 +145,13 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 266 | symlinkat | completa | como o `symlink` |
 | 267 | readlinkat | completa | como o `readlink` |
 | 268 | fchmodat | completa | como o `chmod`, relativo ao descritor |
-| 269 | faccessat | parcial | como o `access` |
+| 269 | faccessat | completa | como o `access` |
 | 280 | utimensat | completa | nanossegundos no tmpfs, segundos no ext2 (ate 2038), 2 s no FAT (so `mtime` e o dia do `atime`); `UTIME_NOW`, `UTIME_OMIT`, `AT_SYMLINK_NOFOLLOW`, `AT_EMPTY_PATH`, caminho `NULL` com descritor (o `futimens` da musl); muda o `ctime` para agora (2.7) |
 | 288 | accept4 | completa | `SOCK_NONBLOCK`, `SOCK_CLOEXEC` (3.4) |
 | 292 | dup3 | completa | `O_CLOEXEC` |
 | 293 | pipe2 | completa | `O_CLOEXEC`, `O_NONBLOCK` |
 | 302 | prlimit64 | parcial | so para o proprio processo |
-| 439 | faccessat2 | parcial | `AT_EACCESS`, `AT_SYMLINK_NOFOLLOW`, `AT_EMPTY_PATH`; como o `faccessat`, so confere a existencia (permissoes na 4.1) |
+| 439 | faccessat2 | completa | `AT_EACCESS` (ids efetivos), `AT_SYMLINK_NOFOLLOW`, `AT_EMPTY_PATH` (4.1) |
 | 452 | fchmodat2 | completa | `AT_SYMLINK_NOFOLLOW` (num link da `EOPNOTSUPP`, como o Linux), `AT_EMPTY_PATH` (2.7) |
 | 1000 | readdir | propria | uma entrada por chamada; a libc usa o `getdents64` |
 | 1001 | openpty | propria | |

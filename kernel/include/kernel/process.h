@@ -1,5 +1,6 @@
 #pragma once
 
+#include <kernel/cred.h>
 #include <kernel/compiler.h>
 #include <kernel/wait.h>
 #include <kernel/signal.h>
@@ -86,6 +87,8 @@ struct process {
     int fd_cap;
     struct user_rlimit rlimits[RLIMIT_COUNT];
     uint32_t umask;
+    struct cred cred;
+    spinlock_t cred_lock;
     char *cmdline;
     uint32_t cmdline_len;
     char exe[PROCESS_EXE_MAX];

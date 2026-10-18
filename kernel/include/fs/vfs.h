@@ -20,6 +20,10 @@
 #define VA_MTIME     16u
 #define VA_KILL_SUID 32u
 
+#define VFS_MAY_EXEC  1
+#define VFS_MAY_WRITE 2
+#define VFS_MAY_READ  4
+
 struct vnode;
 struct mount;
 struct file;
@@ -165,6 +169,9 @@ int64_t vfs_read(struct vnode *v, uint64_t offset, void *buf, uint64_t len);
 int64_t vfs_write(struct vnode *v, uint64_t *offset, const void *buf, uint64_t len, bool append);
 int vfs_truncate(struct vnode *v, uint64_t size);
 void vfs_getattr(struct vnode *v, struct vattr *out);
+struct cred;
+int vfs_permission(struct vnode *v, int mask);
+int vfs_permission_as(struct vnode *v, int mask, const struct cred *c, bool real);
 int vfs_setattr(struct vnode *v, const struct vattr *in);
 void vfs_now(struct vfs_time *t);
 uint32_t vattr_apply_mode(uint32_t old, const struct vattr *in);

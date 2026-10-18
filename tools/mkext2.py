@@ -291,7 +291,7 @@ def test_tree(extra):
     files = {}
 
     def f(path, data):
-        add_path(root, path, Node('file', 0o644, data))
+        add_path(root, path, Node('file', 0o755 if data[:4] == b'\x7fELF' else 0o644, data))
         files[path] = data
 
     f('/dir/a.txt', b'ola ext2\n')

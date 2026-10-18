@@ -124,10 +124,15 @@ O ext2 (o driver e o piloto em Rust do kernel) monta com leitura e escrita;
 Links simbolicos funcionam no ext2 e no tmpfs (`ln -s alvo nome`,
 `readlink nome`); o FAT nao tem links e devolve `EPERM`.
 
+Usuarios e permissoes valem desde a 4.1: cada processo tem `uid`/`gid` (o
+boot e todo root), a VFS confere leitura, escrita e execucao, o `/tmp` tem o
+bit *sticky* e binario com `setuid` troca o usuario efetivo. `id` mostra quem
+voce e; o `/etc/shadow` so o root le.
+
 Modo, dono e datas ficam guardados no ext2 e no tmpfs: `chmod`, `chown`,
 `chgrp` e `touch` gravam, `ls -l` mostra (os nomes de dono e grupo vem do
 `/etc/passwd` e do `/etc/group`). Arquivo novo nasce com o modo pedido menos o
-`umask` (022). No FAT so as datas e o somente leitura (`chmod 444`/`644`) sao
+`umask` (022). No FAT so as datas e o somente leitura (`chmod 555`/`755`) sao
 guardados; outros modos e donos dao `EPERM`, como no Linux.
 
     ls -l /tmp
@@ -173,8 +178,8 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
 ## Programas proprios em /bin
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
-    ifconfig ping nslookup wget nc telnet httpget httpd wmctl dhcp netup mkfs mkfs.ext2 fsck.ext2 mount umount
-    testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest unixtest polltest forktest ptytest limtest stress sctest filetest
+    ifconfig ping nslookup wget nc telnet httpget httpd wmctl dhcp netup id mkfs mkfs.ext2 fsck.ext2 mount umount
+    testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest unixtest permtest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
 

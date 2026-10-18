@@ -18,6 +18,7 @@ GPT_ENTRY_SIZE = 128
 GPT_ENTRY_SECTORS = GPT_ENTRIES * GPT_ENTRY_SIZE // SECTOR
 SHORT_OK = set('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789$%\'-_@~`!(){}^#&')
 ROOT_SKIP = {'boot', 'EFI', 'efi'}
+SPECIAL_MODES = {'etc/shadow': 0o600}
 MOUNT_POINTS = {'boot': 0o755, 'dev': 0o755, 'proc': 0o555, 'tmp': 0o1777, 'run': 0o755, 'mnt': 0o755,
                 'root': 0o700}
 
@@ -257,6 +258,7 @@ def root_tree(esp):
                 with open(os.path.join(dirpath, fn), 'rb') as fh:
                     data = fh.read()
                 mode = 0o755 if data[:4] == b'\x7fELF' else 0o644
+                mode = SPECIAL_MODES.get(rel + '/' + fn, mode)
                 mkext2.add_path(root, '/' + rel + '/' + fn, mkext2.Node('file', mode, data))
     for name, mode in MOUNT_POINTS.items():
         if name not in root.children:

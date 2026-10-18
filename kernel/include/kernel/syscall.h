@@ -109,6 +109,16 @@
 #define SYS_GETGID        104
 #define SYS_GETEUID       107
 #define SYS_GETEGID       108
+#define SYS_SETUID        105
+#define SYS_SETGID        106
+#define SYS_SETREUID      113
+#define SYS_SETREGID      114
+#define SYS_GETGROUPS     115
+#define SYS_SETGROUPS     116
+#define SYS_SETRESUID     117
+#define SYS_GETRESUID     118
+#define SYS_SETRESGID     119
+#define SYS_GETRESGID     120
 #define SYS_SIGALTSTACK   131
 #define SYS_GETTID        186
 #define SYS_SET_TID_ADDRESS 218

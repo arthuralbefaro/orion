@@ -230,7 +230,7 @@ Copy-Item (Join-Path $Root "limine.conf") (Join-Path $EspDir "boot\limine\limine
 New-Item -ItemType Directory -Force -Path (Join-Path $EspDir "etc") | Out-Null
 $autostart = if ($Gui) { "/bin/netup`nshell /bin/wm" } else { (Get-Content (Join-Path $Root "etc\autostart") -Raw) }
 Set-Content -Path (Join-Path $EspDir "etc\autostart") -Value $autostart -Encoding ascii -NoNewline:$false
-foreach ($name in @("passwd", "group", "resolv.conf", "network")) { Copy-Item (Join-Path $Root "etc\$name") (Join-Path $EspDir "etc\$name") -Force }
+foreach ($name in @("passwd", "group", "shadow", "resolv.conf", "network")) { Copy-Item (Join-Path $Root "etc\$name") (Join-Path $EspDir "etc\$name") -Force }
 Write-Host "OK: out\$Kernel.elf ($compiled arquivo(s) do kernel recompilado(s)), $($userBins.Count) programa(s) em esp\bin" -ForegroundColor Green
 
 if ($Image) {
