@@ -48,6 +48,7 @@ struct desktop {
     struct gfx *gfx;
     struct font *mono;
     struct font *sans;
+    uint32_t *wallpaper;
     struct window windows[WIN_MAX];
     int order[WIN_MAX];
     int count;

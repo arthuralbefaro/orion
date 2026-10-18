@@ -2,6 +2,7 @@
 #include "term.h"
 #include "win.h"
 #include "app.h"
+#include "img.h"
 
 #include <dirent.h>
 #include <orion.h>
@@ -36,6 +37,7 @@
 #define FONT_DIR       "/usr/share/fonts"
 #define FONT_MONO      FONT_DIR "/DejaVuSansMono.ttf"
 #define FONT_SANS      FONT_DIR "/DejaVuSans.ttf"
+#define WALLPAPER      "/usr/share/wallpapers/orion.png"
 
 static struct gfx gfx;
 static struct desktop desk;
@@ -559,9 +561,30 @@ static void load_fonts(void)
         fprintf(stderr, "wm: sem fonte vetorial em %s; usando a 8x8\n", FONT_DIR);
 }
 
+static uint32_t *load_wallpaper(void)
+{
+    struct image img, fit;
+    if (!image_load(WALLPAPER, &img)) {
+        fprintf(stderr, "wm: sem papel de parede em %s; usando o degrade\n", WALLPAPER);
+        return NULL;
+    }
+    fprintf(stderr, "wm: papel de parede %s (%s %dx%d)\n", WALLPAPER, img.format, img.w, img.h);
+    if (img.w != gfx.width || img.h != gfx.height) {
+        bool ok = image_scale(&img, gfx.width, gfx.height, &fit);
+        image_free(&img);
+        if (!ok)
+            return NULL;
+        img = fit;
+    }
+    for (size_t i = 0; i < (size_t)img.w * (size_t)img.h; i++)
+        img.rgb[i] = gfx_rgb(&gfx, img.rgb[i]);
+    return img.rgb;
+}
+
 static void build_desktop(void)
 {
     desk_init(&desk, &gfx);
+    desk.wallpaper = load_wallpaper();
     desk.mono = mono_font.ok ? &mono_font : NULL;
     desk.sans = sans_font.ok ? &sans_font : NULL;
     new_terminal();

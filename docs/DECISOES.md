@@ -2598,3 +2598,29 @@ Uma linha por decisao, na ordem em que foram tomadas.
   e no fim quantos glifos foram para o cache. A amostra de cores da captura
   nao serve aqui: ela pega um pixel a cada 997 e quase nunca cai numa borda
   de letra.
+
+## v2.4.0-a5 (etapa 6.4: imagens PNG e JPEG)
+
+- `stb_image.h` 2.30 (commit `013ac3b` do `nothings/stb`, MIT ou dominio
+  publico) em `third_party/stb`, sem mudanca, so com PNG e JPEG
+  (`STBI_ONLY_PNG`, `STBI_ONLY_JPEG`, sem HDR). Compilado no `wm`
+  (`wm/img.c`) e no `imginfo`, com os mesmos `#pragma` da 6.3.
+- Papel de parede: `tools/mkwallpaper.py` (novo, Python puro com `zlib`, sem
+  PIL) desenha uma nebulosa com estrelas e a constelacao de Orion em 1280x800
+  e grava um PNG de verdade; o build so refaz quando o script muda. Fica em
+  `/usr/share/wallpapers/orion.png`. O `wm` carrega pelo `stb_image`, estica
+  para a tela se o tamanho for outro (vizinho mais proximo), converte uma vez
+  para o formato do framebuffer e copia linha a linha no fundo; sem o
+  arquivo, volta ao degrade.
+- `share/` (novo no repositorio) e copiado para `/usr/share` pelo build, como
+  o `etc/` vai para `/etc`. Leva as imagens de teste: um JPEG e um PNG
+  pequenos com quatro quadrantes de cores conhecidas, gerados uma vez com o
+  PIL e versionados (o build nao depende do PIL).
+- `imginfo` (novo): decodifica e mostra formato, tamanho, canais, cor media e
+  a cor de cada quadrante; e o teste de JPEG da regressao. Icones ficaram para
+  o lancador da 6.7.
+- A verificacao de cores da captura do `hello-gui` (6.1) perdeu forca com o
+  papel de parede, que sozinho ja da centenas de cores na amostra; o
+  `hello-gui` continua provado pelas linhas do log do `wm`. A captura do boot
+  grafico passou a conferir o papel de parede (250 cores ou mais; sem ele
+  eram 75).

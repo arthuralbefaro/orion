@@ -91,7 +91,9 @@ terminal grafico abre o exemplo. A `libgui` (`user/libgui`) da botoes, campos
 de texto, caixas de opcao, listas com rolagem e menus, todos usaveis pelo
 teclado (Tab, Enter, setas, F10); `guidemo &` mostra todos.
 O terminal grafico, a barra e os titulos usam fonte vetorial (DejaVu, pelo
-`stb_truetype`) com antialias; as fontes ficam em `/usr/share/fonts`.
+`stb_truetype`) com antialias; as fontes ficam em `/usr/share/fonts`. O fundo e
+um papel de parede PNG (`/usr/share/wallpapers/orion.png`, gerado no build por
+`tools/mkwallpaper.py`); `imginfo <arquivo>` decodifica PNG e JPEG.
 O terminal grafico entende as sequencias ANSI de cursor, apagamento e cores.
 
 ### Boot direto na interface grafica
@@ -217,7 +219,7 @@ desempacota num tmpfs usado como raiz, sem precisar de disco. Login `root` ou
 ## Programas proprios em /bin
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
-    ifconfig ping nslookup wget nc telnet httpget httpd wmctl hello-gui guidemo dhcp netup id login su passwd poweroff reboot halt mkfs mkfs.ext2 fsck.ext2 mount umount
+    ifconfig ping nslookup wget nc telnet httpget httpd wmctl hello-gui guidemo imginfo dhcp netup id login su passwd poweroff reboot halt mkfs mkfs.ext2 fsck.ext2 mount umount
     testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest unixtest permtest aslrtest shmtest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest

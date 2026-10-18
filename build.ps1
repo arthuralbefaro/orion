@@ -246,6 +246,21 @@ if ($userBins.ContainsKey("doom")) {
         if (-not (Test-Path $wadOut) -or (Get-Item $wadOut).Length -ne (Get-Item $wad).Length) { Copy-Item $wad $wadOut -Force }
     }
 }
+$ShareSrc = Join-Path $Root "share"
+foreach ($f in Get-ChildItem $ShareSrc -Recurse -File -ErrorAction SilentlyContinue) {
+    $dst = Join-Path (Join-Path $EspDir "usr\share") $f.FullName.Substring($ShareSrc.Length + 1)
+    New-Item -ItemType Directory -Force -Path (Split-Path $dst -Parent) | Out-Null
+    if (-not (Test-Path $dst) -or (Get-Item $dst).Length -ne $f.Length) { Copy-Item $f.FullName $dst -Force }
+}
+$Wallpaper = Join-Path $EspDir "usr\share\wallpapers\orion.png"
+$WallScript = Join-Path $Root "tools\mkwallpaper.py"
+if (-not (Test-Path $Wallpaper) -or (Get-Item $Wallpaper).LastWriteTime -lt (Get-Item $WallScript).LastWriteTime) {
+    if (-not $PyCmd) { $PyCmd = & (Join-Path $Root "tools\python.ps1") }
+    $pyArgs = @($PyCmd | Select-Object -Skip 1)
+    New-Item -ItemType Directory -Force -Path (Split-Path $Wallpaper -Parent) | Out-Null
+    & $PyCmd[0] @pyArgs $WallScript $Wallpaper | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "mkwallpaper falhou" }
+}
 $FontDir = Join-Path $EspDir "usr\share\fonts"
 New-Item -ItemType Directory -Force -Path $FontDir | Out-Null
 foreach ($ttf in Get-ChildItem (Join-Path $Root "third_party\dejavu") -Filter *.ttf -File) {

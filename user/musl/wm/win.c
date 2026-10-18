@@ -227,6 +227,13 @@ static void draw_desktop(struct desktop *d, struct rect area)
     struct gfx *g = d->gfx;
     int y0 = area.y;
     int y1 = area.y + area.h;
+    if (d->wallpaper) {
+        struct rect c = rect_clip(area, g->clip);
+        for (int y = c.y; y < c.y + c.h; y++)
+            memcpy(g->back + (size_t)y * (size_t)g->width + (size_t)c.x,
+                   d->wallpaper + (size_t)y * (size_t)g->width + (size_t)c.x, (size_t)c.w * 4);
+        return;
+    }
     for (int y = y0; y < y1; y++) {
         int t = y * 255 / (g->height ? g->height : 1);
         uint32_t r = (((COL_DESK_TOP >> 16) & 0xFF) * (255 - t) + ((COL_DESK_BOT >> 16) & 0xFF) * t) / 255;

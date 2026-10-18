@@ -27,19 +27,19 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 13:05, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
-`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1 e 6.1 a 6.3. Versao 2.4.0-a4. O
+Estado (2026-10-18, 13:38, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1 e 6.1 a 6.4. Versao 2.4.0-a5. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
-`libgui`; o `wm` usa fontes TrueType. A regressao roda no `out\orion.img`
-(GPT, raiz em ext2) nas sequencias A a E e na ISO na F, com 420
-verificacoes; a sequencia A sobe o `tools/hostweb.py` no hospedeiro e usa
-`hostfwd` (5555 e 8081).
+`libgui`; o `wm` usa fontes TrueType e papel de parede PNG. A regressao roda
+no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e na ISO na F,
+com 425 verificacoes; a sequencia A sobe o `tools/hostweb.py` no hospedeiro
+e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 6.4 (PNG e JPEG pelo `stb_image` 2.30, commit `013ac3b`;
-papel de parede PNG gerado no build por `tools/mkwallpaper.py`), versao
-2.4.0-a5.
+Proxima etapa: 6.5 (compositor com areas sujas e cursor proprio; criterio:
+o `wm` parado gasta menos de 5% de CPU; `cpuuso` mede pelo `/proc`), versao
+2.4.0-a6.
 
 ## Checklist
 
@@ -95,7 +95,7 @@ papel de parede PNG gerado no build por `tools/mkwallpaper.py`), versao
 | 6.1 | Protocolo de janelas | [x] | 11:06 | 11:47 | ver `git log` |
 | 6.2 | libgui | [x] | 11:48 | 12:27 | ver `git log` |
 | 6.3 | Fontes TrueType | [x] | 12:27 | 13:05 | ver `git log` |
-| 6.4 | Imagens PNG/JPEG | [ ] | | | |
+| 6.4 | Imagens PNG/JPEG | [x] | 13:05 | 13:38 | ver `git log` |
 | 6.5 | Compositor com areas sujas | [ ] | | | |
 | 6.6 | Apps | [ ] | | | |
 | 6.7 | Area de trabalho | [ ] | | | |
@@ -1099,6 +1099,22 @@ da captura (um pixel a cada 997) nao separa texto com e sem antialias; a
 prova virou o numero de niveis de alfa que o proprio `wm` relata.
 Ficou de fora: paineis do `wm` (processos, arquivos, menu) ainda na 8x8 (vao
 virar apps na 6.6), Unicode fora do ASCII, `libgui` com fonte vetorial.
+
+#### 6.4 Imagens PNG/JPEG - 13:05 a 13:38 - FEITO
+`stb_image` 2.30 (`third_party/stb`, so PNG e JPEG) no `wm` (`wm/img.c`) e no
+`imginfo` (novo). `tools/mkwallpaper.py` (novo, Python puro) gera no build o
+papel de parede PNG de 1280x800, que o `wm` carrega, ajusta a tela se
+precisar e copia no fundo; sem ele, volta o degrade. `share/` (novo) vai para
+`/usr/share` e leva um JPEG e um PNG de teste com quadrantes de cores
+conhecidas. Criterio: a sequencia D carrega o papel de parede PNG e a captura
+do boot grafico tem centenas de cores na amostra (eram 75); a sequencia A
+decodifica o JPEG e o PNG de teste (tamanho, canais e as quatro cores certas)
+e o papel de parede. Regressao 420 -> 425. Versao 2.4.0-a5.
+Problemas: nenhum; tudo passou na primeira rodada. Efeito colateral
+registrado: a verificacao de cores da captura do `hello-gui` perdeu forca com
+o papel de parede, e o `hello-gui` segue provado pelo log do `wm`.
+Ficou de fora: icones (vao com o lancador da 6.7), GIF e BMP, escolher o
+papel de parede.
 
 ### Sessao 2 - 2026-10-17
 

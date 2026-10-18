@@ -125,6 +125,18 @@ def build_all(quiet=False):
             wad = freedoom.fetch()
         except (OSError, SystemExit) as e:
             print(f"aviso: sem o freedoom1.wad ({e}); o doom fica sem IWAD")
+    share = ROOT / "share"
+    for src in sorted(share.rglob("*")) if share.exists() else []:
+        if src.is_file():
+            dest = out / "esp" / "usr" / "share" / src.relative_to(share)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if not dest.exists() or dest.stat().st_size != src.stat().st_size:
+                shutil.copyfile(src, dest)
+    wallpaper = out / "esp" / "usr" / "share" / "wallpapers" / "orion.png"
+    script = ROOT / "tools" / "mkwallpaper.py"
+    if not wallpaper.exists() or wallpaper.stat().st_mtime < script.stat().st_mtime:
+        wallpaper.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run([sys.executable, str(script), str(wallpaper)], check=True, stdout=subprocess.DEVNULL)
     fonts = out / "esp" / "usr" / "share" / "fonts"
     fonts.mkdir(parents=True, exist_ok=True)
     for ttf in sorted((ROOT / "third_party" / "dejavu").glob("*.ttf")):

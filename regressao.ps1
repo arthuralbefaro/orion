@@ -181,6 +181,7 @@ if ($runAll -or $OnlyA) {
         "cmd:unixtest /run", "until:60:falha(s))", "cmd:unixtest /", "until:60:falha(s))",
         "cmd:permtest /tmp", "until:90:falha(s))", "cmd:permtest /", "until:90:falha(s))",
         "cmd:ls -l /etc/shadow", "cmd:id", "wait:1", "cmd:su orion -c poweroff", "wait:1",
+        "cmd:imginfo /usr/share/imagens/teste.jpg /usr/share/imagens/teste.png /usr/share/wallpapers/orion.png", "wait:2",
         "cmd:shmtest", "until:30:falha(s))", "cmd:aslrtest", "until:30:falha(s))", "cmd:cat /proc/self/maps", "cmd:cat /proc/self/maps", "wait:1",
         "cmd:login", "until:10:login: ", "raw:orion", "key:0D", "until:10:Senha: ", "raw:errada", "key:0D",
         "until:10:Login incorreto", "wait:1", "raw:orion", "key:0D", "wait:1", "raw:orion", "key:0D",
@@ -406,6 +407,9 @@ if ($runAll -or $OnlyA) {
     Expect $a "(?s)aslrtest: pilha.*?aslrtest: TUDO OK \(0 falha\(s\)\)" "aslrtest: pilha e mmap mudam a cada exec, dentro das faixas"
     Expect $a "(?s)shmtest: MAP_SHARED de arquivo.*?shmtest: TUDO OK \(0 falha\(s\)\)" "shmtest: MAP_SHARED com escrita em arquivo do tmpfs entre processos"
     Expect $a "o que o outro processo escreveu aparece aqui\s+ok" "shmtest: escrita de outro processo aparece no mapeamento"
+    Expect $a "teste\.jpg: JPEG 96x64, 3 canais, media [0-9a-f]{6}\s*\nteste\.jpg: quadrantes vermelho verde azul amarelo" "stb_image decodifica JPEG"
+    Expect $a "teste\.png: PNG 48x32, 3 canais, media [0-9a-f]{6}\s*\nteste\.png: quadrantes vermelho verde azul amarelo" "stb_image decodifica PNG"
+    Expect $a "orion\.png: PNG 1280x800, 3 canais" "papel de parede PNG gerado no build esta na imagem"
     Expect $a '(?s)aslrtest: TUDO OK.*?cat /proc/self/maps\s*\n.*?\n([0-9a-f]+)-[0-9a-f]+ rw-p 00000000 00:00 0\s+\[stack\].*?cat /proc/self/maps\s*\n.*?\n(?!\1-)[0-9a-f]+-[0-9a-f]+ rw-p 00000000 00:00 0\s+\[stack\]' "dois cat /proc/self/maps seguidos mostram pilhas em enderecos diferentes"
     Expect $a 'login: root\s*Senha: \s*Bem-vindo, root\.' "boot pede usuario e senha, senha sem eco"
     Expect $a 'login: orion\s*Senha: \s*Login incorreto' "login recusa senha errada"
@@ -757,6 +761,8 @@ if ($runAll -or $OnlyD) {
     Expect $d "wm: apps em /run/wmapp\.sock" "wm escuta apps num socket Unix proprio"
     Expect $d "wm: fontes vetoriais: DejaVuSansMono\.ttf 20 px no terminal, DejaVuSans\.ttf 15 px na barra e nos titulos" "terminal e barra com fonte vetorial (stb_truetype e DejaVu)"
     Expect $d "wm: 1280x800, celula 10x21" "celula do terminal vem da metrica da fonte"
+    Expect $d "wm: papel de parede /usr/share/wallpapers/orion\.png \(PNG 1280x800\)" "wm carrega o papel de parede PNG"
+    Test-ShotColors "out\shots\reg-gui-1-boot.ppm" "captura do boot grafico mostra o papel de parede" 250
     Expect $d "wm: glifo 'A' do terminal: \d+x\d+ pixels, ([1-9]\d|\d{3}) niveis de alfa \(antialias\)" "glifos com antialias (10 ou mais niveis de alfa)"
     Expect $d "wm: ([5-9]\d|\d{3}) glifo\(s\) vetoriais no cache" "cache de glifos usado pelo terminal e pela barra"
     Expect $d "wm: app abriu a janela (\d+) \(360x200, 'Ola do hello-gui'\) com o buffer em /run/wm/app-\d+\.buf\s*\nwm: janela \1 mostrou o primeiro quadro" "hello-gui abre uma janela propria e desenha no buffer compartilhado"
