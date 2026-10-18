@@ -263,7 +263,12 @@ if ($Iso) {
     Remove-Item -Recurse -Force $IsoDir -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path (Join-Path $IsoDir "boot\limine") | Out-Null
     Copy-Item $KernelElf (Join-Path $IsoDir "boot\$Kernel.elf")
-    Copy-Item (Join-Path $Root "limine.conf") (Join-Path $IsoDir "boot\limine\limine.conf")
+    if (-not $PyCmd) { $PyCmd = & (Join-Path $Root "tools\python.ps1") }
+    $pyArgs = @($PyCmd | Select-Object -Skip 1)
+    & $PyCmd[0] @pyArgs (Join-Path $Root "tools\mkinitrd.py") (Join-Path $IsoDir "boot\initramfs.cpio") --esp $EspDir
+    if ($LASTEXITCODE -ne 0) { throw "mkinitrd falhou" }
+    $conf = (Get-Content (Join-Path $Root "limine.conf") -Raw).TrimEnd() + "`n    module_path: boot():/boot/initramfs.cpio`n"
+    Set-Content -Path (Join-Path $IsoDir "boot\limine\limine.conf") -Value $conf -Encoding ascii -NoNewline
     foreach ($f in "limine-bios.sys", "limine-bios-cd.bin", "limine-uefi-cd.bin") {
         Copy-Item (Join-Path $LimineDir $f) (Join-Path $IsoDir "boot\limine\$f")
     }

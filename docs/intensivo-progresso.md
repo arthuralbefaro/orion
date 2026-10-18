@@ -27,16 +27,20 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 09:44, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
-`v2.2` e `v2.3`), mais 8.7 e 7.1. Versao 2.3.1. O boot pede usuario e senha
-(`root`/`orion`); o `test.ps1` e o `qrun.py` entram sozinhos como root. SMEP,
-SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO hibrida. A regressao roda no
-`out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e na ISO na F, com
-380 verificacoes; a sequencia A sobe o `tools/hostweb.py` no hospedeiro e
-usa `hostfwd` (5555 e 8081).
+Estado (2026-10-18, 10:13, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+`v2.2` e `v2.3`), mais 8.7, 7.1 e 7.2. Versao 2.3.2. O boot pede usuario e
+senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram sozinhos como root.
+SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO hibrida e live (raiz
+em tmpfs a partir de um initramfs). A regressao roda no `out\orion.img` (GPT,
+raiz em ext2) nas sequencias A a E e na ISO na F, com 390 verificacoes; a
+sequencia A sobe o `tools/hostweb.py` no hospedeiro e usa `hostfwd` (5555 e
+8081).
 
-Proxima etapa: 7.2 (a ISO boota com a raiz em tmpfs a partir de um initramfs),
-depois 5.1 (uACPI). A 7.2 vira 2.3.2; a 5.1 abre a 2.4.0-a1.
+Proxima etapa: 5.1 (uACPI 6.1.1 em `third_party/uacpi`; `poweroff`,
+`reboot`, botao de energia e rotas do `_PRT`), que abre a versao 2.4.0-a1.
+O tarball ja foi conferido: SHA-256
+`40f2e278b2080e69f4eaa3384404944874d430e50b72c1066cab2ba476e2b769`
+(https://github.com/uACPI/uACPI/archive/refs/tags/6.1.1.tar.gz).
 
 ## Checklist
 
@@ -97,7 +101,7 @@ depois 5.1 (uACPI). A 7.2 vira 2.3.2; a 5.1 abre a 2.4.0-a1.
 | 6.6 | Apps | [ ] | | | |
 | 6.7 | Area de trabalho | [ ] | | | |
 | 7.1 | ISO hibrida | [x] | 06:26 | 09:44 | ver `git log` |
-| 7.2 | Live | [ ] | | | |
+| 7.2 | Live | [x] | 09:44 | 10:13 | ver `git log` |
 | 7.3 | Instalador | [ ] | | | |
 | 7.4 | Hardware real | [ ] | | | |
 | 7.5 | Pacotes | [ ] | | | |
@@ -992,6 +996,24 @@ partida.
 Windows; o `check.ps1` compila os `tools/*.c` para um `.o` temporario.
 Ficou de fora: o teste no VirtualBox (nao esta instalado aqui; fica para o
 dono), Joliet e HFS+.
+
+#### 7.2 Live - 09:44 a 10:13 - FEITO
+A ISO leva o sistema inteiro num initramfs (cpio `newc` de 49 MiB, gerado
+pelo `tools/mkinitrd.py` a partir da mesma arvore da imagem ext2, com os
+mesmos modos e donos) que o Limine carrega como modulo. O `vfs_init` tenta o
+initramfs antes dos discos: monta um tmpfs como raiz, desempacota
+(`fs/initramfs.c`) e devolve ao alocador os 50 MiB do modulo
+(`pmm_add_region`); no QEMU de 512 MiB o live sobe com 518 MiB de total e 53
+usados. Criterio: a sequencia F entra pelo `login` nos quatro boots da ISO
+(CD e pendrive, BIOS e UEFI), com a raiz `initramfs / tmpfs`, e usa o
+sistema (`/bin` inteiro, `hello`, `lua`, `su`, gravar e ler na raiz); no boot
+seguinte o arquivo gravado nao existe mais. O `Makefile` (Linux) passou a
+gerar a ISO pelo mesmo caminho (`qrun.make_iso`) em vez do `xorriso`.
+Regressao 380 -> 390, estresse 5x verde. Versao 2.3.2.
+Problemas: nenhum; o desempacotamento e os quatro boots passaram na primeira
+rodada.
+Ficou de fora: compressao do initramfs, escolher no menu do Limine entre live
+e instalar (7.3), persistencia em pendrive.
 
 ### Sessao 2 - 2026-10-17
 

@@ -193,8 +193,10 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
 `.\build.ps1 -Iso` gera `out\orion.iso` com uma ferramenta propria
 (`tools\mkiso.c`: ISO9660 com Rock Ridge e El Torito) e o `limine
 bios-install`. A mesma ISO boota como CD ou gravada num pendrive (Rufus em
-modo DD, ou `dd`), em BIOS ou UEFI. Por enquanto ela leva so o kernel: sem
-disco, o boot termina no shell do kernel.
+modo DD, ou `dd`), em BIOS ou UEFI. Ela e um sistema live: o sistema inteiro
+(o mesmo da imagem de disco, Doom incluido) vai num initramfs que o kernel
+desempacota num tmpfs usado como raiz, sem precisar de disco. Login `root` ou
+`orion`, senha `orion`. Nada do que se grava sobrevive ao desligar.
 
 ## Programas proprios em /bin
     sh init edit wm top ps free uptime time kill env printenv clear

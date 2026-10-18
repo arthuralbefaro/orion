@@ -29,6 +29,7 @@ uint64_t pmm_alloc_pages(size_t count);
 
 void     pmm_free_page(uint64_t phys);
 void     pmm_free_pages(uint64_t phys, size_t count);
+uint64_t pmm_add_region(uint64_t phys, uint64_t count);
 
 /* Contagem de referencias por pagina, usada pelo fork copy-on-write. */
 void     pmm_ref_inc(uint64_t phys);

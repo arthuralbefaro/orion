@@ -2425,3 +2425,33 @@ Uma linha por decisao, na ordem em que foram tomadas.
   kernel. O `check.ps1` passou a compilar os `tools/*.c` com `-Wall -Wextra`.
 - VirtualBox nao esta instalado nesta maquina; o teste nele (parte do
   "pronto quando") fica para o dono.
+
+## v2.3.2 (etapa 7.2: sistema live)
+
+- A ISO leva `boot/initramfs.cpio`, carregado pelo Limine como modulo
+  (`module_path` acrescentado ao `limine.conf` so na copia da ISO). Formato
+  cpio `newc` (o do Linux): cabecalho ASCII de 110 bytes, nome, dados, tudo
+  alinhado em 4. Sem compressao: o Limine nao descomprime e um descompressor
+  no kernel nao paga 49 MiB numa ISO de 56 MiB.
+- `tools/mkinitrd.py` (novo) monta o cpio a partir da mesma arvore que o
+  `mkimage.py` usa para a raiz ext2 (`root_tree`), entao modos, donos,
+  `setuid` do `su`/`passwd`, `/etc/shadow` `0600` e `/home/orion` do usuario
+  1000 saem iguais nos dois; as datas sao a constante do `mkext2.py`, para o
+  arquivo nao mudar a cada build.
+- `vfs_init` tenta o initramfs antes dos discos: se o modulo `initramfs`
+  existe, monta um tmpfs como raiz e desempacota nele (`fs/initramfs.c`,
+  diretorios, arquivos e links, com `setattr` de modo, dono e data); o resto
+  do boot (devfs, `/tmp`, `/run`, `/proc`, `/mnt`) segue igual. Uma entrada
+  ruim gera aviso e o resto continua; um cabecalho corrompido para o
+  desempacotamento com o que ja veio.
+- Depois de desempacotar, a memoria do modulo (que o Limine marca como
+  "kernel/modules" e o `pmm` nunca contou) entra no alocador por
+  `pmm_add_region`: os dados existem uma vez so, no tmpfs. No QEMU com 512 MiB,
+  o live sobe com 518 MiB de total e 53 MiB usados.
+- A raiz live e so de RAM: nada sobrevive ao reboot, e e isso que a regressao
+  confere. Com a ISO gravada num pendrive o kernel tambem monta a FAT da
+  particao EFI em `/mnt`, inofensivo.
+- Teste: a sequencia F entra pelo `login` nos quatro boots e confere em cada
+  um a raiz `initramfs / tmpfs`; no primeiro, `/bin` inteiro, donos e modos,
+  escrita e leitura na raiz, `hello`, `lua`, `su`; no segundo, que o arquivo
+  gravado antes sumiu; no ultimo, o wad do Doom.

@@ -198,6 +198,24 @@ void pmm_free_pages(uint64_t phys, size_t count)
     spin_unlock_irqrestore(&pmm_lock, flags);
 }
 
+uint64_t pmm_add_region(uint64_t phys, uint64_t count)
+{
+    uint64_t added = 0;
+    uint64_t flags = spin_lock_irqsave(&pmm_lock);
+    for (uint64_t i = 0; i < count; i++) {
+        uint64_t idx = phys / PAGE_SIZE + i;
+        if (idx >= page_count || !bit_test(idx))
+            continue;
+        bit_clear(idx);
+        total_pages++;
+        added++;
+        if (idx < search_hint)
+            search_hint = idx;
+    }
+    spin_unlock_irqrestore(&pmm_lock, flags);
+    return added;
+}
+
 void pmm_ref_inc(uint64_t phys)
 {
     uint64_t idx = phys / PAGE_SIZE;

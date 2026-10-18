@@ -738,17 +738,32 @@ if ($runAll -or $OnlyF) {
         & (Join-Path $Root "build.ps1") -Iso | Out-Null
     }
     $stepsF = @(
-        "wait:6", "reboot:uefi,cd", "wait:6", "reboot:bios,isodisk", "wait:6", "reboot:uefi,isodisk", "wait:6"
+        "cmd:mount", "cmd:id", "cmd:ls /bin | wc", "cmd:ls -l /etc/shadow /bin/su", "cmd:ls -l /home",
+        "cmd:echo vivo-na-ram > /home/orion/nota.txt", "cmd:cat /home/orion/nota.txt", "cmd:hello",
+        "cmd:lua -e print(6*7)", "cmd:su orion -c id", "cmd:free", "wait:1",
+        "reboot:uefi,cd", "cmd:mount", "cmd:cat /home/orion/nota.txt", "wait:1",
+        "reboot:bios,isodisk", "cmd:mount", "wait:1",
+        "reboot:uefi,isodisk", "cmd:mount", "cmd:ls /doom", "wait:1"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Iso -Bios -NoBuild -LogPath "out\reg-f.log" `
-        -Script $stepsF -CommandDelay 1.0 -BootTimeout 20 -NoPrint | Out-Null
+        -Script $stepsF -CommandDelay 1.5 -BootTimeout 90 -NoPrint | Out-Null
     $f = Get-Log "out\reg-f.log"
     if ($Verbose) { Write-Output $f }
 
-    Expect $f '^(?:(?!----- reboot)[\s\S])*?Limine [\d.]+ via BIOS[^\n]*\n[^\n]*kernel lido de /boot/orion\.elf no CD(?:(?!----- reboot)[\s\S])*?/bin/init nao encontrado' "ISO como CD no BIOS: El Torito, Limine e kernel"
-    Expect $f '----- reboot uefi,cd -----(?:(?!----- reboot)[\s\S])*?Limine [\d.]+ via UEFI 64[^\n]*\n[^\n]*kernel lido de /boot/orion\.elf no CD(?:(?!----- reboot)[\s\S])*?/bin/init nao encontrado' "ISO como CD no UEFI: imagem EFI do El Torito"
-    Expect $f '----- reboot bios,isodisk -----(?:(?!----- reboot)[\s\S])*?Limine [\d.]+ via BIOS[^\n]*\n[^\n]*kernel lido de /boot/orion\.elf no disco(?:(?!----- reboot)[\s\S])*?/bin/init nao encontrado' "ISO gravada em pendrive no BIOS: MBR do Limine"
-    Expect $f '----- reboot uefi,isodisk -----(?:(?!----- reboot)[\s\S])*?Limine [\d.]+ via UEFI 64[^\n]*\n[^\n]*kernel lido de /boot/orion\.elf no disco(?:(?!----- reboot)[\s\S])*?/bin/init nao encontrado' "ISO gravada em pendrive no UEFI: particao EFI do MBR"
+    Expect $f '^(?:(?!----- reboot)[\s\S])*?Limine [\d.]+ via BIOS[^\n]*\n[^\n]*kernel lido de /boot/orion\.elf no CD(?:(?!----- reboot)[\s\S])*?raiz montada: tmpfs do initramfs \(\d{3,} entradas, \d{5,} KiB, 0 falha\(s\)\); \d{5,} KiB do modulo devolvidos(?:(?!----- reboot)[\s\S])*?login: root\s*Senha: \s*Bem-vindo, root\.(?:(?!----- reboot)[\s\S])*?\ninitramfs / tmpfs rw' "ISO como CD no BIOS: El Torito, Limine, raiz em RAM e login"
+    Expect $f '----- reboot uefi,cd -----(?:(?!----- reboot)[\s\S])*?Limine [\d.]+ via UEFI 64[^\n]*\n[^\n]*kernel lido de /boot/orion\.elf no CD(?:(?!----- reboot)[\s\S])*?raiz montada: tmpfs do initramfs \(\d{3,} entradas, \d{5,} KiB, 0 falha\(s\)\); \d{5,} KiB do modulo devolvidos(?:(?!----- reboot)[\s\S])*?login: root\s*Senha: \s*Bem-vindo, root\.(?:(?!----- reboot)[\s\S])*?\ninitramfs / tmpfs rw' "ISO como CD no UEFI: imagem EFI do El Torito, raiz em RAM e login"
+    Expect $f '----- reboot bios,isodisk -----(?:(?!----- reboot)[\s\S])*?Limine [\d.]+ via BIOS[^\n]*\n[^\n]*kernel lido de /boot/orion\.elf no disco(?:(?!----- reboot)[\s\S])*?raiz montada: tmpfs do initramfs \(\d{3,} entradas, \d{5,} KiB, 0 falha\(s\)\); \d{5,} KiB do modulo devolvidos(?:(?!----- reboot)[\s\S])*?login: root\s*Senha: \s*Bem-vindo, root\.(?:(?!----- reboot)[\s\S])*?\ninitramfs / tmpfs rw' "ISO gravada em pendrive no BIOS: MBR do Limine, raiz em RAM e login"
+    Expect $f '----- reboot uefi,isodisk -----(?:(?!----- reboot)[\s\S])*?Limine [\d.]+ via UEFI 64[^\n]*\n[^\n]*kernel lido de /boot/orion\.elf no disco(?:(?!----- reboot)[\s\S])*?raiz montada: tmpfs do initramfs \(\d{3,} entradas, \d{5,} KiB, 0 falha\(s\)\); \d{5,} KiB do modulo devolvidos(?:(?!----- reboot)[\s\S])*?login: root\s*Senha: \s*Bem-vindo, root\.(?:(?!----- reboot)[\s\S])*?\ninitramfs / tmpfs rw' "ISO gravada em pendrive no UEFI: particao EFI do MBR, raiz em RAM e login"
+    Expect $f "ls /bin \| wc\s*\n\s*1\d\d\s" "live: /bin inteiro no initramfs"
+    Expect $f "-rw-------\s+1\s+root\s+root[^\n]*/etc/shadow" "live: /etc/shadow 0600 de root"
+    Expect $f "-rwsr-xr-x\s+1\s+root\s+root[^\n]*/bin/su" "live: su setuid root"
+    Expect $f "drwxr-xr-x\s+\d+\s+orion\s+users[^\n]*orion" "live: /home/orion do orion"
+    Expect $f "cat /home/orion/nota\.txt\s*\nvivo-na-ram" "live: grava e le arquivo na raiz em RAM"
+    Expect $f "hello from ring 3! pid \d+" "live: hello roda"
+    Expect $f "lua -e print\(6\*7\)\s*\n42" "live: lua roda"
+    Expect $f "su orion -c id\s*\nuid=1000\(orion\)" "live: su para orion"
+    Expect $f "----- reboot uefi,cd -----[\s\S]*?cat: /home/orion/nota\.txt: Arquivo ou diretorio inexistente" "live: nada sobrevive ao reboot (raiz so em RAM)"
+    Expect $f "ls /doom\s*\n[^\n]*freedoom1\.wad" "live: o wad do Doom esta no initramfs"
     ExpectNot $f "PANIC|EXCECAO" "nenhum panico nos quatro boots da ISO"
 }
 

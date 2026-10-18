@@ -1,3 +1,4 @@
+#include <fs/initramfs.h>
 #include <fs/vfs.h>
 #include <fs/fat.h>
 #include <fs/devfs.h>
@@ -1560,6 +1561,8 @@ void vfs_init(void)
     spinlock_init(&vfs_lock);
     mutex_init(&mount_lock, "vfs-mount");
     pcache_init();
+    if (initramfs_mount_root())
+        return;
     for (uint32_t i = 0; i < blockdev_count() && !root_mount; i++) {
         struct blockdev *dev = blockdev_at(i);
         if (!dev->parent || dev->part_kind != PART_ROOT)

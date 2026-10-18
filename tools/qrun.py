@@ -426,7 +426,12 @@ def make_iso():
     shutil.rmtree(iso_dir, ignore_errors=True)
     (iso_dir / "boot" / "limine").mkdir(parents=True)
     shutil.copyfile(OUT / "orion.elf", iso_dir / "boot" / "orion.elf")
-    shutil.copyfile(ROOT / "limine.conf", iso_dir / "boot" / "limine" / "limine.conf")
+    r = subprocess.run([sys.executable, str(ROOT / "tools" / "mkinitrd.py"), str(iso_dir / "boot" / "initramfs.cpio"),
+                        "--esp", str(OUT / "esp")], cwd=ROOT, stdout=subprocess.DEVNULL)
+    if r.returncode != 0:
+        return r
+    conf = (ROOT / "limine.conf").read_text().rstrip() + "\n    module_path: boot():/boot/initramfs.cpio\n"
+    (iso_dir / "boot" / "limine" / "limine.conf").write_text(conf)
     for name in ("limine-bios.sys", "limine-bios-cd.bin", "limine-uefi-cd.bin"):
         shutil.copyfile(limine / name, iso_dir / "boot" / "limine" / name)
     r = subprocess.run([str(tools / "mkiso"), str(iso_dir), str(OUT / "orion.iso"),
