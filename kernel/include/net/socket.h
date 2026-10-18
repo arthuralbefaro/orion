@@ -58,6 +58,7 @@ long sys_recvfrom(int fd, void *buf, uint64_t len, int flags, struct sockaddr_in
 
 struct user_msghdr;
 long sys_listen(int fd, int backlog);
+long sys_socketpair(int domain, int type, int protocol, int *usv);
 long sys_accept4(int fd, struct sockaddr_in *addr, uint32_t *len, int flags);
 long sys_shutdown(int fd, int how);
 long sys_getsockname(int fd, struct sockaddr_in *addr, uint32_t *len);

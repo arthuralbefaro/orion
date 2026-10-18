@@ -311,6 +311,30 @@ try {
                 }
             }
             "shot" { Pump-Serial 0.4; Take-Screenshot $arg }
+            "type" {
+                Write-Host "  type > $arg" -ForegroundColor DarkGray
+                foreach ($ch in $arg.ToCharArray()) {
+                    $name = $null
+                    $t = [string]$ch
+                    if ($t -cmatch '^[a-z0-9]$') { $name = $t }
+                    elseif ($t -cmatch '^[A-Z]$') { $name = "shift-" + $t.ToLower() }
+                    else {
+                        switch ($t) {
+                            ' ' { $name = 'spc' }
+                            '-' { $name = 'minus' }
+                            '/' { $name = 'slash' }
+                            '.' { $name = 'dot' }
+                            ',' { $name = 'comma' }
+                            '=' { $name = 'equal' }
+                            ';' { $name = 'semicolon' }
+                            '_' { $name = 'shift-minus' }
+                            ':' { $name = 'shift-semicolon' }
+                        }
+                    }
+                    if ($name) { Send-Monitor "sendkey $name" }
+                }
+                Pump-Serial 0.3
+            }
             "tcpprobe" {
                 $port = [int]$arg
                 $tc = New-Object System.Net.Sockets.TcpClient

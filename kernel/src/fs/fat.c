@@ -1301,6 +1301,8 @@ static int fat_create(struct vnode *dir, const char *name, uint32_t mode, struct
     if (!name_ok(name))
         return -EINVAL;
     bool is_dir = (mode & S_IFMT) == S_IFDIR;
+    if (!is_dir && (mode & S_IFMT) != S_IFREG)
+        return -EPERM;
 
     mutex_lock(&f->lock);
     struct find_ctx l;

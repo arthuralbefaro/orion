@@ -15,6 +15,7 @@
 #define ARP_ENTRIES   16
 #define ARP_TTL_MS    120000
 #define ARP_RETRIES   4
+#define LOOP_QUEUE    256
 
 struct eth_hdr {
     uint8_t  dst[ETH_ALEN];
@@ -77,6 +78,71 @@ static struct waitqueue arp_wq = WAITQUEUE_INIT;
 static const uint8_t broadcast_mac[ETH_ALEN] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 static uint16_t ip_id;
 static bool running;
+static uint8_t *loop_queue[LOOP_QUEUE];
+static uint16_t loop_len[LOOP_QUEUE];
+static uint32_t loop_head, loop_count;
+static spinlock_t loop_lock = SPINLOCK_INIT;
+
+bool net_is_local(uint32_t ip)
+{
+    return (ip >> 24) == 127 || (netif.configured && ip == netif.ip);
+}
+
+uint32_t net_local_for(uint32_t dst)
+{
+    return (dst >> 24) == 127 ? dst : netif.ip;
+}
+
+static int loop_send(uint32_t dst, uint8_t proto, const void *payload, int len)
+{
+    int total = (int)sizeof(struct ip_hdr) + len;
+    uint8_t *pkt = kmalloc((size_t)total);
+    if (!pkt)
+        return -ENOBUFS;
+    struct ip_hdr *ih = (void *)pkt;
+    memset(ih, 0, sizeof(*ih));
+    ih->ver_ihl = 0x45;
+    ih->total_len = htons((uint16_t)total);
+    ih->ttl = 64;
+    ih->proto = proto;
+    ih->src = htonl(net_local_for(dst));
+    ih->dst = htonl(dst);
+    uint64_t flags = spin_lock_irqsave(&loop_lock);
+    ih->id = htons(ip_id++);
+    ih->checksum = htons(net_checksum(ih, (int)sizeof(*ih)));
+    memcpy(pkt + sizeof(*ih), payload, (size_t)len);
+    bool queued = loop_count < LOOP_QUEUE;
+    if (queued) {
+        uint32_t slot = (loop_head + loop_count) % LOOP_QUEUE;
+        loop_queue[slot] = pkt;
+        loop_len[slot] = (uint16_t)total;
+        loop_count++;
+        stats.loopback++;
+    } else {
+        stats.loopback_dropped++;
+    }
+    spin_unlock_irqrestore(&loop_lock, flags);
+    if (!queued) {
+        kfree(pkt);
+        return -ENOBUFS;
+    }
+    wake_up_all(e1000_rx_queue());
+    return 0;
+}
+
+static uint8_t *loop_pop(int *len)
+{
+    uint64_t flags = spin_lock_irqsave(&loop_lock);
+    uint8_t *pkt = NULL;
+    if (loop_count) {
+        pkt = loop_queue[loop_head];
+        *len = loop_len[loop_head];
+        loop_head = (loop_head + 1) % LOOP_QUEUE;
+        loop_count--;
+    }
+    spin_unlock_irqrestore(&loop_lock, flags);
+    return pkt;
+}
 static struct tcp_rs *tcp;
 static struct mutex tcp_lock = MUTEX_INIT("tcp");
 static struct mutex tcp_tx_lock = MUTEX_INIT("tcp-tx");
@@ -289,10 +355,12 @@ int net_resolve(uint32_t ip, uint8_t *mac_out, int timeout_ms)
 
 int net_send_ip(uint32_t dst, uint8_t proto, const void *payload, int len)
 {
-    if (!e1000_present())
-        return -ENODEV;
     if (len + (int)sizeof(struct ip_hdr) > ETH_MTU)
         return -EMSGSIZE;
+    if (net_is_local(dst))
+        return loop_send(dst, proto, payload, len);
+    if (!e1000_present())
+        return -ENODEV;
 
     uint8_t mac[ETH_ALEN];
     int r = net_resolve(dst, mac, 1000);
@@ -357,7 +425,7 @@ static void tcp_flush(uint32_t id)
 static void handle_tcp(uint32_t src, uint32_t dst, const uint8_t *seg, int len)
 {
     stats.rx_tcp++;
-    if (!tcp || !netif.configured || dst != netif.ip)
+    if (!tcp || !net_is_local(dst))
         return;
     if (tcp_drop(&tcp_lost_rx))
         return;
@@ -379,16 +447,16 @@ long net_tcp_connect(uint32_t ip, uint16_t port, uint32_t *id)
 {
     if (!tcp)
         return -ENODEV;
-    if (!netif.configured)
+    if (!netif.configured && (ip >> 24) != 127)
         return -ENETUNREACH;
     uint8_t syn[64];
     mutex_lock(&tcp_lock);
-    int64_t n = tcp_connect(tcp, netif.ip, ip, port, (uint32_t)random_u64(), time_uptime_ms(), syn, sizeof(syn), id);
+    int64_t n = tcp_connect(tcp, net_local_for(ip), ip, port, (uint32_t)random_u64(), time_uptime_ms(), syn, sizeof(syn), id);
     mutex_unlock(&tcp_lock);
     if (n < 0)
         return n;
     uint8_t mac[ETH_ALEN];
-    int r = net_resolve(ip, mac, 1000);
+    int r = net_is_local(ip) ? 0 : net_resolve(ip, mac, 1000);
     if (r < 0) {
         net_tcp_close(*id);
         return r;
@@ -551,6 +619,13 @@ static void rx_thread(void *arg)
     (void)arg;
     uint8_t frame[ETH_FRAME_MAX];
     while (running) {
+        int llen;
+        uint8_t *pkt = loop_pop(&llen);
+        if (pkt) {
+            handle_ip(pkt, llen);
+            kfree(pkt);
+            continue;
+        }
         int len = e1000_receive(frame, (int)sizeof(frame));
         if (len > 0) {
             handle_frame(frame, len);
@@ -682,6 +757,8 @@ void net_dump(void)
     kprintf("  pilha: %lu quadro(s), %lu arp, %lu ip, %lu icmp, %lu udp, %lu ignorado(s)\n",
             stats.rx_frames, stats.rx_arp, stats.rx_ip, stats.rx_icmp, stats.rx_udp,
             stats.rx_unknown);
+    kprintf("  loopback: %lu pacote(s), %lu descartado(s) por fila cheia\n", stats.loopback,
+            stats.loopback_dropped);
     struct tcp_stats ts;
     net_tcp_stats(&ts);
     kprintf("  tcp: %lu segmento(s), %lu com erro, %lu descartado(s), %lu RST enviado(s), %lu conexao(oes)\n",

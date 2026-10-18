@@ -26,6 +26,8 @@ struct net_stats {
     uint64_t rx_icmp;
     uint64_t rx_udp;
     uint64_t rx_tcp;
+    uint64_t loopback;
+    uint64_t loopback_dropped;
     uint64_t rx_unknown;
     uint64_t tx_frames;
     uint64_t checksum_errors;
@@ -56,6 +58,8 @@ int  net_resolve(uint32_t ip, uint8_t *mac_out, int timeout_ms);
 /* Monta e envia um pacote IPv4. `dst` em ordem de host. */
 int  net_send_ip(uint32_t dst, uint8_t proto, const void *payload, int len);
 int  net_send_udp(uint32_t dst, uint16_t sport, uint16_t dport, const void *data, int len);
+bool net_is_local(uint32_t ip);
+uint32_t net_local_for(uint32_t dst);
 
 uint16_t net_checksum(const void *data, int len);
 int  net_format_ip(uint32_t ip, char *out, int size);

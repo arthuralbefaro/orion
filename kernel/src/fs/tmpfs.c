@@ -434,7 +434,10 @@ static int tmpfs_create(struct vnode *dir, const char *name, uint32_t mode, stru
         r = -EEXIST;
     struct tnode *n = NULL;
     if (r == 0) {
-        n = new_node(t, name, ((mode & S_IFMT) == S_IFDIR ? S_IFDIR : S_IFREG) | (mode & 07777));
+        uint32_t type = mode & S_IFMT;
+        if (type != S_IFDIR && type != S_IFSOCK)
+            type = S_IFREG;
+        n = new_node(t, name, type | (mode & 07777));
         if (!n)
             r = -ENOSPC;
     }

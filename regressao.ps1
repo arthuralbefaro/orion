@@ -177,6 +177,9 @@ if ($runAll -or $OnlyA) {
         "key:0B", "cmd:tcploss 0", "cmd:net", "key:0B", "cmd:rm /tmp/up.bin", "wait:1",
         "cmd:httpd -n 3 -r / &", "wait:2", "hostget:8081:/etc/passwd", "hostget:8081:/nao-existe", "hostget:8081:/etc",
         "wait:2", "cmd:httpd -n 1 &", "wait:2", "hostget:8081:/etc/group", "wait:2",
+        "cmd:unixtest /run", "until:60:falha(s))", "cmd:unixtest /", "until:60:falha(s))",
+        "cmd:ping 127.0.0.1 2", "wait:4",
+        "cmd:httpd -p 8080 -n 1 &", "wait:2", "cmd:httpget 127.0.0.1 8080 /etc/group", "until:30:crc32", "wait:2",
         "cmd:nslookup example.com", "wait:8",
         "cmd:nslookup example.com", "wait:8",
         "cmd:GREETING=ola-mundo", "wait:1",
@@ -364,6 +367,11 @@ if ($runAll -or $OnlyA) {
     Expect $a "httpd: 10\.0\.2\.2:\d+ GET /etc/passwd -> 200" "httpd: accept4 e getpeername com o endereco do cliente"
     Expect $a "httpd: fim, 3 conexao\(oes\)" "httpd: select com prazo, contagem e saida limpa"
     Expect $a "(?s)httpd: fim, 3 conexao.*?\[hostget\] porta 8081 /etc/group: HTTP/1\.0 200 OK" "SO_REUSEADDR: segundo httpd na mesma porta com conexoes em TIME_WAIT"
+    Expect $a "(?s)unixtest: sockets AF_UNIX em /run\s.*?unixtest: TUDO OK" "AF_UNIX no tmpfs: socketpair, bind, listen, connect, accept, poll, nomes"
+    Expect $a "(?s)unixtest: sockets AF_UNIX em /\s*\n.*?unixtest: TUDO OK" "AF_UNIX com o no do socket na raiz ext2"
+    Expect $a "64 bytes de 127\.0\.0\.1: seq=2" "loopback: ping 127.0.0.1"
+    Expect $a "httpd: 127\.0\.0\.1:\d+ GET /etc/group -> 200" "loopback: httpd atende o httpget em 127.0.0.1"
+    Expect $a "(?s)httpget 127\.0\.0\.1 8080 /etc/group.*?root:x:0:.*?httpget: HTTP/1\.0 200 OK" "loopback: httpget recebe a resposta"
     Expect $a "(?s)----- reboot -----.*?cat /reboot\.txt\s*\n\s*sobrevive-ao-reboot" "arquivo gravado na raiz sobrevive a reboot"
     Expect $a "(?s)cat /proc/self/maps\s*\n\s*[0-9a-f]{8,}-[0-9a-f]{8,} r--p [0-9a-f]{8} 00:00 \d+\s+/bin/cat" "cat /proc/self/maps mostra as VMAs do proprio cat"
     Expect $a "[0-9a-f]+-7ffffffff000 rw-p 00000000 00:00 0\s+\[stack\]" "maps mostra a pilha"
@@ -626,6 +634,8 @@ if ($runAll -or $OnlyD) {
     Write-Host "== Sequencia D (boot direto na GUI) ==" -ForegroundColor Cyan
     $stepsD = @(
         "wait:16", "shot:out\shots\reg-gui-1-boot.ppm",
+        "type:wmctl ping", "mon:sendkey ret", "wait:2", "type:wmctl term", "mon:sendkey ret", "wait:3",
+        "type:wmctl list", "mon:sendkey ret", "wait:2", "shot:out\shots\reg-gui-5-wmctl.ppm",
         "mon:sendkey ctrl-p", "wait:2", "shot:out\shots\reg-gui-2-processos.ppm",
         "mon:sendkey ctrl-f", "wait:2", "shot:out\shots\reg-gui-3-arquivos.ppm",
         "mon:mouse_move -640 -400", "wait:0.5", "mon:mouse_move 40 12", "wait:0.5",
@@ -648,6 +658,10 @@ if ($runAll -or $OnlyD) {
     Expect $d "wm: janela de arquivos em /" "Ctrl\+F abriu a janela de arquivos"
     Expect $d "wm: encerrando" "Ctrl\+Alt\+X encerrou o wm"
     Expect $d "init: /bin/wm terminou" "init percebeu a saida do wm"
+    Expect $d "wm: comandos em /run/wm\.sock" "wm escuta comandos num socket Unix"
+    Expect $d "wm: wmctl: ping" "wmctl conversou com o wm pelo socket Unix"
+    Expect $d "wm: wmctl: term\s*\nwm: terminal \d+ -> sh pid \d+" "wmctl term: o wm abriu um terminal a pedido de outro programa"
+    Expect $d "wm: wmctl: list" "wmctl list pelo socket Unix"
 }
 
 # ---------------- Sequencia E: estresse de processos ----------------

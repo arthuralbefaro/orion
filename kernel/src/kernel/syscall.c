@@ -2027,6 +2027,7 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_SETRLIMIT:   ret = sys_setrlimit((int)f->rdi, (const struct user_rlimit *)f->rsi); break;
     case SYS_PRLIMIT64:   ret = sys_prlimit64((int)f->rdi, (int)f->rsi, (const struct user_rlimit *)f->rdx, (struct user_rlimit *)f->r10); break;
     case SYS_SOCKET:      ret = sys_socket((int)f->rdi, (int)f->rsi, (int)f->rdx); break;
+    case SYS_SOCKETPAIR:  ret = sys_socketpair((int)f->rdi, (int)f->rsi, (int)f->rdx, (int *)f->r10); break;
     case SYS_BIND:        ret = sys_bind((int)f->rdi, (const struct sockaddr_in *)f->rsi, (uint32_t)f->rdx); break;
     case SYS_CONNECT:     ret = sys_connect((int)f->rdi, (const struct sockaddr_in *)f->rsi, (uint32_t)f->rdx); break;
     case SYS_SENDTO:      ret = sys_sendto((int)f->rdi, (const void *)f->rsi, f->rdx, (int)f->r10, (const struct sockaddr_in *)f->r8, (uint32_t)f->r9); break;

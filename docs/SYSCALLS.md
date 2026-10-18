@@ -48,7 +48,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 37 | alarm | completa | em cima do `ITIMER_REAL` |
 | 38 | setitimer | parcial | so `ITIMER_REAL`, com intervalo; resolucao de 5 ms |
 | 39 | getpid | completa | |
-| 41 | socket | parcial | `AF_INET` com `SOCK_STREAM` (TCP, 3.2), `SOCK_DGRAM` e `SOCK_RAW`; `SOCK_NONBLOCK` e `SOCK_CLOEXEC` |
+| 41 | socket | parcial | `AF_INET` com `SOCK_STREAM` (TCP, 3.2), `SOCK_DGRAM` e `SOCK_RAW`; `AF_UNIX` com `SOCK_STREAM` (3.5); `SOCK_NONBLOCK` e `SOCK_CLOEXEC` |
 | 42 | connect | parcial | UDP fixa o destino; TCP faz o handshake (o `SYN` e retransmitido com backoff e desiste em uns 63 s com `ETIMEDOUT`), `ECONNREFUSED` com `RST`, `EINPROGRESS` com `O_NONBLOCK` (3.3) |
 | 43 | accept | completa | bloqueia ate ter conexao na fila; endereco do cliente (3.4) |
 | 44 | sendto | parcial | UDP e ICMP; em TCP e um `write` (o endereco e ignorado); sem `SIGPIPE` com a conexao fechada, so `EPIPE` |
@@ -56,10 +56,11 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 46 | sendmsg | parcial | como o `sendto`, juntando ate 1024 `iovec`; sem dados de controle (3.2) |
 | 47 | recvmsg | parcial | como o `recvfrom`, espalhando nos `iovec`; `msg_controllen` volta 0, `MSG_TRUNC` em `msg_flags` (3.2) |
 | 48 | shutdown | completa | `SHUT_WR` manda `FIN`, `SHUT_RD` faz o `read` devolver 0 (3.4) |
-| 49 | bind | parcial | UDP e ICMP; TCP confere a porta (`EADDRINUSE`, respeitando `SO_REUSEADDR`), porta 0 pega uma efemera; o endereco vale so para `listen` (3.4) |
+| 49 | bind | parcial | UDP e ICMP; TCP confere a porta (`EADDRINUSE`, respeitando `SO_REUSEADDR`), porta 0 pega uma efemera; o endereco vale so para `listen` (3.4); `AF_UNIX` cria o no `S_IFSOCK` no caminho (tmpfs e ext2; FAT da `EPERM`) (3.5) |
 | 50 | listen | completa | `backlog` de 1 a 128, contando conexoes no handshake e na fila (3.4) |
 | 51 | getsockname | completa | (3.4) |
 | 52 | getpeername | completa | (3.4) |
+| 53 | socketpair | parcial | so `AF_UNIX` com `SOCK_STREAM` (3.5) |
 | 54 | setsockopt | parcial | `SO_REUSEADDR`; `TCP_NODELAY` so ligado (nao ha Nagle); o resto da `ENOPROTOOPT` (3.4) |
 | 55 | getsockopt | parcial | `SO_REUSEADDR`, `SO_TYPE`, `SO_ERROR`, `SO_RCVBUF`/`SO_SNDBUF` (32 KiB) e `TCP_NODELAY`; o resto da `ENOPROTOOPT` (3.4) |
 | 56 | clone | parcial | `CLONE_THREAD` (com `CLONE_VM` e `CLONE_SIGHAND`), `CLONE_SETTLS`, `CLONE_PARENT_SETTID`, `CLONE_CHILD_SETTID`, `CLONE_CHILD_CLEARTID`; sem `CLONE_THREAD` e um fork com pilha opcional (sem `CLONE_VM` de verdade) |

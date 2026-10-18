@@ -6,6 +6,7 @@
 #include <orion.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -28,9 +29,14 @@
 #define KEY_CTRL_F     0x06
 #define KEY_CTRL_M     0x0D
 #define KEY_CTRL_X     0x18
+#define CTL_PATH       "/run/wm.sock"
+#define CTL_MAX        8
 
 static struct gfx gfx;
 static struct desktop desk;
+static int ctl_fd = -1;
+static int ctl_clients[CTL_MAX];
+static int ctl_count;
 static int fb_fd = -1;
 static int input_fd = -1;
 static bool running = true;
@@ -533,8 +539,110 @@ static void build_desktop(void)
         desk_raise(&desk, term);
 }
 
+static void ctl_open(void)
+{
+    ctl_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    if (ctl_fd < 0) {
+        fprintf(stderr, "wm: socket de comandos: %s\n", orion_strerror(errno));
+        return;
+    }
+    struct sockaddr_un a = { 0 };
+    a.sun_family = AF_UNIX;
+    snprintf(a.sun_path, sizeof(a.sun_path), "%s", CTL_PATH);
+    unlink(CTL_PATH);
+    if (bind(ctl_fd, (struct sockaddr *)&a, sizeof(a)) < 0 || listen(ctl_fd, 4) < 0) {
+        fprintf(stderr, "wm: %s: %s\n", CTL_PATH, orion_strerror(errno));
+        close(ctl_fd);
+        ctl_fd = -1;
+        return;
+    }
+    fprintf(stderr, "wm: comandos em %s\n", CTL_PATH);
+}
+
+static void ctl_drop(int i)
+{
+    close(ctl_clients[i]);
+    ctl_clients[i] = ctl_clients[--ctl_count];
+}
+
+static void ctl_accept(void)
+{
+    for (;;) {
+        int c = accept4(ctl_fd, NULL, NULL, SOCK_CLOEXEC | SOCK_NONBLOCK);
+        if (c < 0)
+            return;
+        if (ctl_count == CTL_MAX) {
+            close(c);
+            continue;
+        }
+        ctl_clients[ctl_count++] = c;
+    }
+}
+
+static void ctl_reply(int fd, const char *text)
+{
+    size_t n = strlen(text);
+    while (n) {
+        ssize_t w = write(fd, text, n);
+        if (w <= 0)
+            return;
+        text += w;
+        n -= (size_t)w;
+    }
+}
+
+static void ctl_command(int fd, char *line)
+{
+    line[strcspn(line, "\r\n")] = 0;
+    fprintf(stderr, "wm: wmctl: %s\n", line);
+    char out[1024];
+    if (strcmp(line, "term") == 0) {
+        struct window *w = new_terminal();
+        snprintf(out, sizeof(out), w ? "ok: terminal %d\n" : "erro: terminal nao abriu\n", w ? w->id : 0);
+        ctl_reply(fd, out);
+    } else if (strcmp(line, "procs") == 0) {
+        open_procs();
+        ctl_reply(fd, "ok: processos\n");
+    } else if (strncmp(line, "files ", 6) == 0 && line[6] == '/') {
+        open_files(line + 6);
+        ctl_reply(fd, "ok: arquivos\n");
+    } else if (strcmp(line, "list") == 0) {
+        size_t used = 0;
+        for (int i = 0; i < desk.count && used < sizeof(out) - 64; i++) {
+            struct window *w = &desk.windows[desk.order[i]];
+            used += (size_t)snprintf(out + used, sizeof(out) - used, "janela %d: %s\n", w->id, w->title);
+        }
+        out[used] = 0;
+        ctl_reply(fd, out);
+    } else if (strcmp(line, "ping") == 0) {
+        ctl_reply(fd, "pong\n");
+    } else {
+        ctl_reply(fd, "erro: comandos: term, procs, files <caminho>, list, ping\n");
+    }
+    gfx_damage(&gfx, rect_make(0, 0, gfx.width, gfx.height));
+}
+
+static void ctl_serve(int i)
+{
+    char line[256];
+    ssize_t n = read(ctl_clients[i], line, sizeof(line) - 1);
+    if (n < 0 && errno == EAGAIN)
+        return;
+    if (n > 0) {
+        line[n] = 0;
+        ctl_command(ctl_clients[i], line);
+    }
+    ctl_drop(i);
+}
+
 static void shutdown_desktop(void)
 {
+    while (ctl_count)
+        ctl_drop(0);
+    if (ctl_fd >= 0) {
+        close(ctl_fd);
+        unlink(CTL_PATH);
+    }
     for (int i = 0; i < WIN_MAX; i++) {
         struct window *w = &desk.windows[i];
         if (w->used && w->kind == WIN_TERM && w->master >= 0) {
@@ -580,16 +688,26 @@ int main(int argc, char **argv)
     gfx_cursor_move(&gfx, mouse_x, mouse_y);
 
     build_desktop();
+    ctl_open();
     update_clock();
     gfx_damage(&gfx, rect_make(0, 0, gfx.width, gfx.height));
 
     struct input_event events[32];
     while (running) {
-        struct pollfd fds[WIN_MAX + 1];
+        struct pollfd fds[WIN_MAX + 2 + CTL_MAX];
         int n = 0;
         fds[n].fd = input_fd;
         fds[n].events = POLLIN;
         n++;
+        int ctl_first = n;
+        fds[n].fd = ctl_fd;
+        fds[n].events = POLLIN;
+        n++;
+        for (int i = 0; i < ctl_count; i++) {
+            fds[n].fd = ctl_clients[i];
+            fds[n].events = POLLIN;
+            n++;
+        }
         for (int i = 0; i < desk.count && n < WIN_MAX + 1; i++) {
             struct window *w = &desk.windows[desk.order[i]];
             if (w->kind == WIN_TERM && w->master >= 0) {
@@ -605,6 +723,11 @@ int main(int argc, char **argv)
             for (long i = 0; i < got / (long)sizeof(events[0]); i++)
                 handle_event(&events[i]);
         }
+        for (int i = ctl_count - 1; i >= 0; i--)
+            if (fds[ctl_first + 1 + i].revents & (POLLIN | POLLHUP))
+                ctl_serve(i);
+        if (ctl_fd >= 0 && (fds[ctl_first].revents & POLLIN))
+            ctl_accept();
         pump_terminals();
         update_clock();
         reap_children();

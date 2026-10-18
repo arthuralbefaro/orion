@@ -156,6 +156,7 @@ int vfs_open(struct vnode *start, const char *path, int flags, struct file **out
 int vfs_open_ex(struct vnode *start, const char *path, int flags, uint32_t mode, struct file **out,
                 bool *followed);
 int vfs_mkdir(struct vnode *start, const char *path, uint32_t mode);
+int vfs_mknod(struct vnode *start, const char *path, uint32_t mode, struct vnode **out);
 int vfs_symlink(struct vnode *start, const char *path, const char *target);
 int vfs_unlink(struct vnode *start, const char *path, bool is_dir);
 int vfs_rename(struct vnode *ostart, const char *opath, struct vnode *nstart, const char *npath);

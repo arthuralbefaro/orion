@@ -1112,7 +1112,7 @@ impl Fs {
         self.writable()?;
         check_name(name)?;
         let kind = mode & S_IFMT;
-        if kind != S_IFREG && kind != S_IFDIR {
+        if kind != S_IFREG && kind != S_IFDIR && kind != S_IFSOCK {
             return Err(EINVAL);
         }
         let is_dir = kind == S_IFDIR;

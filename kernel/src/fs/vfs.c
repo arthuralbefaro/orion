@@ -771,7 +771,9 @@ static int open_path(struct vnode *start, const char *path, int flags, uint32_t 
         }
     }
 
-    if (vnode_is_dir(v)) {
+    if ((v->mode & S_IFMT) == S_IFSOCK) {
+        r = -ENXIO;
+    } else if (vnode_is_dir(v)) {
         if (writing || (flags & (O_CREAT | O_TRUNC)))
             r = -EISDIR;
     } else if (flags & O_DIRECTORY) {
@@ -819,6 +821,43 @@ int vfs_open_ex(struct vnode *start, const char *path, int flags, uint32_t mode,
 int vfs_open(struct vnode *start, const char *path, int flags, struct file **out)
 {
     return vfs_open_ex(start, path, flags, 0644, out, NULL);
+}
+
+int vfs_mknod(struct vnode *start, const char *path, uint32_t mode, struct vnode **out)
+{
+    struct nameidata nd;
+    int r = walk_parent(start, path, &nd);
+    if (r < 0)
+        return r;
+    if (!nd.last[0] || is_dot(nd.last) || nd.slash) {
+        vnode_put(nd.dir);
+        return -EEXIST;
+    }
+    struct mount *m = nd.dir->mnt;
+    mutex_lock(&m->ns_lock);
+    struct vnode *v = NULL;
+    r = nd.dir->unlinked ? -ENOENT : m->type->lookup(nd.dir, nd.last, &v);
+    if (r == 0) {
+        vnode_put(v);
+        v = NULL;
+        r = -EEXIST;
+    } else if (r == -ENOENT && !nd.dir->unlinked) {
+        if (m->flags & MNT_RDONLY)
+            r = -EROFS;
+        else if (!m->type->create)
+            r = -EPERM;
+        else
+            r = m->type->create(nd.dir, nd.last, mode, &v);
+    }
+    mutex_unlock(&m->ns_lock);
+    vnode_put(nd.dir);
+    if (r == 0 && (v->mode & S_IFMT) != (mode & S_IFMT)) {
+        vnode_put(v);
+        return -EPERM;
+    }
+    if (r == 0)
+        *out = v;
+    return r;
 }
 
 int vfs_mkdir(struct vnode *start, const char *path, uint32_t mode)

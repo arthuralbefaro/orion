@@ -6,7 +6,7 @@ copy-on-write, threads, futex, sinais no formato do Linux, cache de paginas
 unificado (read, exec e mmap de arquivo), VFS com vnodes e
 montagens (`mount`/`umount`; raiz em ext2 numa particao GPT, com a particao EFI
 em `/boot/efi`, FAT e ext2 em outros discos, devfs em `/dev`, tmpfs em `/tmp` e
-`/run`, procfs em `/proc`), rede IPv4 (UDP, ICMP e TCP) e um compositor de janelas em
+`/run`, procfs em `/proc`), rede IPv4 (UDP, ICMP e TCP, com loopback), sockets Unix e um compositor de janelas em
 espaco de usuario.
 
 Desde a versao 2.0 o espaco de usuario e Linux: os programas sao binarios
@@ -75,6 +75,9 @@ No `/bin/sh`, o comando `wm` inicia o compositor: uma janela de terminal com o
     Ctrl+F       navegador de arquivos
 
 Arraste pela barra de titulo para mover; clique para focar; o `x` fecha.
+O `wm` tambem aceita comandos de outros programas pelo socket Unix
+`/run/wm.sock`: `wmctl term` abre um terminal, `wmctl list` lista as janelas
+(`procs`, `files <caminho>` e `ping` tambem existem).
 O terminal grafico entende as sequencias ANSI de cursor, apagamento e cores.
 
 ### Boot direto na interface grafica
@@ -170,8 +173,8 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
 ## Programas proprios em /bin
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
-    ifconfig ping nslookup httpget httpd dhcp mkfs mkfs.ext2 fsck.ext2 mount umount
-    testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest polltest forktest ptytest limtest stress sctest filetest
+    ifconfig ping nslookup httpget httpd wmctl dhcp mkfs mkfs.ext2 fsck.ext2 mount umount
+    testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest unixtest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
 

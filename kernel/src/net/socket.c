@@ -1,6 +1,7 @@
 #include <net/net.h>
 #include <net/socket.h>
 #include <net/tcp.h>
+#include <net/unix.h>
 #include <kernel/time.h>
 #include <kernel/file.h>
 #include <kernel/log.h>
@@ -346,14 +347,37 @@ static const struct file_ops socket_ops = {
     .ioctl = sock_ioctl,
 };
 
+static struct file *unix_fd(int fd)
+{
+    struct file *f = process_fd_pin(fd);
+    return unix_is_file(f) ? f : NULL;
+}
+
+long sys_socketpair(int domain, int type, int protocol, int *usv)
+{
+    int extra = type & ~SOCK_TYPE_MASK;
+    if (extra & ~(SOCK_NONBLOCK | SOCK_CLOEXEC))
+        return -EINVAL;
+    if (domain != AF_UNIX)
+        return domain == AF_INET ? -EOPNOTSUPP : -EAFNOSUPPORT;
+    if (protocol)
+        return -EPROTONOSUPPORT;
+    return unix_socketpair(type & SOCK_TYPE_MASK, extra, usv);
+}
+
 long sys_socket(int domain, int type, int protocol)
 {
-    if (domain != AF_INET)
-        return -EAFNOSUPPORT;
     int extra = type & ~SOCK_TYPE_MASK;
     type &= SOCK_TYPE_MASK;
     if (extra & ~(SOCK_NONBLOCK | SOCK_CLOEXEC))
         return -EINVAL;
+    if (domain == AF_UNIX) {
+        if (protocol)
+            return -EPROTONOSUPPORT;
+        return unix_socket(type, extra);
+    }
+    if (domain != AF_INET)
+        return -EAFNOSUPPORT;
     if (type != SOCK_DGRAM && type != SOCK_RAW && type != SOCK_STREAM)
         return -EPROTONOSUPPORT;
     if (type == SOCK_STREAM && protocol && protocol != IPPROTO_TCP)
@@ -419,6 +443,9 @@ static long sockaddr_in_user(const struct sockaddr_in *uaddr, uint32_t len, stru
 
 long sys_bind(int fd, const struct sockaddr_in *uaddr, uint32_t len)
 {
+    struct file *uf = unix_fd(fd);
+    if (uf)
+        return unix_bind(uf, uaddr, len);
     struct socket *s = sock_from_fd(fd, NULL);
     if (!s)
         return -ENOTSOCK;
@@ -434,7 +461,7 @@ long sys_bind(int fd, const struct sockaddr_in *uaddr, uint32_t len)
             return -EINVAL;
         uint32_t ip = ntohl(a.sin_addr);
         struct netif *ni = net_interface();
-        if (ip && ip != ni->ip)
+        if (ip && ip != ni->ip && (ip >> 24) != 127)
             return -EADDRNOTAVAIL;
         if (port == 0) {
             for (int i = 0; i < 16384 && !port; i++) {
@@ -467,6 +494,9 @@ long sys_bind(int fd, const struct sockaddr_in *uaddr, uint32_t len)
 
 long sys_connect(int fd, const struct sockaddr_in *uaddr, uint32_t len)
 {
+    struct file *uf = unix_fd(fd);
+    if (uf)
+        return unix_connect(uf, uaddr, len);
     struct file *f;
     struct socket *s = sock_from_fd(fd, &f);
     if (!s)
@@ -488,6 +518,8 @@ long sys_connect(int fd, const struct sockaddr_in *uaddr, uint32_t len)
 static long send_kernel(struct file *f, struct socket *s, const uint8_t *data, uint64_t len,
                         const struct sockaddr_in *to)
 {
+    if (!s)
+        return f->ops->write(f, data, len);
     if (s->type == SOCK_STREAM)
         return stream_write(f, data, len);
     if (len > SOCK_MAX_PKT)
@@ -513,6 +545,8 @@ static long recv_kernel(struct file *f, struct socket *s, uint8_t *buf, uint64_t
 {
     memset(from, 0, sizeof(*from));
     *trunc = false;
+    if (!s)
+        return f->ops->read(f, buf, len);
     if (s->type == SOCK_STREAM)
         return stream_read(f, buf, len);
     uint64_t irq = spin_lock_irqsave(&sock_lock);
@@ -543,8 +577,18 @@ static long recv_kernel(struct file *f, struct socket *s, uint8_t *buf, uint64_t
 
 static uint64_t io_chunk(const struct socket *s, uint64_t len)
 {
-    uint64_t cap = s->type == SOCK_STREAM ? STREAM_CHUNK : SOCK_MAX_PKT;
+    uint64_t cap = !s || s->type == SOCK_STREAM ? STREAM_CHUNK : SOCK_MAX_PKT;
     return len < cap ? len : cap;
+}
+
+static long any_sock(int fd, struct file **f, struct socket **s)
+{
+    *f = unix_fd(fd);
+    *s = NULL;
+    if (*f)
+        return 0;
+    *s = sock_from_fd(fd, f);
+    return *s ? 0 : -ENOTSOCK;
 }
 
 long sys_sendto(int fd, const void *ubuf, uint64_t len, int flags, const struct sockaddr_in *uaddr,
@@ -552,12 +596,13 @@ long sys_sendto(int fd, const void *ubuf, uint64_t len, int flags, const struct 
 {
     (void)flags;
     struct file *f;
-    struct socket *s = sock_from_fd(fd, &f);
-    if (!s)
-        return -ENOTSOCK;
+    struct socket *s;
+    long e = any_sock(fd, &f, &s);
+    if (e < 0)
+        return e;
     if (!user_range_ok((uint64_t)ubuf, len))
         return -EFAULT;
-    if (s->type != SOCK_STREAM && len > SOCK_MAX_PKT)
+    if (s && s->type != SOCK_STREAM && len > SOCK_MAX_PKT)
         return -EMSGSIZE;
     struct sockaddr_in a, *to = NULL;
     if (uaddr && addrlen >= sizeof(a)) {
@@ -606,9 +651,10 @@ long sys_recvfrom(int fd, void *ubuf, uint64_t len, int flags, struct sockaddr_i
 {
     (void)flags;
     struct file *f;
-    struct socket *s = sock_from_fd(fd, &f);
-    if (!s)
-        return -ENOTSOCK;
+    struct socket *s;
+    long e = any_sock(fd, &f, &s);
+    if (e < 0)
+        return e;
     if (!user_range_ok((uint64_t)ubuf, len))
         return -EFAULT;
     uint32_t room = 0;
@@ -704,9 +750,10 @@ long sys_sendmsg(int fd, const struct user_msghdr *umsg, int flags)
 {
     (void)flags;
     struct file *f;
-    struct socket *s = sock_from_fd(fd, &f);
-    if (!s)
-        return -ENOTSOCK;
+    struct socket *s;
+    long e = any_sock(fd, &f, &s);
+    if (e < 0)
+        return e;
     struct user_msghdr m;
     struct user_iovec *iov;
     uint64_t total;
@@ -721,7 +768,7 @@ long sys_sendmsg(int fd, const struct user_msghdr *umsg, int flags)
         }
         to = &a;
     }
-    if (s->type != SOCK_STREAM && total > SOCK_MAX_PKT) {
+    if (s && s->type != SOCK_STREAM && total > SOCK_MAX_PKT) {
         kfree(iov);
         return -EMSGSIZE;
     }
@@ -760,9 +807,10 @@ long sys_recvmsg(int fd, struct user_msghdr *umsg, int flags)
 {
     (void)flags;
     struct file *f;
-    struct socket *s = sock_from_fd(fd, &f);
-    if (!s)
-        return -ENOTSOCK;
+    struct socket *s;
+    long e = any_sock(fd, &f, &s);
+    if (e < 0)
+        return e;
     struct user_msghdr m;
     struct user_iovec *iov;
     uint64_t total;
@@ -806,6 +854,9 @@ long sys_recvmsg(int fd, struct user_msghdr *umsg, int flags)
 
 long sys_listen(int fd, int backlog)
 {
+    struct file *uf = unix_fd(fd);
+    if (uf)
+        return unix_listen(uf, backlog);
     struct socket *s = sock_from_fd(fd, NULL);
     if (!s)
         return -ENOTSOCK;
@@ -858,6 +909,12 @@ static long put_addr(uint32_t ip, uint16_t port, struct sockaddr_in *uaddr, uint
 
 long sys_accept4(int fd, struct sockaddr_in *uaddr, uint32_t *ulen, int flags)
 {
+    struct file *uf = unix_fd(fd);
+    if (uf) {
+        if (flags & ~(SOCK_NONBLOCK | SOCK_CLOEXEC))
+            return -EINVAL;
+        return unix_accept(uf, uaddr, ulen, flags);
+    }
     struct file *f;
     struct socket *s = sock_from_fd(fd, &f);
     if (!s)
@@ -916,11 +973,14 @@ long sys_accept4(int fd, struct sockaddr_in *uaddr, uint32_t *ulen, int flags)
 
 long sys_shutdown(int fd, int how)
 {
+    if (how < SHUT_RD || how > SHUT_RDWR)
+        return -EINVAL;
+    struct file *uf = unix_fd(fd);
+    if (uf)
+        return unix_shutdown(uf, how);
     struct socket *s = sock_from_fd(fd, NULL);
     if (!s)
         return -ENOTSOCK;
-    if (how < SHUT_RD || how > SHUT_RDWR)
-        return -EINVAL;
     if (s->type != SOCK_STREAM || !s->tcp_open || s->listening)
         return -ENOTCONN;
     if (how != SHUT_WR)
@@ -938,6 +998,9 @@ long sys_shutdown(int fd, int how)
 
 long sys_getsockname(int fd, struct sockaddr_in *uaddr, uint32_t *ulen)
 {
+    struct file *uf = unix_fd(fd);
+    if (uf)
+        return unix_getsockname(uf, uaddr, ulen);
     struct socket *s = sock_from_fd(fd, NULL);
     if (!s)
         return -ENOTSOCK;
@@ -952,6 +1015,9 @@ long sys_getsockname(int fd, struct sockaddr_in *uaddr, uint32_t *ulen)
 
 long sys_getpeername(int fd, struct sockaddr_in *uaddr, uint32_t *ulen)
 {
+    struct file *uf = unix_fd(fd);
+    if (uf)
+        return unix_getpeername(uf, uaddr, ulen);
     struct socket *s = sock_from_fd(fd, NULL);
     if (!s)
         return -ENOTSOCK;
@@ -962,6 +1028,8 @@ long sys_getpeername(int fd, struct sockaddr_in *uaddr, uint32_t *ulen)
 
 long sys_setsockopt(int fd, int level, int name, const void *uval, uint32_t len)
 {
+    if (unix_fd(fd))
+        return level == SOL_SOCKET && name == SO_REUSEADDR ? 0 : -ENOPROTOOPT;
     struct socket *s = sock_from_fd(fd, NULL);
     if (!s)
         return -ENOTSOCK;
@@ -981,8 +1049,9 @@ long sys_setsockopt(int fd, int level, int name, const void *uval, uint32_t len)
 
 long sys_getsockopt(int fd, int level, int name, void *uval, uint32_t *ulen)
 {
-    struct socket *s = sock_from_fd(fd, NULL);
-    if (!s)
+    bool is_unix = unix_fd(fd) != NULL;
+    struct socket *s = is_unix ? NULL : sock_from_fd(fd, NULL);
+    if (!s && !is_unix)
         return -ENOTSOCK;
     uint32_t room;
     if (copy_from_user(&room, ulen, sizeof(room)) < 0)
@@ -990,7 +1059,11 @@ long sys_getsockopt(int fd, int level, int name, void *uval, uint32_t *ulen)
     if (room < sizeof(int))
         return -EINVAL;
     int v;
-    if (level == SOL_SOCKET && name == SO_REUSEADDR) {
+    if (is_unix) {
+        if (level != SOL_SOCKET || (name != SO_TYPE && name != SO_ERROR))
+            return -ENOPROTOOPT;
+        v = name == SO_TYPE ? SOCK_STREAM : 0;
+    } else if (level == SOL_SOCKET && name == SO_REUSEADDR) {
         v = s->reuse;
     } else if (level == SOL_SOCKET && name == SO_TYPE) {
         v = s->type;

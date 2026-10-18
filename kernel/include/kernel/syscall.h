@@ -26,6 +26,7 @@
 #define SYS_SETSOCKOPT    54
 #define SYS_GETSOCKOPT    55
 #define SYS_ACCEPT4       288
+#define SYS_SOCKETPAIR    53
 #define SYS_RECVMSG       47
 #define SYS_GETPGID       121
 #define SYS_RENAME        82
@@ -194,6 +195,7 @@
 #define EALREADY 114
 #define EINPROGRESS 115
 #define ENOPROTOOPT 92
+#define ENXIO 6
 #define EHOSTUNREACH 113
 #define ETIMEDOUT 110
 #define EOPNOTSUPP 95

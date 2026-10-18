@@ -314,6 +314,20 @@ class Machine:
             print(f"  tcpprobe {arg}: {res}")
             self.log += f"\n[tcpprobe] porta {arg}: {res}\n".encode()
             self.pump(0.5)
+        elif kind == "type":
+            print(f"  type > {arg}")
+            names = {' ': 'spc', '-': 'minus', '/': 'slash', '.': 'dot', ',': 'comma', '=': 'equal',
+                     ';': 'semicolon', '_': 'shift-minus', ':': 'shift-semicolon'}
+            for ch in arg:
+                if ch.isascii() and (ch.islower() or ch.isdigit()):
+                    name = ch
+                elif ch.isascii() and ch.isupper():
+                    name = "shift-" + ch.lower()
+                else:
+                    name = names.get(ch)
+                if name:
+                    self.monitor_cmd("sendkey " + name)
+            self.pump(0.3)
         elif kind == "hostget":
             port, _, path = arg.partition(":")
             res = host_get(int(port), path)

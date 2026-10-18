@@ -27,19 +27,15 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 02:25, sessao 2): Fase 2 inteira (tag `v2.1`), 8.7 e
-3.1 a 3.4 commitadas. Versao 2.2.0-a4. A regressao inteira roda no
-`out\orion.img` (GPT, raiz em ext2), com 324 verificacoes; a sequencia A sobe
-o `tools/hostweb.py` no hospedeiro e usa `hostfwd` (5555 e 8081) para os
-testes de TCP.
+Estado (2026-10-18, 03:10, sessao 2): Fase 2 inteira (tag `v2.1`), 8.7 e
+3.1 a 3.5 commitadas. Versao 2.2.0-a5. A regressao inteira roda no
+`out\orion.img` (GPT, raiz em ext2), com 333 verificacoes; a sequencia A sobe
+o `tools/hostweb.py` no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 3.5 (loopback 127.0.0.1 e sockets `AF_UNIX`; criterio: o
-`wm` e os apps conversam por socket Unix). Plano: o `net_send_ip` para
-127.0.0.0/8 ou para o proprio IP entrega na fila de recepcao em vez da placa;
-`AF_UNIX` `SOCK_STREAM` (e `socketpair`) com o no do socket criado na VFS
-(`S_IFSOCK`, no tmpfs de `/run`); o `wm` escuta em `/run/wm.sock` e um
-programa novo `wmctl` manda comandos (abrir terminal, listar janelas),
-conferido na sequencia D.
+Proxima etapa: 3.6 (`wget`, `nc`, `httpd` (ja existe), `telnet`;
+`getaddrinfo` com `/etc/resolv.conf` (ja entrou na 3.2); criterio:
+`wget http://example.com` salva o arquivo). Depois 3.7 (DHCP fora do kernel),
+que fecha a Fase 3 (marco M3, tag `v2.2`, versao 2.2.0).
 
 ## Checklist
 
@@ -76,7 +72,7 @@ conferido na sequencia D.
 | 3.2 | TCP parte 2 | [x] | 23:53 | 01:00 | ver `git log` |
 | 3.3 | TCP parte 3 | [x] | 01:02 | 01:45 | ver `git log` |
 | 3.4 | TCP parte 4 | [x] | 01:48 | 02:25 | ver `git log` |
-| 3.5 | Loopback e AF_UNIX | [ ] | | | |
+| 3.5 | Loopback e AF_UNIX | [x] | 02:26 | 03:10 | ver `git log` |
 | 3.6 | wget, nc, httpd, telnet | [ ] | | | |
 | 3.7 | DHCP fora do kernel | [ ] | | | |
 | 4.1 | uid/gid e permissoes | [ ] | | | |
@@ -830,6 +826,23 @@ antiga foram ajustados.
 Ficou de fora: `pselect6`, `SO_RCVTIMEO`/`SO_SNDTIMEO`, `SO_KEEPALIVE`,
 `connect` usando a porta do `bind`, `RST` (em vez de `FIN`) para conexoes nao
 aceitas quando quem escuta fecha.
+
+#### 3.5 Loopback e AF_UNIX - 02:26 a 03:10 - FEITO
+Loopback: o `net_send_ip` para 127.0.0.0/8 ou para o proprio IP poe o pacote
+numa fila que a thread de recepcao processa antes da placa; ping, UDP e TCP
+em 127.0.0.1 funcionam (o TCP aceita 127.x como local e conecta sem rede
+configurada). Sockets `AF_UNIX` `SOCK_STREAM` novos (`net/unix.c`): no
+`S_IFSOCK` na VFS pelo `vfs_mknod` (tmpfs e ext2; o FAT recusa), `bind`,
+`listen`, `connect`, `accept`, `socketpair`, `shutdown`, `poll`,
+`getsockname`/`getpeername`, buffers de 32 KiB. Criterio: o `wm` escuta em
+`/run/wm.sock` e o programa novo `wmctl` manda comandos (`term`, `procs`,
+`files`, `list`, `ping`); a regressao D digita `wmctl` no terminal do `wm`
+pelo passo novo `type:` dos harness e confere que o terminal foi aberto a
+pedido. Programa novo `unixtest` (tmpfs e raiz ext2, inclusive 200 KB
+passando de um processo filho). Regressao 324 -> 333, verde de primeira;
+estresse 5x verde. Versao 2.2.0-a5.
+Ficou de fora: `SOCK_DGRAM` Unix, caminho abstrato, passagem de descritores
+(`SCM_RIGHTS`), credenciais (`SO_PEERCRED`).
 
 ### Sessao 2 - 2026-10-17
 

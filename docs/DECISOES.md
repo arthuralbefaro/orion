@@ -2125,3 +2125,40 @@ Uma linha por decisao, na ordem em que foram tomadas.
   com `SHUT_WR` e `SO_REUSEADDR`, e a regressao roda dois em seguida na porta
   80 para conferir o `SO_REUSEADDR` com as conexoes da primeira em
   `TIME_WAIT`.
+
+## v2.2.0-a5 (etapa 3.5: loopback e sockets Unix)
+
+- Loopback: o `net_send_ip` para 127.0.0.0/8 ou para o proprio IP monta o
+  pacote IP e o poe numa fila do kernel (ate 256 pacotes, depois descarta e
+  conta), sem passar pela placa nem pelo ARP. A thread de recepcao esvazia essa
+  fila antes de olhar a placa e entrega pelo mesmo `handle_ip`, entao UDP,
+  ICMP e TCP funcionam iguais. Pacote para 127.x sai com origem 127.x; para o
+  proprio IP, com o proprio IP. O TCP aceita 127.x como endereco local e o
+  `connect` para 127.x funciona mesmo sem rede configurada. Contadores no
+  comando `net`.
+- Sockets Unix (`kernel/src/net/unix.c`): so `SOCK_STREAM` (o `SOCK_DGRAM`
+  ficou de fora). Cada ponta tem um buffer de 32 KiB onde a outra escreve; a
+  escrita bloqueia com o buffer do outro cheio e o fim de arquivo vem do
+  `close` ou do `shutdown(SHUT_WR)` do outro lado. Uma trava giratoria unica
+  protege todos os sockets Unix (a contencao e baixa); a espera usa o mesmo
+  contador de eventos dos sockets TCP.
+- O endereco e um caminho na VFS: o `bind` cria um no `S_IFSOCK` (operacao
+  nova `vfs_mknod`) com o `umask`, e o socket que escuta guarda uma referencia
+  ao vnode. O `connect` resolve o caminho e procura quem escuta pelo vnode, nao
+  pelo texto; apagar o caminho impede conexoes novas mas nao derruba quem ja
+  escuta, como no Linux. O tmpfs e o ext2 guardam o no (o ext2 aceita
+  `S_IFSOCK` no `create`, sem blocos); o FAT recusa com `EPERM` (antes
+  criaria um arquivo comum). `open` num socket da `ENXIO`.
+- `connect` completa na hora: a ponta do servidor e criada ja conectada e vai
+  para a fila de quem escuta (ate o `backlog`, depois `EAGAIN`); o `accept` so
+  a retira. Fechar quem escuta da fim de arquivo as conexoes que ninguem
+  aceitou. `socketpair` (53) cria o par direto. `getsockname`, `getpeername`
+  e `shutdown` funcionam; o caminho abstrato (que comeca com zero) nao.
+  `SO_REUSEADDR` e aceito e nao muda nada (a regra de endereco em uso de um
+  socket Unix e o proprio no existir).
+- Criterio ("o `wm` e os apps conversam por socket Unix"): o `wm` escuta em
+  `/run/wm.sock`, aceita clientes no mesmo `poll` das janelas e atende `term`,
+  `procs`, `files <caminho>`, `list` e `ping`; o programa novo `wmctl` manda
+  um comando e mostra a resposta. A regressao D digita `wmctl ...` no terminal
+  do `wm` pelo passo novo `type:` dos harness (teclas pelo monitor do QEMU) e
+  confere no log do `wm` que o terminal novo foi aberto a pedido.
