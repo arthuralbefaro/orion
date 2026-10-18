@@ -17,6 +17,7 @@ enum win_kind {
     WIN_ABOUT,
     WIN_PROCS,
     WIN_FILES,
+    WIN_APP,
 };
 
 #define PANEL_ROWS 16
@@ -37,6 +38,9 @@ struct window {
     int  nrows;
     int  selected;
     char path[128];
+    uint32_t *pixels;
+    int pix_w;
+    int pix_h;
 };
 
 struct desktop {

@@ -345,6 +345,16 @@ static void draw_about_window(struct desktop *d, struct window *w)
                  gfx_rgb(g, i == 0 ? COL_ACCENT : COL_TERM_FG), GFX_ZOOM);
 }
 
+static void draw_app_window(struct desktop *d, struct window *w)
+{
+    struct gfx *g = d->gfx;
+    struct rect c = win_content(w);
+    gfx_fill(g, rect_make(c.x - WIN_PAD, c.y - WIN_PAD, c.w + 2 * WIN_PAD, c.h + 2 * WIN_PAD),
+             gfx_rgb(g, COL_PANEL_BG));
+    if (w->pixels)
+        gfx_blit_rgb(g, c.x, c.y, w->pixels, w->pix_w, w->pix_h);
+}
+
 static void draw_window(struct desktop *d, struct window *w, bool focused)
 {
     struct gfx *g = d->gfx;
@@ -352,9 +362,12 @@ static void draw_window(struct desktop *d, struct window *w, bool focused)
 
     struct rect t = win_titlebar(w);
     gfx_fill(g, t, gfx_rgb(g, focused ? COL_TITLE_ON : COL_TITLE_OFF));
-    gfx_text(g, t.x + 8, t.y + 3, w->title, gfx_rgb(g, COL_TITLE_TXT), GFX_ZOOM);
-
     struct rect b = win_close_button(w);
+    int room = (b.x - t.x - 12) / GFX_CELL_W;
+    int len = (int)strlen(w->title);
+    gfx_text_n(g, t.x + 8, t.y + 3, w->title, len < room ? len : (room > 0 ? room : 0),
+               gfx_rgb(g, COL_TITLE_TXT), GFX_ZOOM);
+
     gfx_fill(g, rect_make(b.x + 4, b.y + 4, b.w - 8, b.h - 8),
              gfx_rgb(g, focused ? COL_CLOSE : COL_CLOSE_OFF));
     gfx_text(g, b.x + 5, b.y + 3, "x", gfx_rgb(g, 0x101418), GFX_ZOOM);
@@ -365,6 +378,7 @@ static void draw_window(struct desktop *d, struct window *w, bool focused)
     case WIN_ABOUT: draw_about_window(d, w); break;
     case WIN_PROCS:
     case WIN_FILES: draw_panel(d, w); break;
+    case WIN_APP:   draw_app_window(d, w); break;
     }
 }
 

@@ -2500,3 +2500,41 @@ Uma linha por decisao, na ordem em que foram tomadas.
   dois pela linha do kernel (S5 ou registrador de reset) e confere que o
   reboot nao precisou do controlador do teclado.
 - Teste no VirtualBox: nao ha VirtualBox nesta maquina; fica para o dono.
+
+## v2.4.0-a2 (etapa 6.1: protocolo de janelas)
+
+- Numeracao: a Fase 6 e a 2.5 no plano, mas a Fase 5 nao terminou; a 6.1
+  segue a numeracao corrente (2.4.0-a2), como a 7.1 e a 7.2 seguiram a 2.3.
+- Memoria compartilhada: `MAP_SHARED` com escrita passou a valer para
+  arquivos do tmpfs. O `fs_type` ganhou `getpage`, que devolve a pagina do
+  proprio arquivo com uma referencia a mais (alocando o buraco, se houver);
+  o `vma_fault` mapeia essa pagina direto, gravavel, e o `munmap`, o `exit` e
+  o `fork` ja tratavam paginas com contagem de referencias. O arquivo e a
+  janela veem os mesmos bytes, sem copia. Fora do tmpfs (ext2, FAT) a escrita
+  compartilhada continua `ENODEV`: sem rastrear paginas sujas, gravar de
+  volta no disco seria fingir. Com o arquivo aberto so para leitura,
+  `PROT_WRITE` da `EACCES`, como no Linux.
+- Por que um arquivo e nao `memfd`/`SCM_RIGHTS`: o sistema ainda nao passa
+  descritores por socket Unix, e um arquivo em `/run/wm` (tmpfs) com o
+  caminho na resposta do `wm` e o "objeto do wm" do plano sem mecanismo novo
+  no kernel. O `wm` cria o arquivo, o mapeia tambem e o apaga quando a
+  janela fecha.
+- Protocolo (`/run/wmapp.sock`, socket Unix proprio, conexoes persistentes,
+  uma linha de texto por mensagem): o app manda `janela <l> <a> <titulo>` e
+  recebe `ok <id> <arquivo> <l> <a>`; desenha em `0x00RRGGBB` e manda `mostra`
+  (o `wm` marca a area da janela como suja e copia convertendo para o formato
+  do framebuffer); `titulo <texto>` e `fecha`. O `wm` manda `tecla <ascii>
+  <scancode> <mods>` para a janela em foco, `clique <x> <y> <botoes>` em
+  coordenadas da janela, e `fechar` quando a janela e fechada no `x` ou no
+  Ctrl+Q; se o app sai, a conexao cai e a janela some. Texto e nao binario
+  porque sao poucas mensagens por quadro e fica facil de ler no log.
+- O socket de comandos (`/run/wm.sock`, do `wmctl`) continuou como era: uma
+  linha e a conexao fecha.
+- `hello-gui` (novo): abre uma janela 360x200 com um degrade, conta teclas e
+  cliques, marca os cliques, troca o titulo a cada evento e fecha com `q`.
+- Teste: `shmtest` (novo, sequencia A) confere o `MAP_SHARED` de arquivo
+  entre `read`/`write`, entre processos que mapeiam o mesmo arquivo e entre
+  pai e filho, o `EACCES` e o `ENODEV` no ext2. A sequencia D abre o
+  `hello-gui` pelo terminal grafico, manda duas teclas e um clique e confere
+  pelo log do `wm` que cada evento foi e voltou (o titulo muda), a captura de
+  tela com o degrade, e o fechamento com `q`.

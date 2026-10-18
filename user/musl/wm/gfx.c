@@ -138,6 +138,17 @@ void gfx_fill(struct gfx *g, struct rect r, uint32_t pixel)
     }
 }
 
+void gfx_blit_rgb(struct gfx *g, int x, int y, const uint32_t *src, int w, int h)
+{
+    struct rect c = rect_clip(rect_make(x, y, w, h), g->clip);
+    for (int row = 0; row < c.h; row++) {
+        const uint32_t *s = src + (size_t)(c.y - y + row) * (size_t)w + (size_t)(c.x - x);
+        uint32_t *d = g->back + (size_t)(c.y + row) * (size_t)g->width + (size_t)c.x;
+        for (int col = 0; col < c.w; col++)
+            d[col] = fb_pack(&g->info, s[col] & 0xFFFFFF);
+    }
+}
+
 static void draw_glyph(struct gfx *g, int x, int y, unsigned char ch, uint32_t pixel, int zoom)
 {
     if (ch < FONT_FIRST_CHAR || ch > FONT_LAST_CHAR)

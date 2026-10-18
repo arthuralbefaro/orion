@@ -27,20 +27,20 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 11:05, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
-`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2 e 5.1. Versao 2.4.0-a1. O boot pede
+Estado (2026-10-18, 11:47, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1 e 6.1. Versao 2.4.0-a2. O boot pede
 usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram sozinhos
 como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO hibrida e
-live. ACPI pelo uACPI (`poweroff`, `reboot`, botao de energia, `_PRT`). A
-regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e
-na ISO na F, com 399 verificacoes; a sequencia A sobe o `tools/hostweb.py`
-no hospedeiro e usa `hostfwd` (5555 e 8081).
+live. ACPI pelo uACPI. Apps graficos em processos separados
+(`/run/wmapp.sock`, buffer em `/run/wm` com `MAP_SHARED`). A regressao roda
+no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e na ISO na F, com
+407 verificacoes; a sequencia A sobe o `tools/hostweb.py` no hospedeiro e
+usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 6.1 (protocolo de janelas: apps em processos separados,
-desenhando num arquivo do `/run/wm` mapeado com `MAP_SHARED` e falando com o
-`wm` por socket Unix; o kernel precisa aceitar `MAP_SHARED` gravavel em
-arquivo do tmpfs). A Fase 6 e a versao 2.5; como a Fase 5 nao terminou, a 6.1
-segue a numeracao corrente (2.4.0-a2), como a 7.1 e a 7.2 seguiram a 2.3.
+Proxima etapa: 6.2 (`libgui` em `user/libgui`: botoes, campos de texto,
+listas com rolagem, caixas de opcao e menus; app `guidemo`), versao
+2.4.0-a3. O rascunho do `guidemo` e da `libgui` ja existe; falta o `wm`
+ignorar `SIGPIPE`.
 
 ## Checklist
 
@@ -93,7 +93,7 @@ segue a numeracao corrente (2.4.0-a2), como a 7.1 e a 7.2 seguiram a 2.3.
 | 5.7 | USB armazenamento | [ ] | | | |
 | 5.8 | Audio HDA | [ ] | | | |
 | 5.9 | Video BGA e virtio-gpu | [ ] | | | |
-| 6.1 | Protocolo de janelas | [ ] | | | |
+| 6.1 | Protocolo de janelas | [x] | 11:06 | 11:47 | ver `git log` |
 | 6.2 | libgui | [ ] | | | |
 | 6.3 | Fontes TrueType | [ ] | | | |
 | 6.4 | Imagens PNG/JPEG | [ ] | | | |
@@ -1041,6 +1041,27 @@ ainda imprimia, e o eco caiu no meio da linha conferida; o passo agora
 espera o "pronto" antes do proximo comando.
 Ficou de fora: o teste no VirtualBox (nao ha VirtualBox aqui), GSIs acima de
 47, outros dispositivos pelo `_PRT` (a AHCI trabalha sem IRQ), suspensao (S3).
+
+#### 6.1 Protocolo de janelas - 11:06 a 11:47 - FEITO (as duas partes)
+Kernel: `MAP_SHARED` com escrita em arquivo do tmpfs (novo `getpage` no
+`fs_type`: o `vma_fault` mapeia a propria pagina do arquivo, com contagem
+de referencias); fora do tmpfs continua `ENODEV`, e sem permissao de escrita
+no descritor da `EACCES`. `wm`: socket `/run/wmapp.sock` com conexoes
+persistentes e protocolo de linhas (`janela`, `mostra`, `titulo`, `fecha`;
+de volta `tecla`, `clique`, `fechar`); cada janela de app tem um arquivo em
+`/run/wm` que o `wm` e o app mapeiam com `MAP_SHARED`, e o `wm` copia para o
+framebuffer so quando o app manda `mostra`. `hello-gui` (novo) abre uma
+janela propria, conta teclas e cliques e fecha com `q`. Criterio: na
+sequencia D o `hello-gui` abre a janela, recebe duas teclas e um clique (o
+log do `wm` mostra o titulo mudando a cada evento) e fecha; a captura tem o
+degrade. `shmtest` (novo, sequencia A) confere o `MAP_SHARED` entre
+`read`/`write`, entre processos e no `fork`. Regressao 399 -> 407,
+estresse 5x verde. Versao 2.4.0-a2.
+Problemas: nenhum de comportamento; tudo passou na primeira rodada. Visto
+depois, para a 6.2: o `wm` nao ignora `SIGPIPE`, entao escrever para um app
+que acabou de sair o mataria (o fluxo testado nao chega nisso).
+Ficou de fora: passar descritores por socket (`SCM_RIGHTS`) e `memfd`,
+eventos de movimento do mouse e de soltar o botao, redimensionar a janela.
 
 ### Sessao 2 - 2026-10-17
 

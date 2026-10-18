@@ -393,6 +393,33 @@ static int64_t tmpfs_write(struct vnode *v, uint64_t *offp, const void *buf, uin
     return r;
 }
 
+static int tmpfs_getpage(struct vnode *v, uint64_t idx, uint64_t *page)
+{
+    struct tmpfs *t = v->mnt->priv;
+    struct tnode *n = v->priv;
+    mutex_lock(&t->lock);
+    int r = 0;
+    if (idx >= (n->size + PAGE_SIZE - 1) / PAGE_SIZE) {
+        r = -EFAULT;
+    } else {
+        uint64_t *slot = page_slot(t, n, idx, true);
+        if (!slot) {
+            r = -ENOSPC;
+        } else if (!*slot) {
+            if (take_page(t, slot))
+                n->pages++;
+            else
+                r = -ENOSPC;
+        }
+        if (r == 0) {
+            pmm_ref_inc(*slot);
+            *page = *slot;
+        }
+    }
+    mutex_unlock(&t->lock);
+    return r;
+}
+
 static int tmpfs_truncate(struct vnode *v, uint64_t size)
 {
     struct tmpfs *t = v->mnt->priv;
@@ -811,6 +838,7 @@ const struct fs_type tmpfs_type = {
     .read = tmpfs_read,
     .write = tmpfs_write,
     .truncate = tmpfs_truncate,
+    .getpage = tmpfs_getpage,
     .readlink = tmpfs_readlink,
     .create = tmpfs_create,
     .symlink = tmpfs_symlink,

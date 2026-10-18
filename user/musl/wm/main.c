@@ -1,6 +1,7 @@
 #include "gfx.h"
 #include "term.h"
 #include "win.h"
+#include "app.h"
 
 #include <dirent.h>
 #include <orion.h>
@@ -128,6 +129,10 @@ static struct window *new_terminal(void)
 
 static void close_window(struct window *w)
 {
+    if (w->kind == WIN_APP) {
+        app_close_window(w);
+        return;
+    }
     desk_damage_window(&desk, w);
     if (w->kind == WIN_TERM && w->master >= 0) {
         fprintf(stderr, "wm: fechando terminal %d (sh pid %d)\n", w->id, w->pid);
@@ -402,6 +407,12 @@ static void handle_button(int32_t mask)
         drag_dy = mouse_y - w->frame.y;
         return;
     }
+    if (w->kind == WIN_APP) {
+        struct rect c = win_content(w);
+        if (rect_contains(c, mouse_x, mouse_y))
+            app_click(w, mouse_x - c.x, mouse_y - c.y, (uint32_t)mask);
+        return;
+    }
     if (w->kind == WIN_FILES || w->kind == WIN_PROCS) {
         struct rect c = win_content(w);
         int row = (mouse_y - c.y) / GFX_CELL_H;
@@ -495,6 +506,10 @@ static void handle_key(int32_t scancode, int32_t ascii, int32_t mods)
         }
     }
     struct window *w = desk_focused(&desk);
+    if (w && w->kind == WIN_APP) {
+        app_key(w, ascii, scancode, mods);
+        return;
+    }
     if (!w || w->kind != WIN_TERM || w->master < 0)
         return;
 
@@ -637,6 +652,7 @@ static void ctl_serve(int i)
 
 static void shutdown_desktop(void)
 {
+    app_shutdown();
     while (ctl_count)
         ctl_drop(0);
     if (ctl_fd >= 0) {
@@ -689,12 +705,13 @@ int main(int argc, char **argv)
 
     build_desktop();
     ctl_open();
+    app_init(&desk, &gfx);
     update_clock();
     gfx_damage(&gfx, rect_make(0, 0, gfx.width, gfx.height));
 
     struct input_event events[32];
     while (running) {
-        struct pollfd fds[WIN_MAX + 2 + CTL_MAX];
+        struct pollfd fds[WIN_MAX + 2 + CTL_MAX + APP_MAX + 1];
         int n = 0;
         fds[n].fd = input_fd;
         fds[n].events = POLLIN;
@@ -716,6 +733,8 @@ int main(int argc, char **argv)
                 n++;
             }
         }
+        int app_first = n;
+        n += app_pollfds(fds + n, APP_MAX + 1);
         poll(fds, (nfds_t)n, POLL_TIMEOUT);
 
         if (fds[0].revents & POLLIN) {
@@ -728,6 +747,7 @@ int main(int argc, char **argv)
                 ctl_serve(i);
         if (ctl_fd >= 0 && (fds[ctl_first].revents & POLLIN))
             ctl_accept();
+        app_service(fds + app_first, n - app_first);
         pump_terminals();
         update_clock();
         reap_children();

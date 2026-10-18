@@ -1231,10 +1231,16 @@ static long do_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, ui
         if (!f->ops->mmap) {
             if (!file_is_regular(f) || vnode_is_dir(f->vn))
                 return -ENODEV;
-            if (type == MAP_SHARED && (prot & PROT_WRITE))
-                return -ENODEV;
+            bool direct = type == MAP_SHARED && f->vn->mnt->type->getpage;
+            if (type == MAP_SHARED && (prot & PROT_WRITE)) {
+                if (!direct)
+                    return -ENODEV;
+                if ((f->flags & O_ACCMODE) != O_RDWR)
+                    return -EACCES;
+            }
             vflags |= VMA_FILE;
-            vflags &= ~(uint32_t)VMA_SHARED;
+            if (!direct)
+                vflags &= ~(uint32_t)VMA_SHARED;
         }
     }
 

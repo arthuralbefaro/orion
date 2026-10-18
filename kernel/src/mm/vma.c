@@ -380,6 +380,16 @@ static bool fault_locked(struct process *p, uint64_t addr, uint64_t err)
     if ((v->flags & VMA_FILE) && !interrupts_enabled())
         return false;
 
+    if ((v->flags & (VMA_FILE | VMA_SHARED)) == (VMA_FILE | VMA_SHARED) && v->file->vn->mnt->type->getpage) {
+        struct vnode *vn = v->file->vn;
+        uint64_t phys = 0;
+        if (vn->mnt->type->getpage(vn, (v->offset + (page - v->start)) / PAGE_SIZE, &phys) < 0)
+            return false;
+        vmm_map_page_in(p->pml4_phys, page, phys, vma_pte_flags(v->flags));
+        p->pages++;
+        return true;
+    }
+
     if (v->flags & VMA_FILE) {
         uint64_t off = v->offset + (page - v->start);
         struct vnode *vn = v->file->vn;

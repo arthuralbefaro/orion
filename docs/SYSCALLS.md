@@ -22,7 +22,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 6 | lstat | completa | nao segue o ultimo link (2.7) |
 | 7 | poll | completa | ate 32 descritores; `EINTR` com sinal; socket que escuta fica legivel com conexao na fila (3.4) |
 | 8 | lseek | completa | `SEEK_SET`, `SEEK_CUR`, `SEEK_END` |
-| 9 | mmap | parcial | anonimo, `MAP_FIXED`, arquivo `MAP_PRIVATE`, `MAP_SHARED` anonimo e de arquivo so leitura, dispositivo (`/dev/fb0`); `MAP_SHARED` de arquivo com escrita da `ENODEV` (2.4) |
+| 9 | mmap | parcial | anonimo, `MAP_FIXED`, arquivo `MAP_PRIVATE`, `MAP_SHARED` anonimo, `MAP_SHARED` de arquivo com escrita no tmpfs (6.1) e so leitura nos outros, dispositivo (`/dev/fb0`); `MAP_SHARED` com escrita fora do tmpfs da `ENODEV` (2.4) |
 | 10 | mprotect | completa | divide areas; `PROT_NONE` preserva paginas populadas |
 | 11 | munmap | completa | qualquer faixa alinhada; shootdown de TLB com varias threads |
 | 12 | brk | completa | ate 64 MiB |

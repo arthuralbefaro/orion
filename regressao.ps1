@@ -181,7 +181,7 @@ if ($runAll -or $OnlyA) {
         "cmd:unixtest /run", "until:60:falha(s))", "cmd:unixtest /", "until:60:falha(s))",
         "cmd:permtest /tmp", "until:90:falha(s))", "cmd:permtest /", "until:90:falha(s))",
         "cmd:ls -l /etc/shadow", "cmd:id", "wait:1", "cmd:su orion -c poweroff", "wait:1",
-        "cmd:aslrtest", "until:30:falha(s))", "cmd:cat /proc/self/maps", "cmd:cat /proc/self/maps", "wait:1",
+        "cmd:shmtest", "until:30:falha(s))", "cmd:aslrtest", "until:30:falha(s))", "cmd:cat /proc/self/maps", "cmd:cat /proc/self/maps", "wait:1",
         "cmd:login", "until:10:login: ", "raw:orion", "key:0D", "until:10:Senha: ", "raw:errada", "key:0D",
         "until:10:Login incorreto", "wait:1", "raw:orion", "key:0D", "wait:1", "raw:orion", "key:0D",
         "until:10:Bem-vindo, orion", "wait:1", "cmd:id", "cmd:pwd", "cmd:cat /etc/shadow", "wait:1",
@@ -404,6 +404,8 @@ if ($runAll -or $OnlyA) {
     Expect $a "-rw-------\s+1\s+root\s+root\s+\d+ [^\n]*/etc/shadow" "/etc/shadow e 0600 de root na imagem"
     Expect $a "\nuid=0\(root\) gid=0\(root\)" "id mostra root pelo /etc/passwd"
     Expect $a "(?s)aslrtest: pilha.*?aslrtest: TUDO OK \(0 falha\(s\)\)" "aslrtest: pilha e mmap mudam a cada exec, dentro das faixas"
+    Expect $a "(?s)shmtest: MAP_SHARED de arquivo.*?shmtest: TUDO OK \(0 falha\(s\)\)" "shmtest: MAP_SHARED com escrita em arquivo do tmpfs entre processos"
+    Expect $a "o que o outro processo escreveu aparece aqui\s+ok" "shmtest: escrita de outro processo aparece no mapeamento"
     Expect $a '(?s)aslrtest: TUDO OK.*?cat /proc/self/maps\s*\n.*?\n([0-9a-f]+)-[0-9a-f]+ rw-p 00000000 00:00 0\s+\[stack\].*?cat /proc/self/maps\s*\n.*?\n(?!\1-)[0-9a-f]+-[0-9a-f]+ rw-p 00000000 00:00 0\s+\[stack\]' "dois cat /proc/self/maps seguidos mostram pilhas em enderecos diferentes"
     Expect $a 'login: root\s*Senha: \s*Bem-vindo, root\.' "boot pede usuario e senha, senha sem eco"
     Expect $a 'login: orion\s*Senha: \s*Login incorreto' "login recusa senha errada"
@@ -713,6 +715,9 @@ if ($runAll -or $OnlyD) {
         "wait:16", "shot:out\shots\reg-gui-1-boot.ppm",
         "type:wmctl ping", "mon:sendkey ret", "wait:2", "type:wmctl term", "mon:sendkey ret", "wait:3",
         "type:wmctl list", "mon:sendkey ret", "wait:2", "shot:out\shots\reg-gui-5-wmctl.ppm",
+        "type:hello-gui &", "mon:sendkey ret", "wait:4", "mon:sendkey o", "wait:1", "mon:sendkey i", "wait:1",
+        "mon:mouse_move -340 -200", "wait:0.5", "mon:mouse_button 1", "wait:0.4", "mon:mouse_button 0", "wait:1",
+        "shot:out\shots\reg-gui-6-hello-gui.ppm", "mon:sendkey q", "wait:2",
         "mon:sendkey ctrl-p", "wait:2", "shot:out\shots\reg-gui-2-processos.ppm",
         "mon:sendkey ctrl-f", "wait:2", "shot:out\shots\reg-gui-3-arquivos.ppm",
         "mon:mouse_move -640 -400", "wait:0.5", "mon:mouse_move 40 12", "wait:0.5",
@@ -739,6 +744,12 @@ if ($runAll -or $OnlyD) {
     Expect $d "wm: wmctl: ping" "wmctl conversou com o wm pelo socket Unix"
     Expect $d "wm: wmctl: term\s*\nwm: terminal \d+ -> sh pid \d+" "wmctl term: o wm abriu um terminal a pedido de outro programa"
     Expect $d "wm: wmctl: list" "wmctl list pelo socket Unix"
+    Expect $d "wm: apps em /run/wmapp\.sock" "wm escuta apps num socket Unix proprio"
+    Expect $d "wm: app abriu a janela (\d+) \(360x200, 'Ola do hello-gui'\) com o buffer em /run/wm/app-\d+\.buf\s*\nwm: janela \1 mostrou o primeiro quadro" "hello-gui abre uma janela propria e desenha no buffer compartilhado"
+    Expect $d "wm: janela \d+ agora se chama 'hello-gui: tecla o'\s*\nwm: janela \d+ agora se chama 'hello-gui: tecla i'" "teclas vao do wm ao hello-gui e a resposta volta pelo protocolo"
+    Expect $d "wm: janela \d+ agora se chama 'hello-gui: clique \d+,\d+'" "clique na janela chega ao hello-gui em coordenadas da janela"
+    Expect $d "wm: app da janela \d+ saiu \(pediu para fechar\) depois de [4-9] quadro\(s\)" "hello-gui fecha com q e o wm tira a janela"
+    Test-ShotColors "out\shots\reg-gui-6-hello-gui.ppm" "captura com o hello-gui tem o gradiente da janela" 100
 }
 
 # ---------------- Sequencia F: ISO hibrida ----------------
