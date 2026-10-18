@@ -85,9 +85,8 @@ bool vma_add(struct process *p, uint64_t start, uint64_t end, uint32_t flags, st
     return true;
 }
 
-uint64_t vma_find_free(struct process *p, uint64_t len)
+static uint64_t find_free_from(struct process *p, uint64_t cur, uint64_t len)
 {
-    uint64_t cur = USER_MMAP_BASE;
     for (struct vma *v = p->vmas; v; v = v->next) {
         if (v->end <= cur)
             continue;
@@ -98,6 +97,15 @@ uint64_t vma_find_free(struct process *p, uint64_t len)
     if (cur + len > USER_MMAP_END || cur + len < cur)
         return 0;
     return cur;
+}
+
+uint64_t vma_find_free(struct process *p, uint64_t len)
+{
+    uint64_t base = p->mmap_base ? p->mmap_base : USER_MMAP_BASE;
+    uint64_t addr = find_free_from(p, base, len);
+    if (!addr && base != USER_MMAP_BASE)
+        addr = find_free_from(p, USER_MMAP_BASE, len);
+    return addr;
 }
 
 uint64_t vma_count(struct process *p)

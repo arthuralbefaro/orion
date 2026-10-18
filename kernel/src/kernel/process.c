@@ -97,7 +97,7 @@ static bool load_elf(struct process *p, uint64_t pml4, const uint8_t *image, siz
         if (ph->p_type != PT_LOAD)
             continue;
         if (ph->p_memsz > USER_STACK_TOP || ph->p_vaddr > USER_STACK_TOP - ph->p_memsz ||
-            ph->p_vaddr + ph->p_memsz > USER_STACK_TOP - USER_STACK_MAX ||
+            ph->p_vaddr + ph->p_memsz > USER_STACK_TOP - USER_STACK_RANDOM_PAGES * PAGE_SIZE - USER_STACK_MAX ||
             ph->p_filesz > ph->p_memsz || ph->p_offset > size || ph->p_filesz > size - ph->p_offset)
             return false;
         uint64_t flags = PTE_PRESENT | PTE_USER;
@@ -140,7 +140,7 @@ static uint64_t push_bytes(uint64_t pml4, uint64_t *sp, const void *data, size_t
     return *sp;
 }
 
-static uint64_t build_stack(uint64_t pml4, const char *const *argv, const char *const *envp,
+static uint64_t build_stack(uint64_t pml4, uint64_t top, const char *const *argv, const char *const *envp,
                             const struct exec_info *info, const char *execfn)
 {
     uint64_t argc = 0, envc = 0;
@@ -160,7 +160,7 @@ static uint64_t build_stack(uint64_t pml4, const char *const *argv, const char *
     if (!vec)
         return 0;
 
-    uint64_t sp = USER_STACK_TOP;
+    uint64_t sp = top;
     uint64_t fn_addr = push_bytes(pml4, &sp, execfn, strlen(execfn) + 1);
     uint64_t plat_addr = push_bytes(pml4, &sp, "x86_64", sizeof("x86_64"));
     uint8_t rnd[16];
@@ -213,17 +213,18 @@ static bool setup_image(struct process *p, uint64_t pml4, const void *image, siz
     struct exec_info info;
     if (!load_elf(p, pml4, image, size, &info))
         return false;
-    if (!map_user_range(p, pml4, USER_STACK_TOP - USER_STACK_SIZE, USER_STACK_SIZE,
+    uint64_t top = USER_STACK_TOP - (random_u64() % USER_STACK_RANDOM_PAGES) * PAGE_SIZE;
+    if (!map_user_range(p, pml4, top - USER_STACK_SIZE, USER_STACK_SIZE,
                         PTE_PRESENT | PTE_USER | PTE_WRITABLE | PTE_NX))
         return false;
-    if (!vma_add(p, USER_STACK_TOP - USER_STACK_MAX, USER_STACK_TOP, VMA_READ | VMA_WRITE | VMA_STACK,
-                 NULL, 0, 0))
+    if (!vma_add(p, top - USER_STACK_MAX, top, VMA_READ | VMA_WRITE | VMA_STACK, NULL, 0, 0))
         return false;
-    uint64_t sp = build_stack(pml4, argv, envp, &info, execfn);
+    uint64_t sp = build_stack(pml4, top, argv, envp, &info, execfn);
     if (!sp)
         return false;
     p->entry = info.entry;
     p->stack_top = sp;
+    p->mmap_base = USER_MMAP_BASE + (random_u64() % USER_MMAP_RANDOM_PAGES) * PAGE_SIZE;
     p->brk_start = info.brk;
     p->brk = info.brk;
     return true;
@@ -879,6 +880,7 @@ int process_fork_stack(struct interrupt_frame *frame, uint64_t newsp)
     child->entry = parent->entry;
     child->stack_top = parent->stack_top;
     child->brk_start = parent->brk_start;
+    child->mmap_base = parent->mmap_base;
     child->brk = parent->brk;
     mutex_unlock(&parent->mm_lock);
     if (!copied) {
@@ -1036,6 +1038,7 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
     struct vma *old_vmas = p->vmas;
     p->vmas = NULL;
     uint64_t old_stack = p->stack_top, old_brk_start = p->brk_start, old_brk = p->brk;
+    uint64_t old_mmap_base = p->mmap_base;
     uint64_t new_pml4 = vmm_create_address_space();
     p->pages = 0;
     int ret = 0;
@@ -1048,6 +1051,7 @@ int process_execve(const char *path, char *const *argv, char *const *envp, struc
         p->vmas = old_vmas;
         p->entry = old_entry;
         p->stack_top = old_stack;
+        p->mmap_base = old_mmap_base;
         p->brk_start = old_brk_start;
         p->brk = old_brk;
         ret = -ENOEXEC;

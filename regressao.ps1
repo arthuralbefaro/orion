@@ -180,6 +180,7 @@ if ($runAll -or $OnlyA) {
         "cmd:unixtest /run", "until:60:falha(s))", "cmd:unixtest /", "until:60:falha(s))",
         "cmd:permtest /tmp", "until:90:falha(s))", "cmd:permtest /", "until:90:falha(s))",
         "cmd:ls -l /etc/shadow", "cmd:id", "wait:1",
+        "cmd:aslrtest", "until:30:falha(s))", "cmd:cat /proc/self/maps", "cmd:cat /proc/self/maps", "wait:1",
         "cmd:login", "until:10:login: ", "raw:orion", "key:0D", "until:10:Senha: ", "raw:errada", "key:0D",
         "until:10:Login incorreto", "wait:1", "raw:orion", "key:0D", "wait:1", "raw:orion", "key:0D",
         "until:10:Bem-vindo, orion", "wait:1", "cmd:id", "cmd:pwd", "cmd:cat /etc/shadow", "wait:1",
@@ -398,6 +399,8 @@ if ($runAll -or $OnlyA) {
     Expect $a "binario setuid de root roda com euid 0\s+ok" "binario setuid troca o euid no exec"
     Expect $a "-rw-------\s+1\s+root\s+root\s+\d+ [^\n]*/etc/shadow" "/etc/shadow e 0600 de root na imagem"
     Expect $a "\nuid=0\(root\) gid=0\(root\)" "id mostra root pelo /etc/passwd"
+    Expect $a "(?s)aslrtest: pilha.*?aslrtest: TUDO OK \(0 falha\(s\)\)" "aslrtest: pilha e mmap mudam a cada exec, dentro das faixas"
+    Expect $a '(?s)aslrtest: TUDO OK.*?cat /proc/self/maps\s*\n.*?\n([0-9a-f]+)-[0-9a-f]+ rw-p 00000000 00:00 0\s+\[stack\].*?cat /proc/self/maps\s*\n.*?\n(?!\1-)[0-9a-f]+-[0-9a-f]+ rw-p 00000000 00:00 0\s+\[stack\]' "dois cat /proc/self/maps seguidos mostram pilhas em enderecos diferentes"
     Expect $a 'login: root\s*Senha: \s*Bem-vindo, root\.' "boot pede usuario e senha, senha sem eco"
     Expect $a 'login: orion\s*Senha: \s*Login incorreto' "login recusa senha errada"
     Expect $a 'Login incorreto\s*orion login: orion\s*Senha: \s*Bem-vindo, orion\.' "login aceita orion depois do erro"
@@ -430,7 +433,7 @@ if ($runAll -or $OnlyA) {
     Expect $a "0000000 377 376\s+1 157 151\s+15\s+12" "telnet recusa a opcao (IAC DONT) e manda CR LF"
     Expect $a "(?s)----- reboot -----.*?cat /reboot\.txt\s*\n\s*sobrevive-ao-reboot" "arquivo gravado na raiz sobrevive a reboot"
     Expect $a "(?s)cat /proc/self/maps\s*\n\s*[0-9a-f]{8,}-[0-9a-f]{8,} r--p [0-9a-f]{8} 00:00 \d+\s+/bin/cat" "cat /proc/self/maps mostra as VMAs do proprio cat"
-    Expect $a "[0-9a-f]+-7ffffffff000 rw-p 00000000 00:00 0\s+\[stack\]" "maps mostra a pilha"
+    Expect $a "[0-9a-f]+-7ff[0-9a-f]{9} rw-p 00000000 00:00 0\s+\[stack\]" "maps mostra a pilha"
     Expect $a "proc /proc proc ro 0 0" "/proc/mounts lista o procfs"
     Expect $a "tmpfs /tmp tmpfs rw 0 0" "/proc/mounts lista o tmpfs"
     Expect $a "mprotect divide a area no maps\s+ok" "proctest: maps acompanha o mprotect"

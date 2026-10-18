@@ -26,6 +26,8 @@ struct user_rlimit {
 #define USER_STACK_TOP   0x00007ffffffff000ull
 #define USER_STACK_SIZE  (64 * 1024)
 #define USER_STACK_MAX   (8 * 1024 * 1024)
+#define USER_STACK_RANDOM_PAGES (1ull << 22)
+#define USER_MMAP_RANDOM_PAGES  (1ull << 28)
 #define USER_HEAP_MAX    (64 * 1024 * 1024)
 #define PROCESS_CWD_MAX  256
 #define PROCESS_EXE_MAX  128
@@ -53,6 +55,7 @@ struct process {
     uint64_t pml4_phys;
     uint64_t entry;
     uint64_t stack_top;
+    uint64_t mmap_base;
     uint64_t brk_start;
     uint64_t brk;
     uint64_t pages;

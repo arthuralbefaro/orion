@@ -129,7 +129,8 @@ Links simbolicos funcionam no ext2 e no tmpfs (`ln -s alvo nome`,
 O kernel liga SMEP e SMAP quando a CPU tem (o QEMU roda com
 `-cpu qemu64,+smep,+smap`): ele nao executa nem le memoria de usuario fora das
 copias conferidas. `crash smep` e `crash smap` (como root) provocam de proposito
-o panico controlado de cada uma.
+o panico controlado de cada uma. A pilha e a base do `mmap` mudam de lugar a
+cada `exec` (ASLR; `cat /proc/self/maps` duas vezes mostra).
 
 Usuarios e permissoes valem desde a 4.1: cada processo tem `uid`/`gid`, a VFS
 confere leitura, escrita e execucao, o `/tmp` tem o bit *sticky* e binario com
@@ -189,7 +190,7 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
     ifconfig ping nslookup wget nc telnet httpget httpd wmctl dhcp netup id login su passwd mkfs mkfs.ext2 fsck.ext2 mount umount
-    testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest unixtest permtest polltest forktest ptytest limtest stress sctest filetest
+    testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest unixtest permtest aslrtest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
 

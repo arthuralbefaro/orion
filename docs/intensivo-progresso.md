@@ -27,16 +27,18 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 05:28, sessao 2): Fases 2 e 3 inteiras (tags `v2.1` e
-`v2.2`), 8.7 e 4.1 a 4.3 commitadas. Versao 2.3.0-a3. SMEP e SMAP ligados. O boot pede usuario e
+Estado (2026-10-18, 05:28, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1` e
+`v2.2` e `v2.3`), 8.7 commitada; marco da Fase 4 fechado. Versao 2.3.0.
+SMEP, SMAP e ASLR ligados. O boot pede usuario e
 senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram sozinhos como root.
-A regressao inteira roda no `out\orion.img` (GPT, raiz em ext2), com 373
+A regressao inteira roda no `out\orion.img` (GPT, raiz em ext2), com 375
 verificacoes; a sequencia A sobe o `tools/hostweb.py` no hospedeiro e usa
 `hostfwd` (5555 e 8081).
 
-Proxima etapa: 4.4 (ASLR de pilha e `mmap`), que fecha a Fase 4 (versao
-2.3.0, tag `v2.3`). Depois, pela ordem recomendada, 7.1 e 7.2 (ISO e sistema
-live) e 5.1.
+Proxima etapa: 7.1 (ISO hibrida com ferramenta propria em C, `build.ps1
+-Iso`), depois 7.2 (sistema live com a raiz em memoria) e 5.1 (uACPI). As
+etapas 7.1 e 7.2, adiantadas pela ordem recomendada, viram 2.3.1 e 2.3.2 (a
+Fase 7 inteira continua sendo a 3.0); a 5.1 abre a 2.4.0-a1.
 
 ## Checklist
 
@@ -79,7 +81,7 @@ live) e 5.1.
 | 4.1 | uid/gid e permissoes | [x] | 04:16 | 04:46 | ver `git log` |
 | 4.2 | passwd, shadow, login | [x] | 04:46 | 05:28 | ver `git log` |
 | 4.3 | SMEP e SMAP | [x] | 05:28 | 05:55 | ver `git log` |
-| 4.4 | ASLR basico | [ ] | | | |
+| 4.4 | ASLR basico | [x] | 05:55 | 06:26 | ver `git log` (tag `v2.3`) |
 | 5.1 | uACPI | [ ] | | | |
 | 5.2 | MSI/MSI-X | [ ] | | | |
 | 5.3 | virtio-blk e virtio-net | [ ] | | | |
@@ -949,6 +951,23 @@ verde. Versao 2.3.0-a3.
 Problemas: nenhum de comportamento; a regressao inteira passou com SMAP ligado na primeira rodada, o que confirma que a 0.2 tinha deixado todo acesso do kernel a memoria de usuario dentro do `uaccess`. O cuidado foi no tratador de page fault: sem o desvio novo, um acesso proibido a uma pagina presente iria para o `vma_fault`, que a acharia valida, e a instrucao repetiria a falta para sempre.
 Ficou de fora: remendo de `stac`/`clac` em tempo de execucao (hoje um teste
 de variavel por copia), UMIP, KPTI.
+
+#### 4.4 ASLR basico - 05:55 a 06:26 - FEITO (fecha a Fase 4)
+A cada `exec`, o topo da pilha desce de 0 a 2^22 - 1 paginas e a base de
+busca do `mmap` sobe de 0 a 2^28 - 1 paginas (os mesmos 22 e 28 bits do
+Linux), pelo `random_u64` do kernel. A base do `mmap` e do processo: o
+`fork` copia, o `exec` sorteia e devolve a antiga se falhar, e a busca
+recomeca do inicio da faixa quando nao ha espaco acima da base. Criterio:
+dois `cat /proc/self/maps` seguidos mostram a pilha em enderecos diferentes;
+o `aslrtest` (novo) roda a si mesmo 4 vezes e confere pilha e `mmap`
+diferentes e dentro das faixas. O padrao antigo que fixava a pilha em
+`7ffffffff000` virou uma faixa. Regressao 373 -> 375, estresse 5x verde.
+Versao 2.3.0, tag `v2.3`.
+Problemas: nenhum de comportamento. Um susto: o `proctest` rodado a mao
+acusou o `cmdline`, mas era so o teste rodado sem os argumentos `um dois`
+que a regressao passa.
+Ficou de fora: executavel em posicao aleatoria (os programas sao `ET_EXEC`
+estaticos; precisa de PIE), `brk` aleatorio, desligar o ASLR por processo.
 
 ### Sessao 2 - 2026-10-17
 

@@ -2352,3 +2352,26 @@ Uma linha por decisao, na ordem em que foram tomadas.
   `test.ps1` e no `qrun.py`; o TCG emula as duas. A regressao inteira roda
   com SMAP ligado, o que confere que nenhum caminho do kernel le memoria de
   usuario sem passar pelo `uaccess`.
+
+## v2.3.0 (etapa 4.4: ASLR basico; fecha a Fase 4)
+
+- A cada `exec`, o topo da pilha desce um numero aleatorio de paginas, de 0
+  a 2^22 - 1 (ate 16 GiB abaixo de `0x7ffffffff000`, como os 22 bits do
+  Linux), e a base de busca do `mmap` sem endereco sobe de 0 a 2^28 - 1
+  paginas a partir de `0x100000000000` (ate 1 TiB, os 28 bits do Linux). O
+  sorteio usa o `random_u64` do kernel, o mesmo do `/dev/random`.
+- A base do `mmap` fica no processo (`mmap_base`): o `fork` copia (o filho
+  tem o mesmo espaco de enderecos), o `exec` sorteia de novo e, se falhar,
+  devolve a antiga. Se nao houver espaco acima da base sorteada, a busca
+  recomeca do inicio da faixa, entao a faixa util do `mmap` nao encolheu.
+- A conferencia do ELF contra a pilha usa o ponto mais baixo que a pilha pode
+  ocupar (topo menos o deslocamento maximo menos os 8 MiB de crescimento).
+- Ficaram de fora: executavel em posicao aleatoria (os programas sao `ET_EXEC`
+  estaticos em `0x1000000`; precisaria de PIE e de carregar `ET_DYN`), `brk`
+  aleatorio, deslocamento dentro da pagina do topo da pilha, e um jeito de
+  desligar (`setarch -R` / `personality`).
+- Teste: `aslrtest` (novo) roda a si mesmo 4 vezes e confere que a pilha e o
+  primeiro `mmap` mudam a cada `exec` e ficam dentro das faixas; a regressao
+  tambem confere o criterio da etapa, dois `cat /proc/self/maps` seguidos com
+  a pilha em enderecos diferentes. O padrao antigo que fixava a pilha em
+  `7ffffffff000` virou uma faixa.
