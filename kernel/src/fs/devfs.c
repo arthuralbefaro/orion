@@ -87,6 +87,7 @@ static const struct device devices[] = {
     { "null",   null_open,      size_zero,  S_IFCHR | 0666 },
     { "zero",   zero_open,      size_zero,  S_IFCHR | 0666 },
     { "random", random_open,    size_zero,  S_IFCHR | 0444 },
+    { "urandom", random_open,   size_zero,  S_IFCHR | 0444 },
 };
 
 struct file *blkdev_file_open(struct blockdev *dev);

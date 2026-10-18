@@ -32,8 +32,10 @@ conferido; versoes e origens estao em `third_party\LICENSES.md`.
     .\check.ps1                    # analise do kernel e dos programas (erros e warnings)
     .\regressao.ps1                # bateria automatica (exit 0 = verde)
 
-No QEMU a serial aparece no terminal. A entrada da serial e do teclado vao para
-o mesmo shell; `Ctrl+K` alterna entre o shell de usuario (`/bin/sh`) e o shell
+No QEMU a serial aparece no terminal. O boot pede usuario e senha: `root` ou
+`orion`, senha `orion` nos dois (troque com `passwd`; `tools\mkpasswd.py`
+gera um hash para editar o `etc\shadow` do repositorio). A entrada da serial e
+do teclado vao para o mesmo shell; `Ctrl+K` alterna entre o shell de usuario (`/bin/sh`) e o shell
 de diagnostico do kernel (`orion>`), que tem `help`.
 
 ### Shell (`/bin/sh`)
@@ -124,10 +126,13 @@ O ext2 (o driver e o piloto em Rust do kernel) monta com leitura e escrita;
 Links simbolicos funcionam no ext2 e no tmpfs (`ln -s alvo nome`,
 `readlink nome`); o FAT nao tem links e devolve `EPERM`.
 
-Usuarios e permissoes valem desde a 4.1: cada processo tem `uid`/`gid` (o
-boot e todo root), a VFS confere leitura, escrita e execucao, o `/tmp` tem o
-bit *sticky* e binario com `setuid` troca o usuario efetivo. `id` mostra quem
-voce e; o `/etc/shadow` so o root le.
+Usuarios e permissoes valem desde a 4.1: cada processo tem `uid`/`gid`, a VFS
+confere leitura, escrita e execucao, o `/tmp` tem o bit *sticky* e binario com
+`setuid` troca o usuario efetivo. `id` mostra quem voce e; o `/etc/shadow`
+(hash SHA-512, `$6$`) so o root le. `login` entra, `su [-] [-c cmd] [usuario]`
+troca de usuario e `passwd [usuario]` troca a senha; o usuario `orion` tem o
+`HOME` em `/home/orion`. Com `-Gui` o sistema vai direto para a interface
+grafica, como root.
 
 Modo, dono e datas ficam guardados no ext2 e no tmpfs: `chmod`, `chown`,
 `chgrp` e `touch` gravam, `ls -l` mostra (os nomes de dono e grupo vem do
@@ -178,7 +183,7 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
 ## Programas proprios em /bin
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
-    ifconfig ping nslookup wget nc telnet httpget httpd wmctl dhcp netup id mkfs mkfs.ext2 fsck.ext2 mount umount
+    ifconfig ping nslookup wget nc telnet httpget httpd wmctl dhcp netup id login su passwd mkfs mkfs.ext2 fsck.ext2 mount umount
     testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest unixtest permtest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
@@ -221,6 +226,7 @@ trafego em `out\net.pcap`.
     /dev/fb0        framebuffer: ioctl FBIOGET_INFO / FBIOREDRAW, mmap
     /dev/input      eventos de teclado (todas as teclas, inclusive modificadoras) e mouse
     /dev/tty        terminal fisico (serial + console)
+    /dev/random /dev/urandom   numeros aleatorios
     /dev/sda /dev/sdb ...   discos e particoes
 
 ## /proc

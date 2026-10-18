@@ -27,14 +27,16 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 04:46, sessao 2): Fases 2 e 3 inteiras (tags `v2.1` e
-`v2.2`), 8.7 e 4.1 commitadas. Versao 2.3.0-a1. A regressao inteira roda no
-`out\orion.img` (GPT, raiz em ext2), com 351 verificacoes; a sequencia A
-sobe o `tools/hostweb.py` no hospedeiro e usa `hostfwd` (5555 e 8081).
+Estado (2026-10-18, 05:28, sessao 2): Fases 2 e 3 inteiras (tags `v2.1` e
+`v2.2`), 8.7, 4.1 e 4.2 commitadas. Versao 2.3.0-a2. O boot pede usuario e
+senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram sozinhos como root.
+A regressao inteira roda no `out\orion.img` (GPT, raiz em ext2), com 369
+verificacoes; a sequencia A sobe o `tools/hostweb.py` no hospedeiro e usa
+`hostfwd` (5555 e 8081).
 
-Proxima etapa: 4.2 (`/etc/passwd`, `/etc/shadow` com hash, `login`, `su`,
-`passwd`; o `init` sobe o `login`; criterio: o boot pede usuario e senha).
-Depois, pela ordem recomendada, 7.1 e 7.2 (ISO e sistema live) e 5.1.
+Proxima etapa: 4.3 (SMEP e SMAP; o QEMU passa a `-cpu qemu64,+smep,+smap`),
+depois 4.4 (ASLR), que fecha a Fase 4 (versao 2.3.0, tag `v2.3`). Depois,
+pela ordem recomendada, 7.1 e 7.2 (ISO e sistema live) e 5.1.
 
 ## Checklist
 
@@ -75,7 +77,7 @@ Depois, pela ordem recomendada, 7.1 e 7.2 (ISO e sistema live) e 5.1.
 | 3.6 | wget, nc, httpd, telnet | [x] | 03:11 | 03:35 | ver `git log` |
 | 3.7 | DHCP fora do kernel | [x] | 03:36 | 04:15 | ver `git log` (tag `v2.2`) |
 | 4.1 | uid/gid e permissoes | [x] | 04:16 | 04:46 | ver `git log` |
-| 4.2 | passwd, shadow, login | [ ] | | | |
+| 4.2 | passwd, shadow, login | [x] | 04:46 | 05:28 | ver `git log` |
 | 4.3 | SMEP e SMAP | [ ] | | | |
 | 4.4 | ASLR basico | [ ] | | | |
 | 5.1 | uACPI | [ ] | | | |
@@ -902,6 +904,33 @@ somente leitura do FAT virou `chmod 555`/`755`. (2) O `cp` criava tudo
 da origem.
 Ficou de fora: `nosuid` na montagem, capacidades (root e tudo ou nada),
 `setfsuid`.
+
+#### 4.2 passwd, shadow, login - 04:46 a 05:28 - FEITO
+`login`, `su` e `passwd` (um programa so, `user/musl/login`, que escolhe o
+papel pelo nome) com o `crypt` SHA-512 (`$6$`) e o `getspnam` da musl; o
+`init` sobe o `login` e o reinicia quando o shell termina. `/etc/passwd` e
+`/etc/shadow` trazem `root` e `orion` (uid 1000, grupo `users`,
+`/home/orion`), senha `orion` nos dois, hashes gerados pelo
+`tools/mkpasswd.py` (novo, conferido contra o vetor da especificacao). `su` e
+`passwd` sao `setuid` root na imagem; o `passwd` regrava o arquivo num
+temporario com o mesmo dono e modo, faz `fsync` e `rename`. Entrou o
+`/dev/urandom` (sal). O `test.ps1` e o `qrun.py` respondem ao `login:`
+sozinhos (`-LoginUser`/`-LoginPassword`). Criterio: o boot pede usuario e
+senha, e a senha nao aparece na tela. Regressao 351 -> 369, estresse 5x
+verde. Versao 2.3.0-a2.
+Problemas: (1) o `getgrouplist` da musl devolve o grupo primario duas vezes
+quando o usuario tambem esta listado nele no `/etc/group`; o `id` mostrava
+`grupos=100(users),100(users)`. O `login` tira as repeticoes antes do
+`setgroups`. (2) Na primeira versao o `/etc/shadow` regravado pelo usuario
+`orion` ficava com o grupo `users` (o `egid` de quem roda o `passwd`); o
+temporario passou a receber o dono, o grupo e o modo do original. (3) O
+`grep` do sistema nao tem ancora `^`; o teste usa `grep orion:`. (4) O delta
+de memoria da sequencia A passou de 24 paginas (25). Para separar cache de
+vazamento, 120 `su` seguidos e 120 `passwd` seguidos (num `dash`, porque o
+`sh` do sistema nao tem laco) deixaram o kernel em 423 paginas usadas do
+comeco ao fim; o limite subiu para 32 por causa das slabs dos testes novos.
+Ficou de fora: tela de login grafica (o `-Gui` continua entrando como root),
+`/etc/login.defs`, envelhecimento de senha, `newgrp`.
 
 ### Sessao 2 - 2026-10-17
 

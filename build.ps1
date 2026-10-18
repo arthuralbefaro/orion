@@ -188,7 +188,7 @@ if (Test-Path $MuslDir) {
     }
 }
 
-New-Item -ItemType Directory -Force -Path (Join-Path $EspDir "EFI\BOOT"), (Join-Path $EspDir "boot\limine"), (Join-Path $EspDir "bin"), (Join-Path $EspDir "dev"), (Join-Path $EspDir "mnt"), (Join-Path $EspDir "tmp"), (Join-Path $EspDir "run"), (Join-Path $EspDir "proc") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $EspDir "EFI\BOOT"), (Join-Path $EspDir "boot\limine"), (Join-Path $EspDir "bin"), (Join-Path $EspDir "dev"), (Join-Path $EspDir "mnt"), (Join-Path $EspDir "tmp"), (Join-Path $EspDir "run"), (Join-Path $EspDir "proc"), (Join-Path $EspDir "home\orion") | Out-Null
 Copy-Item (Join-Path $LimineDir "BOOTX64.EFI") (Join-Path $EspDir "EFI\BOOT\BOOTX64.EFI") -Force
 Copy-Item $KernelElf (Join-Path $EspDir "boot\$Kernel.elf") -Force
 foreach ($name in $userBins.Keys) { Copy-Item $userBins[$name] (Join-Path $EspDir "bin\$name") -Force }

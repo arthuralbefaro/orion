@@ -116,8 +116,9 @@ def host_get(port, path):
 
 class Machine:
     def __init__(self, smp=4, memory=512, disk=False, extra_disks=(), serial_port=4444, monitor_port=4445,
-                 boot_timeout=60.0, image=False, hostfwd=()):
+                 boot_timeout=60.0, image=False, hostfwd=(), login=("root", "orion")):
         self.image = image
+        self.login = login
         self.hostfwd = list(hostfwd)
         self.smp = smp
         self.memory = memory
@@ -212,6 +213,24 @@ class Machine:
             if not self._read_some():
                 time.sleep(0.05)
         return self.log.find(raw, start) >= 0
+
+    def wait_shell(self, timeout, start=0):
+        end = time.time() + timeout
+        while time.time() < end:
+            prompt = self.log.find(b"$ ", start)
+            login = self.log.find(b"login: ", start)
+            if login >= 0 and (prompt < 0 or login < prompt):
+                self.send(self.login[0] + "\r")
+                if not self.wait_for("Senha: ", max(end - time.time(), 1), login):
+                    return False
+                self.send(self.login[1] + "\r")
+                start = self.log.find(b"Senha: ", login) + 7
+                continue
+            if prompt >= 0:
+                return True
+            if not self._read_some():
+                time.sleep(0.05)
+        return self.log.find(b"$ ", start) >= 0
 
     def send(self, data):
         if isinstance(data, str):
@@ -342,7 +361,7 @@ class Machine:
             self.log += b"\n----- reboot -----\n"
             start = len(self.log)
             self.start()
-            if self.wait_for("$ ", self.boot_timeout, start):
+            if self.wait_shell(self.boot_timeout, start):
                 print("prompt do shell de usuario detectado")
             else:
                 print(f"AVISO: prompt do shell nao apareceu em {self.boot_timeout} s depois do reboot")
@@ -407,7 +426,7 @@ def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_buil
         all_steps = (["key:0B"] if kernel_shell else []) + list(steps)
         need_prompt = any(s.split(":", 1)[0] in ("cmd", "raw", "key", "keys") for s in all_steps)
         if need_prompt or not all_steps:
-            if m.wait_for("$ ", boot_timeout):
+            if m.wait_shell(boot_timeout):
                 print("prompt do shell de usuario detectado")
             else:
                 print(f"AVISO: prompt do shell nao apareceu em {boot_timeout} s")

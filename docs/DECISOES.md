@@ -2268,3 +2268,53 @@ Uma linha por decisao, na ordem em que foram tomadas.
   confere cada regra acima, inclusive o criterio da etapa ("usuario comum nao
   le o `/etc/shadow`") e um binario `setuid` de root rodando com `euid` 0;
   roda no tmpfs e na raiz ext2. `id` (novo) mostra os ids com nomes.
+
+## v2.3.0-a2 (etapa 4.2: passwd, shadow, login, su)
+
+- `login`, `su` e `passwd` sao um programa so (`user/musl/login`, com
+  `link su passwd` no `build.txt`) que escolhe o papel pelo `argv[0]`; a
+  parte comum (ler linha sem eco, conferir a senha, trocar de usuario, subir o
+  shell) fica em `auth.c`. Na imagem, `su` e `passwd` sao `setuid` root
+  (`04755`, pelo `SPECIAL_MODES` do `mkimage.py`); o `login` nao precisa,
+  porque so o `init` (root) o roda.
+- Hash: SHA-512 do `crypt` da musl (`$6$`, 5000 rodadas, sal de 16
+  caracteres do `/dev/urandom`). O plano aceitava "SHA-256 da musl ou
+  proprio"; o `$6$` e o padrao das distribuicoes e a musl ja traz, entao nao
+  ha codigo de hash nosso no sistema. O `getspnam` e o `getgrouplist` tambem
+  sao os da musl, lendo `/etc/shadow` e `/etc/group`.
+- O `/etc/shadow` do repositorio vem com `root` e `orion` (uid 1000, grupo
+  100 `users`, `HOME` `/home/orion`, dono dele na imagem), os dois com senha
+  `orion`. Os hashes foram gerados com um sal fixo pelo `tools/mkpasswd.py`
+  (novo, SHA-512-crypt em Python puro, conferido contra o vetor de teste da
+  especificacao), para que o arquivo nao mude a cada build. Senha padrao
+  conhecida num sistema de estudo e o que da para fazer sem instalador; o
+  README manda trocar com `passwd`.
+- `passwd` regrava o arquivo inteiro em `/etc/shadow.novo` (`0600`), faz
+  `fsync` e troca pelo `rename`, que e atomico na VFS; uma queda no meio deixa
+  o arquivo antigo. O temporario recebe o dono, o grupo e o modo do original
+  (sem isso, o `passwd` rodado pelo `orion` deixava o arquivo com o grupo
+  `users`, que e o `egid` dele). Usuario comum precisa da senha atual; root
+  troca a de qualquer um sem ela. O `su` sem senha so para root.
+- O `getgrouplist` da musl repete o grupo primario quando o usuario tambem
+  aparece como membro dele no `/etc/group`; o `login`/`su` tiram as
+  repeticoes antes do `setgroups`.
+- O `init` sobe o `login` (`shell /bin/login` no `/etc/autostart`) e o
+  reinicia quando o shell do usuario termina. O `login` ignora `Ctrl+C` ate
+  trocar de usuario, recusa depois de 3 senhas erradas (o `init` sobe outro)
+  e espera 1 s a cada erro. A senha e lida com o `ECHO` desligado pelo
+  `tcsetattr`, que o terminal do console ja respeitava. O `build.ps1 -Gui`
+  continua indo direto para a interface grafica como root: tela de login
+  grafica nao entrou nesta etapa.
+- `/dev/urandom` entrou (o mesmo gerador do `/dev/random`), porque e onde a
+  musl e os programas procuram aleatoriedade.
+- Harness: o `test.ps1` (parametros novos `-LoginUser`/`-LoginPassword`,
+  padrao `root`/`orion`) e o `tools/qrun.py` respondem ao `login:` sozinhos,
+  no boot e depois do `reboot:`; o resto da regressao continua num shell de
+  root, como antes. O `mkext2.py` passou a gravar dono e grupo por no.
+- Teste: na sequencia A o boot entra pelo `login` (o padrao confere que a
+  senha nao aparece entre `Senha:` e `Bem-vindo`), e depois um `login` errado
+  e certo como `orion`, `su` errado e certo, `passwd` pelo proprio usuario (a
+  senha antiga deixa de valer), `/etc/shadow` com `$6$` de sal novo e ainda
+  `0600`, root trocando a senha de volta sem a atual e `su` de root sem senha.
+  Uma verificacao negativa garante que nenhum texto digitado aparece depois de
+  um pedido de senha em toda a sequencia.

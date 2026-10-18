@@ -22,6 +22,8 @@ class Node:
         self.target = target
         self.children = {}
         self.ino = 0
+        self.uid = 0
+        self.gid = 0
 
 
 def has_super(group):
@@ -140,10 +142,10 @@ class Image:
         data_blocks = sum(1 for p in ptrs if p)
         return block, (data_blocks + used) * (self.bs // 512)
 
-    def write_inode(self, ino, mode, size, links, block, sectors, flags=0):
+    def write_inode(self, ino, mode, size, links, block, sectors, flags=0, uid=0, gid=0):
         g, idx = (ino - 1) // self.ipg, (ino - 1) % self.ipg
         off = self.layout[g][4] * self.bs + idx * INODE_SIZE
-        raw = struct.pack('<HHIIIIIHHIII', mode, 0, size & 0xFFFFFFFF, EPOCH, EPOCH, EPOCH, 0, 0, links,
+        raw = struct.pack('<HHIIIIIHHIII', mode, uid & 0xFFFF, size & 0xFFFFFFFF, EPOCH, EPOCH, EPOCH, 0, gid & 0xFFFF, links,
                           sectors, flags, 0)
         raw += struct.pack('<15I', *block)
         raw += struct.pack('<IIII', 0, 0, (size >> 32) if (mode & 0o170000) == S_IFREG else 0, 0)
@@ -186,12 +188,14 @@ class Image:
                 entries.append((name, c.ino, ft))
             data = self.dir_data(entries)
             block, sectors = self.build_tree(self.map_blocks(data, False))
-            self.write_inode(node.ino, S_IFDIR | node.mode, len(data), 2 + subdirs, block, sectors)
+            self.write_inode(node.ino, S_IFDIR | node.mode, len(data), 2 + subdirs, block, sectors,
+                             uid=node.uid, gid=node.gid)
             for name in sorted(node.children):
                 self.emit(node.children[name], node.ino)
         elif node.kind == 'file':
             block, sectors = self.build_tree(self.map_blocks(node.data, True))
-            self.write_inode(node.ino, S_IFREG | node.mode, len(node.data), 1, block, sectors)
+            self.write_inode(node.ino, S_IFREG | node.mode, len(node.data), 1, block, sectors,
+                             uid=node.uid, gid=node.gid)
         else:
             t = node.target
             if len(t) < 60:

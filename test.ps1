@@ -18,7 +18,9 @@ param(
     [string[]]$ExtraDisks = @(),
     [switch]$Gui,
     [switch]$Image,
-    [string[]]$HostFwd = @()
+    [string[]]$HostFwd = @(),
+    [string]$LoginUser = "root",
+    [string]$LoginPassword = "orion"
 )
 
 $ErrorActionPreference = "Stop"
@@ -176,6 +178,26 @@ function Wait-After([string]$needle, [double]$timeout, [int]$from) {
     return ($log.ToString().IndexOf($needle, $from) -ge 0)
 }
 
+function Wait-Shell([double]$timeout, [int]$from) {
+    $end = (Get-Date).AddSeconds($timeout)
+    while ((Get-Date) -lt $end) {
+        $text = $log.ToString()
+        $p = $text.IndexOf('$ ', $from, [System.StringComparison]::Ordinal)
+        $l = $text.IndexOf('login: ', $from, [System.StringComparison]::Ordinal)
+        if ($l -ge 0 -and ($p -lt 0 -or $l -lt $p)) {
+            Send-Serial ($LoginUser + "`r")
+            $left = [Math]::Max(($end - (Get-Date)).TotalSeconds, 1)
+            if (-not (Wait-After 'Senha: ' $left $l)) { return $false }
+            Send-Serial ($LoginPassword + "`r")
+            $from = $log.ToString().IndexOf('Senha: ', $l, [System.StringComparison]::Ordinal) + 7
+            continue
+        }
+        if ($p -ge 0) { return $true }
+        Pump-Serial 0.05
+    }
+    return ($log.ToString().IndexOf('$ ', $from, [System.StringComparison]::Ordinal) -ge 0)
+}
+
 function Send-Serial([string]$text) {
     $bytes = [System.Text.Encoding]::ASCII.GetBytes($text)
     $stream = $client.GetStream()
@@ -274,7 +296,7 @@ try {
     foreach ($s in $steps) { if ($s -like "cmd:*" -or $s -like "raw:*" -or $s -like "key:*" -or $s -like "keys:*") { $needPrompt = $true } }
 
     if ($needPrompt -or $steps.Count -eq 0) {
-        if (Wait-For '$ ' $BootTimeout) {
+        if (Wait-Shell $BootTimeout 0) {
             Write-Host "prompt do shell de usuario detectado" -ForegroundColor DarkGray
         } else {
             Write-Host "AVISO: prompt do shell nao apareceu em $BootTimeout s" -ForegroundColor Yellow
@@ -416,7 +438,7 @@ try {
                 $from = $log.Length
                 $proc = Start-Qemu
                 $client = Connect-Port $SerialPort $BootTimeout
-                if (Wait-After '$ ' $BootTimeout $from) {
+                if (Wait-Shell $BootTimeout $from) {
                     Write-Host "prompt do shell de usuario detectado" -ForegroundColor DarkGray
                 } else {
                     Write-Host "AVISO: prompt do shell nao apareceu em $BootTimeout s depois do reboot" -ForegroundColor Yellow

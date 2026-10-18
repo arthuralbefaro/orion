@@ -5,6 +5,9 @@
 # <caminho> <args>     roda um programa e espera ele terminar
 # shell <caminho>      troca o programa que o init mantem vivo no terminal
 #
+# O padrao e o login (usuario root ou orion, senha "orion" nos dois; troque
+# com passwd). Para voltar ao shell direto, sem senha, use "shell /bin/sh".
+#
 # Descomente a linha do wm (ou use .\build.ps1 -Gui) para bootar direto na
 # interface grafica em vez do shell de texto.
 
@@ -14,4 +17,4 @@ HOME=/
 /bin/netup
 # shell /bin/wm
 
-shell /bin/sh
+shell /bin/login

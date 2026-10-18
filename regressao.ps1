@@ -180,6 +180,18 @@ if ($runAll -or $OnlyA) {
         "cmd:unixtest /run", "until:60:falha(s))", "cmd:unixtest /", "until:60:falha(s))",
         "cmd:permtest /tmp", "until:90:falha(s))", "cmd:permtest /", "until:90:falha(s))",
         "cmd:ls -l /etc/shadow", "cmd:id", "wait:1",
+        "cmd:login", "until:10:login: ", "raw:orion", "key:0D", "until:10:Senha: ", "raw:errada", "key:0D",
+        "until:10:Login incorreto", "wait:1", "raw:orion", "key:0D", "wait:1", "raw:orion", "key:0D",
+        "until:10:Bem-vindo, orion", "wait:1", "cmd:id", "cmd:pwd", "cmd:cat /etc/shadow", "wait:1",
+        "cmd:su -c id", "until:10:Senha: ", "raw:xx", "key:0D", "until:10:senha incorreta",
+        "cmd:su -c id", "until:10:Senha: ", "raw:orion", "key:0D", "until:10:uid=0(root)",
+        "cmd:passwd", "until:10:Senha atual: ", "raw:orion", "key:0D", "until:10:Senha nova: ", "raw:nova123", "key:0D",
+        "until:10:Repita", "raw:nova123", "key:0D", "until:15:trocada",
+        "cmd:su orion -c id", "until:10:Senha: ", "raw:orion", "key:0D", "until:10:senha incorreta",
+        "cmd:su orion -c id", "until:10:Senha: ", "raw:nova123", "key:0D", "until:10:uid=1000(orion)",
+        "cmd:exit", "wait:1", "cmd:grep orion: /etc/shadow", "cmd:ls -l /etc/shadow", "cmd:ls -l /bin/su /bin/passwd",
+        "cmd:ls -l /home", "cmd:passwd orion", "until:10:Senha nova: ", "raw:orion", "key:0D", "until:10:Repita",
+        "raw:orion", "key:0D", "until:15:trocada", "cmd:su orion -c id", "until:10:uid=1000(orion)", "wait:1",
         "cmd:ping 127.0.0.1 2", "wait:4",
         "cmd:httpd -p 8080 -n 1 &", "wait:2", "cmd:httpget 127.0.0.1 8080 /etc/group", "until:30:crc32", "wait:2",
         "cmd:cd /tmp", "cmd:wget http://example.com", "until:30:salvo", "cmd:grep Example index.html", "wait:1",
@@ -385,6 +397,24 @@ if ($runAll -or $OnlyA) {
     Expect $a "binario setuid de root roda com euid 0\s+ok" "binario setuid troca o euid no exec"
     Expect $a "-rw-------\s+1\s+root\s+root\s+\d+ [^\n]*/etc/shadow" "/etc/shadow e 0600 de root na imagem"
     Expect $a "\nuid=0\(root\) gid=0\(root\)" "id mostra root pelo /etc/passwd"
+    Expect $a 'login: root\s*Senha: \s*Bem-vindo, root\.' "boot pede usuario e senha, senha sem eco"
+    Expect $a 'login: orion\s*Senha: \s*Login incorreto' "login recusa senha errada"
+    Expect $a 'Login incorreto\s*orion login: orion\s*Senha: \s*Bem-vindo, orion\.' "login aceita orion depois do erro"
+    Expect $a 'Bem-vindo, orion\.[\s\S]*?uid=1000\(orion\) gid=100\(users\) grupos=100\(users\)\r?\n' "login troca uid, gid e grupos"
+    Expect $a '/home/orion \$ pwd\s*/home/orion' "login entra no HOME do usuario"
+    Expect $a 'cat: /etc/shadow: Permissao negada' "orion nao le o /etc/shadow"
+    Expect $a 'su -c id\s*Senha: \s*su: senha incorreta' "su recusa senha errada"
+    Expect $a 'su -c id\s*Senha: \s*uid=0\(root\) gid=0\(root\)' "su com a senha do root vira root"
+    Expect $a '\$ passwd\s*Senha atual: \s*Senha nova: \s*Repita a senha nova: \s*passwd: senha de orion trocada' "passwd do usuario pede a senha atual"
+    Expect $a '(?s)senha de orion trocada.*?su orion -c id\s*Senha: \s*su: senha incorreta.*?su orion -c id\s*Senha: \s*uid=1000\(orion\)' "senha antiga deixa de valer e a nova vale"
+    Expect $a '\norion:\$6\$(?!OrionUser0Salt01)[./0-9A-Za-z]{16}\$[./0-9A-Za-z]{86}:20000:' "passwd grava hash SHA-512 com sal novo"
+    Expect $a '(?s)grep orion: /etc/shadow.*?-rw-------\s+1\s+root\s+root[^\n]*/etc/shadow' "/etc/shadow continua 0600 de root depois do passwd"
+    Expect $a '-rwsr-xr-x\s+1\s+root\s+root[^\n]*/bin/su' "su e setuid root"
+    Expect $a '-rwsr-xr-x\s+1\s+root\s+root[^\n]*/bin/passwd' "passwd e setuid root"
+    Expect $a 'drwxr-xr-x\s+\d+\s+orion\s+users[^\n]*orion' "/home/orion e do orion na imagem"
+    Expect $a 'passwd orion\s*Senha nova: ' "root troca a senha de outro sem a senha atual"
+    Expect $a 'su orion -c id\s*uid=1000\(orion\)' "root vira orion pelo su sem senha"
+    ExpectNot $a '(?i)senha[^:\n]*: [^\s]' "senha digitada nunca aparece na tela"
     Expect $a "64 bytes de 127\.0\.0\.1: seq=2" "loopback: ping 127.0.0.1"
     Expect $a "httpd: 127\.0\.0\.1:\d+ GET /etc/group -> 200" "loopback: httpd atende o httpget em 127.0.0.1"
     Expect $a "(?s)httpget 127\.0\.0\.1 8080 /etc/group.*?root:x:0:.*?httpget: HTTP/1\.0 200 OK" "loopback: httpget recebe a resposta"
@@ -481,7 +511,7 @@ if ($runAll -or $OnlyA) {
     Expect $a ": OK" "heaptest OK"
     Expect $a "OK \(as duas rodaram\)" "preempt OK"
     Expect $a "0 pty\(s\) viva\(s\)" "nenhuma pty vazada"
-    Test-MemDelta $a "memoria estavel na sequencia A" 24
+    Test-MemDelta $a "memoria estavel na sequencia A" 32
 }
 
 # ---------------- Sequencia B: grafica ----------------

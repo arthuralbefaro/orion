@@ -18,7 +18,8 @@ GPT_ENTRY_SIZE = 128
 GPT_ENTRY_SECTORS = GPT_ENTRIES * GPT_ENTRY_SIZE // SECTOR
 SHORT_OK = set('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789$%\'-_@~`!(){}^#&')
 ROOT_SKIP = {'boot', 'EFI', 'efi'}
-SPECIAL_MODES = {'etc/shadow': 0o600}
+SPECIAL_MODES = {'etc/shadow': 0o600, 'bin/su': 0o4755, 'bin/passwd': 0o4755}
+SPECIAL_OWNERS = {'home/orion': (1000, 100)}
 MOUNT_POINTS = {'boot': 0o755, 'dev': 0o755, 'proc': 0o555, 'tmp': 0o1777, 'run': 0o755, 'mnt': 0o755,
                 'root': 0o700}
 
@@ -265,6 +266,12 @@ def root_tree(esp):
             root.children[name] = mkext2.Node('dir', mode)
     mkext2.add_path(root, '/boot/efi', mkext2.Node('dir', 0o755))
     root.children.setdefault('lost+found', mkext2.Node('dir', 0o700))
+    for path, (uid, gid) in SPECIAL_OWNERS.items():
+        node = root
+        for part in path.split('/'):
+            node = node.children.get(part) if node else None
+        if node:
+            node.uid, node.gid = uid, gid
     return root
 
 
