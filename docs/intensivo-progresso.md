@@ -27,20 +27,18 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 11:47, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
-`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1 e 6.1. Versao 2.4.0-a2. O boot pede
-usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram sozinhos
-como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO hibrida e
-live. ACPI pelo uACPI. Apps graficos em processos separados
-(`/run/wmapp.sock`, buffer em `/run/wm` com `MAP_SHARED`). A regressao roda
-no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e na ISO na F, com
-407 verificacoes; a sequencia A sobe o `tools/hostweb.py` no hospedeiro e
-usa `hostfwd` (5555 e 8081).
+Estado (2026-10-18, 12:27, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 e 6.2. Versao 2.4.0-a3. O boot
+pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
+sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
+hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
+`libgui` (`user/libgui`). A regressao roda no `out\orion.img` (GPT, raiz em
+ext2) nas sequencias A a E e na ISO na F, com 415 verificacoes; a sequencia A
+sobe o `tools/hostweb.py` no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 6.2 (`libgui` em `user/libgui`: botoes, campos de texto,
-listas com rolagem, caixas de opcao e menus; app `guidemo`), versao
-2.4.0-a3. O rascunho do `guidemo` e da `libgui` ja existe; falta o `wm`
-ignorar `SIGPIPE`.
+Proxima etapa: 6.3 (fontes TrueType com o `stb_truetype` 1.26, commit
+`6e9f34d`, e a DejaVu 2.37: terminal e barra com fonte vetorial), versao
+2.4.0-a4.
 
 ## Checklist
 
@@ -94,7 +92,7 @@ ignorar `SIGPIPE`.
 | 5.8 | Audio HDA | [ ] | | | |
 | 5.9 | Video BGA e virtio-gpu | [ ] | | | |
 | 6.1 | Protocolo de janelas | [x] | 11:06 | 11:47 | ver `git log` |
-| 6.2 | libgui | [ ] | | | |
+| 6.2 | libgui | [x] | 11:48 | 12:27 | ver `git log` |
 | 6.3 | Fontes TrueType | [ ] | | | |
 | 6.4 | Imagens PNG/JPEG | [ ] | | | |
 | 6.5 | Compositor com areas sujas | [ ] | | | |
@@ -1062,6 +1060,26 @@ depois, para a 6.2: o `wm` nao ignora `SIGPIPE`, entao escrever para um app
 que acabou de sair o mataria (o fluxo testado nao chega nisso).
 Ficou de fora: passar descritores por socket (`SCM_RIGHTS`) e `memfd`,
 eventos de movimento do mouse e de soltar o botao, redimensionar a janela.
+
+#### 6.2 libgui - 11:48 a 12:27 - FEITO
+`user/libgui` (ligada estaticamente em cada app pelo `build.txt`): rotulo,
+botao, campo de texto, caixa de opcao, lista com barra de rolagem e barra de
+menus com menus suspensos, todos usaveis pelo mouse e pelo teclado (Tab,
+Enter, espaco, setas, Page Up/Down, F10, Esc). `guidemo` (novo) usa todos e
+troca o titulo a cada acao. O `wm` passou a ignorar `SIGPIPE` (e a devolver
+o padrao aos shells que abre). O `check.ps1` compila a `libgui`. Criterio:
+na sequencia D o `guidemo` recebe texto, aciona o botao pelo Tab e Enter,
+liga a caixa, anda na lista com setas e Page Down, acrescenta um item, abre o
+menu Ajuda pelo mouse e sai pelo menu Arquivo pelo teclado; o log do `wm`
+mostra cada titulo. Regressao 407 -> 415. Versao 2.4.0-a3.
+Problemas: o primeiro teste dos menus pelo mouse falhou: depois de um
+`mouse_move -640 -400` seguido de outro movimento, o cursor parou 132 pixels
+antes do lugar, porque o QEMU junta movimentos relativos ainda nao entregues.
+Os menus ganharam teclado (F10, setas, Enter), o que tambem e melhor para
+quem usa, e o teste do mouse passou a sair da posicao conhecida do clique
+anterior com um movimento curto.
+Ficou de fora: arrastar (o protocolo nao manda movimento nem soltar o
+botao), selecao de texto, areas sujas dentro do app.
 
 ### Sessao 2 - 2026-10-17
 

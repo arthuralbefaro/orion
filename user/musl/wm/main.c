@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -91,6 +92,7 @@ static bool spawn_shell(struct window *w)
         dup2(slave, STDOUT_FILENO);
         dup2(slave, STDERR_FILENO);
         close(slave);
+        signal(SIGPIPE, SIG_DFL);
         char *args[] = { "sh", NULL };
         execv("/bin/sh", args);
         _exit(127);
@@ -684,6 +686,7 @@ int main(int argc, char **argv)
     (void)argv;
 
     setvbuf(stdout, NULL, _IONBF, 0);
+    signal(SIGPIPE, SIG_IGN);
 
     fb_fd = open("/dev/fb0", O_RDWR);
     if (fb_fd < 0) {

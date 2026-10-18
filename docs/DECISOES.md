@@ -2538,3 +2538,33 @@ Uma linha por decisao, na ordem em que foram tomadas.
   `hello-gui` pelo terminal grafico, manda duas teclas e um clique e confere
   pelo log do `wm` que cada evento foi e voltou (o titulo muda), a captura de
   tela com o degrade, e o fechamento com `q`.
+
+## v2.4.0-a3 (etapa 6.2: libgui)
+
+- `user/libgui` (`gui.h`, `gui.c`) fica fora de `user/musl` para nao virar
+  um programa; cada app que a usa poe no `build.txt` `flag -I../../libgui
+  -I../wm`, `src ../../libgui/*.c` e `dep ../../libgui/*.h` (o mesmo formato
+  que o `build.ps1` e o `tools/musl_build.py` ja entendiam). Ligada
+  estaticamente, como o resto. A fonte e a mesma 8x8 do `wm`, em dobro.
+- Esconde o protocolo da 6.1 (`gui_open`, `gui_run`, `gui_set_title`) e da
+  componentes sem alocacao dinamica, num vetor fixo por janela: rotulo,
+  botao, campo de texto (com cursor, Backspace e Enter), caixa de opcao,
+  lista com barra de rolagem (setas e Page Up/Down pelo teclado; setas da
+  barra e clique no item pelo mouse) e barra de menus com menus suspensos.
+- Teclado em tudo: Tab troca o foco (o componente em foco ganha borda
+  amarela), Enter ou espaco aciona, F10 abre o menu, setas andam nele, Esc
+  fecha. Alem de acessivel, e o que deixa o teste deterministico: o QEMU
+  mistura movimentos relativos de mouse em fila (um deslocamento grande
+  seguido de outro acabou num lugar errado na primeira tentativa), entao a
+  regressao usa o mouse so em movimentos curtos a partir de uma posicao
+  conhecida.
+- O app redesenha a janela inteira a cada evento e manda `mostra`; o `wm`
+  so copia a area da janela. Areas sujas no app ficam para a 6.5.
+- `SIGPIPE`: o `wm` passou a ignorar (escrever para um app que acabou de
+  sair o mataria) e devolve o padrao aos shells que abre, porque o `SIG_IGN`
+  passa pelo `exec`; a `libgui` tambem ignora e nao responde depois de
+  receber `fechar`.
+- `guidemo` (novo) usa todos os componentes e troca o titulo a cada acao,
+  que e o que o log do `wm` mostra e a sequencia D confere: texto, botao pelo
+  Tab e Enter, caixa de opcao, lista com setas e Page Down, botao que
+  acrescenta item, menu Ajuda pelo mouse e menu Arquivo pelo teclado.

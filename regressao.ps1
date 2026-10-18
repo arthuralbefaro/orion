@@ -718,6 +718,15 @@ if ($runAll -or $OnlyD) {
         "type:hello-gui &", "mon:sendkey ret", "wait:4", "mon:sendkey o", "wait:1", "mon:sendkey i", "wait:1",
         "mon:mouse_move -340 -200", "wait:0.5", "mon:mouse_button 1", "wait:0.4", "mon:mouse_button 0", "wait:1",
         "shot:out\shots\reg-gui-6-hello-gui.ppm", "mon:sendkey q", "wait:2",
+        "type:guidemo &", "mon:sendkey ret", "wait:4", "type:ana", "mon:sendkey ret", "wait:1",
+        "mon:sendkey tab", "mon:sendkey ret", "mon:sendkey ret", "wait:1", "mon:sendkey tab", "mon:sendkey spc", "wait:1",
+        "mon:sendkey tab", "mon:sendkey down", "mon:sendkey down", "mon:sendkey down", "wait:1", "mon:sendkey pgdn", "wait:1",
+        "mon:sendkey tab", "mon:sendkey ret", "wait:1", "shot:out\shots\reg-gui-7-guidemo.ppm",
+        "mon:mouse_move 138 -44", "wait:0.5", "mon:mouse_button 1", "wait:0.3", "mon:mouse_button 0", "wait:1",
+        "shot:out\shots\reg-gui-8-menu-ajuda.ppm",
+        "mon:mouse_move 0 26", "wait:0.5", "mon:mouse_button 1", "wait:0.3", "mon:mouse_button 0", "wait:1",
+        "mon:sendkey f10", "wait:0.5", "mon:sendkey right", "mon:sendkey left", "mon:sendkey down", "mon:sendkey down",
+        "wait:0.5", "shot:out\shots\reg-gui-9-menu-arquivo.ppm", "mon:sendkey ret", "wait:2",
         "mon:sendkey ctrl-p", "wait:2", "shot:out\shots\reg-gui-2-processos.ppm",
         "mon:sendkey ctrl-f", "wait:2", "shot:out\shots\reg-gui-3-arquivos.ppm",
         "mon:mouse_move -640 -400", "wait:0.5", "mon:mouse_move 40 12", "wait:0.5",
@@ -750,6 +759,14 @@ if ($runAll -or $OnlyD) {
     Expect $d "wm: janela \d+ agora se chama 'hello-gui: clique \d+,\d+'" "clique na janela chega ao hello-gui em coordenadas da janela"
     Expect $d "wm: app da janela \d+ saiu \(pediu para fechar\) depois de [4-9] quadro\(s\)" "hello-gui fecha com q e o wm tira a janela"
     Test-ShotColors "out\shots\reg-gui-6-hello-gui.ppm" "captura com o hello-gui tem o gradiente da janela" 100
+    Expect $d "wm: app abriu a janela \d+ \(600x400, 'guidemo'\)" "guidemo (libgui) abre a janela"
+    Expect $d "agora se chama 'guidemo: ola ana'" "libgui: campo de texto recebe o texto e o Enter"
+    Expect $d "'guidemo: somar 1'\s*\nwm: janela \d+ agora se chama 'guidemo: somar 2'" "libgui: Tab leva o foco ao botao e o Enter o aciona"
+    Expect $d "agora se chama 'guidemo: caixa ligada'" "libgui: caixa de opcao com espaco"
+    Expect $d "'guidemo: item Item 1'\s*\n[^\n]*'guidemo: item Item 2'\s*\n[^\n]*'guidemo: item Item 3'\s*\n[^\n]*'guidemo: item Item 15'" "libgui: lista com setas e Page Down (rolagem)"
+    Expect $d "agora se chama 'guidemo: lista com 41'" "libgui: botao acrescenta item na lista"
+    Expect $d "agora se chama 'guidemo: sobre'" "libgui: menu Ajuda/Sobre pelo mouse"
+    Expect $d "'guidemo: saindo'\s*\nwm: app da janela \d+ saiu \(pediu para fechar\)" "libgui: menu Arquivo/Sair pelo teclado (F10, setas, Enter) fecha o app"
 }
 
 # ---------------- Sequencia F: ISO hibrida ----------------
