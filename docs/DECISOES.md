@@ -2375,3 +2375,53 @@ Uma linha por decisao, na ordem em que foram tomadas.
   tambem confere o criterio da etapa, dois `cat /proc/self/maps` seguidos com
   a pilha em enderecos diferentes. O padrao antigo que fixava a pilha em
   `7ffffffff000` virou uma faixa.
+
+## v2.3.1 (etapa 7.1: ISO hibrida)
+
+- Numeracao: a 7.1 e a 7.2 vieram antes das Fases 5 e 6 por causa da ordem
+  recomendada do plano ("7.1 e 7.2 cedo"). Para a versao continuar sempre
+  crescente sem tomar a 2.4 (Fase 5) nem a 3.0 (Fase 7 inteira), elas viram
+  2.3.1 e 2.3.2; a 5.1 abre a 2.4.0-a1.
+- `tools/mkiso.c` (novo, C99 puro, compila no Windows com o `zig cc` e no
+  Linux com o `cc`) monta a ISO a partir de um diretorio: ISO9660 nivel 2
+  (nomes de ate 31 caracteres em maiusculas, `;1` nos arquivos, repeticoes
+  desfeitas com `~N`), Rock Ridge (`SP` e `ER` na raiz, `PX` e `NM` em cada
+  registro, para os nomes reais em minusculas e os modos), as duas tabelas de
+  caminhos, e El Torito com duas entradas: BIOS sem emulacao com o
+  `limine-bios-cd.bin` (4 setores de 512, com a "boot info table" que o
+  Limine exige) e uma secao UEFI (plataforma `0xEF`) com o
+  `limine-uefi-cd.bin`, que e uma imagem FAT com o `BOOTX64.EFI`. Sem Joliet
+  nem HFS+: ninguem que le esta ISO precisa.
+- Hibrida: os 32 KiB iniciais (a area de sistema, que o ISO9660 nao usa)
+  levam um MBR com uma unica particao, tipo `0xEF`, apontando para a imagem
+  EFI; e o que faz o firmware UEFI achar o Limine quando a ISO vai para um
+  pendrive. Depois o `limine bios-install` (o utilitario do proprio Limine,
+  `third_party/limine/limine.c`, compilado do mesmo jeito em
+  `out/tools/limine.exe`) poe o estagio 1 no MBR e o estagio 2 nos setores 1 a
+  62, o que exige que nenhuma particao comece antes do setor 63; a EFI comeca
+  bem depois. O Limine le o ISO9660 do disco inteiro nos dois firmwares,
+  entao `boot():/boot/orion.elf` funciona igual em CD e em pendrive.
+- `build.ps1 -Iso` compila as duas ferramentas do hospedeiro (so quando o
+  fonte muda), monta `out/iso` (kernel, `limine.conf`, os tres arquivos do
+  Limine) e gera `out/orion.iso`; `-Run -Iso` boota como CD e `-Bios` troca o
+  OVMF pelo SeaBIOS. No Linux, o `qrun.py` faz o mesmo (`make_iso`).
+- O kernel registra de onde foi carregado ("kernel lido de /boot/orion.elf no
+  CD, sem particao"), pela requisicao `executable_file` do Limine.
+- O NVRAM do OVMF guarda a ordem de boot. Com o arquivo de variaveis
+  compartilhado com os boots do disco, o OVMF tentava o disco antigo e caia
+  no "EFI Internal Shell" em vez do CD; e um boot do CD tambem gravava la a
+  ordem nova, que depois desviava os boots do disco. O `test.ps1` e o
+  `qrun.py` passaram a copiar as variaveis limpas do QEMU a cada partida (o
+  harness nunca dependeu de nada guardado nelas), e o `build.ps1 -Run -Iso`
+  usa um arquivo separado (`out/ovmf-vars-iso.fd`), para nao mexer no do
+  `-Run` normal.
+- Harness: `test.ps1 -Iso`, `-IsoDisk` (a ISO como disco, que e o que um
+  pendrive gravado com `dd` ou Rufus em modo DD parece para o firmware) e
+  `-Bios`, e o passo `reboot:` aceita opcoes (`reboot:uefi,cd`,
+  `reboot:bios,isodisk`) para trocar firmware e midia no meio do roteiro. O
+  `qrun.py` e o `regress.py` ganharam o mesmo. A sequencia F (nova) boota a
+  ISO nos quatro modos e confere, em cada um, o firmware, a midia e o kernel
+  chegando ao fim do boot; enquanto nao ha raiz (7.2), ele para no shell do
+  kernel. O `check.ps1` passou a compilar os `tools/*.c` com `-Wall -Wextra`.
+- VirtualBox nao esta instalado nesta maquina; o teste nele (parte do
+  "pronto quando") fica para o dono.

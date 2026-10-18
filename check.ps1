@@ -33,6 +33,13 @@ if (Test-Path user\musl) {
         }
     }
 }
+$hostZig = Join-Path $PSScriptRoot "third_party\zig\zig.exe"
+if (-not (Test-Path $hostZig)) { $hostZig = & (Join-Path $PSScriptRoot "tools\zig.ps1") }
+Get-ChildItem tools -Filter *.c -File -ErrorAction SilentlyContinue | ForEach-Object {
+    $out = & $hostZig cc -std=c99 -Wall -Wextra -c -o (Join-Path $env:TEMP "orion-check-tool.o") $_.FullName 2>&1 |
+        Select-String "error|warning"
+    if ($out) { $errors++; $out }
+}
 if (Test-Path kernel\rust) {
     $cargo = Get-Command cargo.exe -ErrorAction SilentlyContinue
     $cargo = if ($cargo) { $cargo.Source } else { Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe" }

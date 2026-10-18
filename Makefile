@@ -1,7 +1,7 @@
 # Makefile - build no Linux/WSL (no Windows use build.ps1).
 #   make          -> out/orion.elf + out/esp/
 #   make run      -> QEMU (UEFI, boot pela pasta out/esp)
-#   make iso      -> out/orion.iso (BIOS + UEFI, precisa de xorriso)
+#   make iso      -> out/orion.iso (hibrida, BIOS + UEFI, com o tools/mkiso.c)
 #   make run-iso  -> QEMU bootando a ISO em modo BIOS
 #   make clean
 
@@ -78,18 +78,7 @@ run: esp
 		-drive format=raw,file=fat:rw:$(ESP)
 
 iso: esp
-	@mkdir -p $(OUT_DIR)/iso_root/EFI/BOOT $(OUT_DIR)/iso_root/boot/limine
-	cp $(ELF) $(OUT_DIR)/iso_root/boot/$(KERNEL).elf
-	cp limine.conf $(LIMINE)/limine-bios.sys $(LIMINE)/limine-bios-cd.bin \
-	   $(LIMINE)/limine-uefi-cd.bin $(OUT_DIR)/iso_root/boot/limine/
-	cp $(LIMINE)/BOOTX64.EFI $(LIMINE)/BOOTIA32.EFI $(OUT_DIR)/iso_root/EFI/BOOT/
-	xorriso -as mkisofs -R -r -J -b boot/limine/limine-bios-cd.bin \
-		-no-emul-boot -boot-load-size 4 -boot-info-table -hfsplus \
-		-apm-block-size 2048 --efi-boot boot/limine/limine-uefi-cd.bin \
-		-efi-boot-part --efi-boot-image --protective-msdos-label \
-		$(OUT_DIR)/iso_root -o $(OUT_DIR)/$(KERNEL).iso
-	$(MAKE) -C $(LIMINE) limine CC=cc >/dev/null
-	$(LIMINE)/limine bios-install $(OUT_DIR)/$(KERNEL).iso
+	python3 -c "import sys; sys.path.insert(0, 'tools'); import qrun; sys.exit(qrun.make_iso().returncode)"
 
 run-iso: iso
 	$(QEMU) $(QEMUFLAGS) -cdrom $(OUT_DIR)/$(KERNEL).iso -boot d

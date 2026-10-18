@@ -38,6 +38,9 @@ LIMINE_REQ struct limine_executable_address_request executable_address_request =
 LIMINE_REQ struct limine_rsdp_request rsdp_request = {
     .id = LIMINE_RSDP_REQUEST_ID, .revision = 0
 };
+LIMINE_REQ struct limine_executable_file_request executable_file_request = {
+    .id = LIMINE_EXECUTABLE_FILE_REQUEST_ID, .revision = 0
+};
 LIMINE_REQ struct limine_module_request module_request = {
     .id = LIMINE_MODULE_REQUEST_ID, .revision = 0
 };
@@ -91,6 +94,18 @@ void boot_info_init(void)
         case LIMINE_FIRMWARE_TYPE_EFI64:   boot_info.firmware = "UEFI 64"; break;
         default: break;
         }
+    }
+
+    boot_info.kernel_path = "?";
+    boot_info.kernel_media = "?";
+    boot_info.kernel_partition = 0;
+    if (executable_file_request.response && executable_file_request.response->executable_file) {
+        struct limine_file *k = executable_file_request.response->executable_file;
+        boot_info.kernel_path = k->path;
+        boot_info.kernel_media = k->media_type == LIMINE_MEDIA_TYPE_OPTICAL ? "CD"
+                               : k->media_type == LIMINE_MEDIA_TYPE_TFTP  ? "rede"
+                               : "disco";
+        boot_info.kernel_partition = k->partition_index;
     }
 
     boot_info.framebuffer = NULL;

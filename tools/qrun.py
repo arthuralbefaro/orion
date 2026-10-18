@@ -116,8 +116,10 @@ def host_get(port, path):
 
 class Machine:
     def __init__(self, smp=4, memory=512, disk=False, extra_disks=(), serial_port=4444, monitor_port=4445,
-                 boot_timeout=60.0, image=False, hostfwd=(), login=("root", "orion")):
+                 boot_timeout=60.0, image=False, hostfwd=(), login=("root", "orion"), media=None, bios=False):
         self.image = image
+        self.media = media or ("image" if image else "esp")
+        self.bios = bios
         self.login = login
         self.hostfwd = list(hostfwd)
         self.smp = smp
@@ -138,8 +140,7 @@ class Machine:
         qemu = find_qemu()
         code, vars_template = find_firmware(qemu)
         vars_copy = OUT / "ovmf-vars-test.fd"
-        if not vars_copy.exists():
-            shutil.copyfile(vars_template, vars_copy)
+        shutil.copyfile(vars_template, vars_copy)
         if self.disk:
             img = OUT / "disk.img"
             if not img.exists():
@@ -148,11 +149,16 @@ class Machine:
         end = time.time() + 20
         while time.time() < end and not (port_free(self.serial_port) and port_free(self.monitor_port)):
             time.sleep(0.3)
-        args = [
-            qemu, "-M", "q35", "-cpu", "qemu64,+smep,+smap", "-smp", str(self.smp), "-m", f"{self.memory}M",
-            "-drive", f"if=pflash,format=raw,unit=0,file={code},readonly=on",
-            "-drive", f"if=pflash,format=raw,unit=1,file={vars_copy}",
-            "-drive", "format=raw,file=out/orion.img" if self.image else "format=raw,file=fat:rw:out/esp",
+        args = [qemu, "-M", "q35", "-cpu", "qemu64,+smep,+smap", "-smp", str(self.smp), "-m", f"{self.memory}M"]
+        if not self.bios:
+            args += ["-drive", f"if=pflash,format=raw,unit=0,file={code},readonly=on",
+                     "-drive", f"if=pflash,format=raw,unit=1,file={vars_copy}"]
+        args += {
+            "cd": ["-cdrom", "out/orion.iso"],
+            "isodisk": ["-drive", "format=raw,file=out/orion.iso"],
+            "image": ["-drive", "format=raw,file=out/orion.img"],
+        }.get(self.media, ["-drive", "format=raw,file=fat:rw:out/esp"])
+        args += [
             "-display", "none",
             "-serial", f"tcp:127.0.0.1:{self.serial_port},server,nowait",
             "-monitor", f"tcp:127.0.0.1:{self.monitor_port},server,nowait",
@@ -354,11 +360,18 @@ class Machine:
             self.log += f"\n[hostget] porta {port} {path}: {res}\n".encode()
             self.pump(0.5)
         elif kind == "reboot":
-            print("  reboot")
+            print(f"  reboot {arg}")
+            for opt in filter(None, (o.strip() for o in arg.split(","))):
+                if opt in ("bios", "uefi"):
+                    self.bios = opt == "bios"
+                elif opt in ("cd", "isodisk", "image", "esp"):
+                    self.media = opt
+                else:
+                    print(f"  reboot: opcao desconhecida {opt}")
             self.pump(0.5)
             self.stop()
             self.monitor = None
-            self.log += b"\n----- reboot -----\n"
+            self.log += ("\n----- reboot" + (" " + arg if arg else "") + " -----\n").encode()
             start = len(self.log)
             self.start()
             if self.wait_shell(self.boot_timeout, start):
@@ -370,13 +383,15 @@ class Machine:
             print(f"  passo desconhecido: {step}")
 
 
-def build(gui=False, image=False):
+def build(gui=False, image=False, iso=False):
     if platform.system() == "Windows":
         cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "build.ps1")]
         if gui:
             cmd.append("-Gui")
         if image:
             cmd.append("-Image")
+        if iso:
+            cmd.append("-Iso")
         r = subprocess.run(cmd, cwd=ROOT, stdout=subprocess.DEVNULL)
     else:
         r = subprocess.run(["make", "-j", str(os.cpu_count() or 2)], cwd=ROOT, stdout=subprocess.DEVNULL)
@@ -387,8 +402,39 @@ def build(gui=False, image=False):
             write_autostart(gui)
             if image:
                 r = make_image()
+            if iso and r.returncode == 0:
+                r = make_iso()
     if r.returncode != 0:
         raise SystemExit("build falhou")
+
+
+def make_iso():
+    cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    if not cc:
+        raise SystemExit("make_iso: falta um compilador C do hospedeiro (cc)")
+    tools = OUT / "tools"
+    tools.mkdir(parents=True, exist_ok=True)
+    limine = ROOT / "third_party" / "limine"
+    for exe, src, flags in (("mkiso", ROOT / "tools" / "mkiso.c", ["-Wall", "-Wextra", "-Werror"]),
+                            ("limine", limine / "limine.c", ["-D_FILE_OFFSET_BITS=64"])):
+        out = tools / exe
+        if not out.exists() or out.stat().st_mtime < src.stat().st_mtime:
+            r = subprocess.run([cc, "-O2", "-std=c99", *flags, "-o", str(out), str(src)], cwd=ROOT)
+            if r.returncode != 0:
+                return r
+    iso_dir = OUT / "iso"
+    shutil.rmtree(iso_dir, ignore_errors=True)
+    (iso_dir / "boot" / "limine").mkdir(parents=True)
+    shutil.copyfile(OUT / "orion.elf", iso_dir / "boot" / "orion.elf")
+    shutil.copyfile(ROOT / "limine.conf", iso_dir / "boot" / "limine" / "limine.conf")
+    for name in ("limine-bios.sys", "limine-bios-cd.bin", "limine-uefi-cd.bin"):
+        shutil.copyfile(limine / name, iso_dir / "boot" / "limine" / name)
+    r = subprocess.run([str(tools / "mkiso"), str(iso_dir), str(OUT / "orion.iso"),
+                        "--bios", "boot/limine/limine-bios-cd.bin", "--efi", "boot/limine/limine-uefi-cd.bin",
+                        "--label", "ORION"], cwd=ROOT, stdout=subprocess.DEVNULL)
+    if r.returncode != 0:
+        return r
+    return subprocess.run([str(tools / "limine"), "bios-install", "--quiet", str(OUT / "orion.iso")], cwd=ROOT)
 
 
 def make_image():
@@ -409,17 +455,20 @@ def write_autostart(gui):
 
 def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_build=False, boot_timeout=60.0,
         command_delay=1.0, settle=2.0, log_path="out/test-serial.log", kernel_shell=False, image=False,
-        hostfwd=()):
+        hostfwd=(), iso=False, iso_disk=False, bios=False):
     if not no_build:
-        build(gui, image)
+        build(gui, image, iso or iso_disk)
     elif gui:
         write_autostart(True)
         if image and make_image().returncode != 0:
             raise SystemExit("mkimage falhou")
     if image and not (OUT / "orion.img").exists():
         raise SystemExit("out/orion.img nao existe: rode o build com a imagem")
+    if (iso or iso_disk) and not (OUT / "orion.iso").exists():
+        raise SystemExit("out/orion.iso nao existe: rode o build com a ISO")
+    media = "cd" if iso else "isodisk" if iso_disk else None
     m = Machine(smp=smp, memory=memory, disk=disk, extra_disks=extra_disks, boot_timeout=boot_timeout,
-                image=image, hostfwd=hostfwd)
+                image=image, hostfwd=hostfwd, media=media, bios=bios)
     code = 0
     try:
         m.start()
@@ -456,6 +505,9 @@ def main():
     ap.add_argument("--disk", action="store_true")
     ap.add_argument("--gui", action="store_true")
     ap.add_argument("--image", action="store_true", help="boota do out/orion.img (GPT, raiz em ext2)")
+    ap.add_argument("--iso", action="store_true", help="boota do out/orion.iso como CD")
+    ap.add_argument("--iso-disk", action="store_true", help="boota do out/orion.iso como disco (pendrive)")
+    ap.add_argument("--bios", action="store_true", help="firmware BIOS (SeaBIOS) em vez de UEFI")
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--kernel-shell", action="store_true")
     ap.add_argument("--boot-timeout", type=float, default=60.0)
@@ -467,7 +519,8 @@ def main():
     steps = [f"cmd:{c}" for c in a.command] + a.steps
     code, text = run(steps, smp=a.smp, memory=a.memory, disk=a.disk, gui=a.gui, no_build=a.no_build,
                      boot_timeout=a.boot_timeout, command_delay=a.delay, settle=a.settle,
-                     log_path=a.log, kernel_shell=a.kernel_shell, image=a.image)
+                     log_path=a.log, kernel_shell=a.kernel_shell, image=a.image, iso=a.iso,
+                     iso_disk=a.iso_disk, bios=a.bios)
     if not a.quiet:
         print(f"----- {a.log} -----")
         print(text)

@@ -18,6 +18,9 @@ param(
     [string[]]$ExtraDisks = @(),
     [switch]$Gui,
     [switch]$Image,
+    [switch]$Iso,
+    [switch]$IsoDisk,
+    [switch]$Bios,
     [string[]]$HostFwd = @(),
     [string]$LoginUser = "root",
     [string]$LoginPassword = "orion"
@@ -35,10 +38,11 @@ function Find-Tool([string]$Name, [string[]]$Fallbacks) {
 }
 
 if (-not $NoBuild) {
-    & (Join-Path $Root "build.ps1") -Gui:$Gui -Image:$Image | Out-Null
+    & (Join-Path $Root "build.ps1") -Gui:$Gui -Image:$Image -Iso:($Iso -or $IsoDisk) | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "build.ps1 falhou" }
 }
 if ($Image -and -not (Test-Path (Join-Path $OutDir "orion.img"))) { throw "out\orion.img nao existe: rode .\build.ps1 -Image" }
+if (($Iso -or $IsoDisk) -and -not (Test-Path (Join-Path $OutDir "orion.iso"))) { throw "out\orion.iso nao existe: rode .\build.ps1 -Iso" }
 
 $Qemu = Find-Tool "qemu-system-x86_64.exe" @("$env:ProgramFiles\qemu\qemu-system-x86_64.exe")
 $QemuDir = Split-Path $Qemu -Parent
@@ -79,27 +83,38 @@ Start-Sleep -Milliseconds 500
 if (-not (Wait-PortFree $SerialPort 20)) { Write-Host "AVISO: porta $SerialPort ainda ocupada" -ForegroundColor Yellow }
 if (-not (Wait-PortFree $MonitorPort 20)) { Write-Host "AVISO: porta $MonitorPort ainda ocupada" -ForegroundColor Yellow }
 
-$qemuArgs = @(
-    "-M", "q35", "-cpu", "qemu64,+smep,+smap", "-smp", "$Smp", "-m", "${Memory}M",
-    "-drive", "if=pflash,format=raw,unit=0,file=$ovmfCode,readonly=on",
-    "-drive", "if=pflash,format=raw,unit=1,file=$ovmfVars",
-    "-drive", $(if ($Image) { "format=raw,file=out/orion.img" } else { "format=raw,file=fat:rw:out/esp" }),
-    "-display", "none",
-    "-serial", "tcp:127.0.0.1:$SerialPort,server,nowait",
-    "-monitor", "tcp:127.0.0.1:$MonitorPort,server,nowait",
-    "-no-reboot", "-no-shutdown"
-)
+$bootBios = [bool]$Bios
+$bootMedia = if ($Iso) { "cd" } elseif ($IsoDisk) { "isodisk" } elseif ($Image) { "image" } else { "esp" }
 
-$netdev = "user,id=n0"
-foreach ($fwd in $HostFwd) { $netdev += ",hostfwd=$fwd" }
-$qemuArgs += @("-netdev", $netdev, "-device", "e1000,netdev=n0",
-               "-object", "filter-dump,id=d0,netdev=n0,file=out/net.pcap")
-if ($Disk) { $qemuArgs += @("-drive", "format=raw,file=out/disk.img") }
-foreach ($extra in $ExtraDisks) { $qemuArgs += @("-drive", "format=raw,file=$extra") }
+function Get-QemuArgs {
+    $a = @("-M", "q35", "-cpu", "qemu64,+smep,+smap", "-smp", "$Smp", "-m", "${Memory}M")
+    if (-not $script:bootBios) {
+        Copy-Item $ovmfVarsTemplate $ovmfVars -Force
+        $a += @("-drive", "if=pflash,format=raw,unit=0,file=$ovmfCode,readonly=on",
+                "-drive", "if=pflash,format=raw,unit=1,file=$ovmfVars")
+    }
+    switch ($script:bootMedia) {
+        "cd"      { $a += @("-cdrom", "out/orion.iso") }
+        "isodisk" { $a += @("-drive", "format=raw,file=out/orion.iso") }
+        "image"   { $a += @("-drive", "format=raw,file=out/orion.img") }
+        default   { $a += @("-drive", "format=raw,file=fat:rw:out/esp") }
+    }
+    $a += @("-display", "none",
+            "-serial", "tcp:127.0.0.1:$SerialPort,server,nowait",
+            "-monitor", "tcp:127.0.0.1:$MonitorPort,server,nowait",
+            "-no-reboot", "-no-shutdown")
+    $netdev = "user,id=n0"
+    foreach ($fwd in $HostFwd) { $netdev += ",hostfwd=$fwd" }
+    $a += @("-netdev", $netdev, "-device", "e1000,netdev=n0",
+            "-object", "filter-dump,id=d0,netdev=n0,file=out/net.pcap")
+    if ($Disk) { $a += @("-drive", "format=raw,file=out/disk.img") }
+    foreach ($extra in $ExtraDisks) { $a += @("-drive", "format=raw,file=$extra") }
+    return $a | Where-Object { $_ } | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
+}
 
 $qemuErr = Join-Path $OutDir "test-qemu.log"
-$quoted = $qemuArgs | Where-Object { $_ } | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
 function Start-Qemu {
+    $quoted = Get-QemuArgs
     $p = Start-Process -FilePath $Qemu -ArgumentList $quoted -PassThru -WindowStyle Hidden `
         -WorkingDirectory $Root -RedirectStandardError $qemuErr
     Write-Host "QEMU pid $($p.Id), smp $Smp" -ForegroundColor DarkGray
@@ -425,7 +440,7 @@ try {
                 Pump-Serial 0.5
             }
             "reboot" {
-                Write-Host "  reboot" -ForegroundColor DarkGray
+                Write-Host "  reboot $arg" -ForegroundColor DarkGray
                 Pump-Serial 0.5
                 try { Send-Monitor "quit" } catch {}
                 try { $client.Close() } catch {}
@@ -434,7 +449,20 @@ try {
                 if (-not $proc.WaitForExit(10000)) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
                 [void](Wait-PortFree $SerialPort 20)
                 [void](Wait-PortFree $MonitorPort 20)
-                [void]$log.Append("`n----- reboot -----`n")
+                foreach ($opt in ($arg -split ',')) {
+                    switch ($opt.Trim()) {
+                        "bios"    { $bootBios = $true }
+                        "uefi"    { $bootBios = $false }
+                        "cd"      { $bootMedia = "cd" }
+                        "isodisk" { $bootMedia = "isodisk" }
+                        "image"   { $bootMedia = "image" }
+                        "esp"     { $bootMedia = "esp" }
+                        ""        { }
+                        default   { Write-Host "  reboot: opcao desconhecida $opt" -ForegroundColor Yellow }
+                    }
+                }
+                $tag = if ($arg) { " $arg" } else { "" }
+                [void]$log.Append("`n----- reboot$tag -----`n")
                 $from = $log.Length
                 $proc = Start-Qemu
                 $client = Connect-Port $SerialPort $BootTimeout

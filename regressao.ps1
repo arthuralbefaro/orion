@@ -6,6 +6,7 @@ param(
     [switch]$OnlyC,
     [switch]$OnlyD,
     [switch]$OnlyE,
+    [switch]$OnlyF,
     [int]$StressRuns = 1,
     [switch]$Verbose
 )
@@ -14,7 +15,7 @@ $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 $failures = @()
 $checks = 0
-$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE)
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -728,6 +729,27 @@ if ($runAll -or $OnlyD) {
     Expect $d "wm: wmctl: ping" "wmctl conversou com o wm pelo socket Unix"
     Expect $d "wm: wmctl: term\s*\nwm: terminal \d+ -> sh pid \d+" "wmctl term: o wm abriu um terminal a pedido de outro programa"
     Expect $d "wm: wmctl: list" "wmctl list pelo socket Unix"
+}
+
+# ---------------- Sequencia F: ISO hibrida ----------------
+if ($runAll -or $OnlyF) {
+    Write-Host "== Sequencia F (ISO hibrida: CD e pendrive, BIOS e UEFI) ==" -ForegroundColor Cyan
+    if (-not $NoBuild -or -not (Test-Path (Join-Path $Root "out\orion.iso"))) {
+        & (Join-Path $Root "build.ps1") -Iso | Out-Null
+    }
+    $stepsF = @(
+        "wait:6", "reboot:uefi,cd", "wait:6", "reboot:bios,isodisk", "wait:6", "reboot:uefi,isodisk", "wait:6"
+    )
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Iso -Bios -NoBuild -LogPath "out\reg-f.log" `
+        -Script $stepsF -CommandDelay 1.0 -BootTimeout 20 -NoPrint | Out-Null
+    $f = Get-Log "out\reg-f.log"
+    if ($Verbose) { Write-Output $f }
+
+    Expect $f '^(?:(?!----- reboot)[\s\S])*?Limine [\d.]+ via BIOS[^\n]*\n[^\n]*kernel lido de /boot/orion\.elf no CD(?:(?!----- reboot)[\s\S])*?/bin/init nao encontrado' "ISO como CD no BIOS: El Torito, Limine e kernel"
+    Expect $f '----- reboot uefi,cd -----(?:(?!----- reboot)[\s\S])*?Limine [\d.]+ via UEFI 64[^\n]*\n[^\n]*kernel lido de /boot/orion\.elf no CD(?:(?!----- reboot)[\s\S])*?/bin/init nao encontrado' "ISO como CD no UEFI: imagem EFI do El Torito"
+    Expect $f '----- reboot bios,isodisk -----(?:(?!----- reboot)[\s\S])*?Limine [\d.]+ via BIOS[^\n]*\n[^\n]*kernel lido de /boot/orion\.elf no disco(?:(?!----- reboot)[\s\S])*?/bin/init nao encontrado' "ISO gravada em pendrive no BIOS: MBR do Limine"
+    Expect $f '----- reboot uefi,isodisk -----(?:(?!----- reboot)[\s\S])*?Limine [\d.]+ via UEFI 64[^\n]*\n[^\n]*kernel lido de /boot/orion\.elf no disco(?:(?!----- reboot)[\s\S])*?/bin/init nao encontrado' "ISO gravada em pendrive no UEFI: particao EFI do MBR"
+    ExpectNot $f "PANIC|EXCECAO" "nenhum panico nos quatro boots da ISO"
 }
 
 # ---------------- Sequencia E: estresse de processos ----------------

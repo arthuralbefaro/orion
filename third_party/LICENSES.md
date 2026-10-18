@@ -2,7 +2,7 @@
 
 | Nome | Versao | Origem | Licenca | Onde fica | Como chega |
 |---|---|---|---|---|---|
-| Limine | 12.8.0 | https://github.com/Limine-Bootloader/Limine/releases/tag/v12.8.0 | BSD-2-Clause (`third_party/limine/LICENSE`) | `third_party/limine` | versionado no git; o `setup.ps1` baixa de novo se faltar |
+| Limine | 12.8.0 | https://github.com/Limine-Bootloader/Limine/releases/tag/v12.8.0 | BSD-2-Clause (`third_party/limine/LICENSE`) | `third_party/limine` | versionado no git; o `setup.ps1` baixa de novo se faltar; o `limine.c` (utilitario do `bios-install`) e compilado sem mudanca pelo `build.ps1 -Iso` em `out/tools` |
 | Zig (compilador, inclui a musl 1.2.x e os cabecalhos do Linux) | 0.16.0 | https://ziglang.org/download/0.16.0/ (SHA-256 conferido pelo `tools/zig.ps1` e pelo CI) | MIT (Zig); a musl embutida e MIT | `third_party/zig` | fora do git (`.gitignore`); `tools/zig.ps1` baixa na primeira compilacao |
 | dash | 0.5.13.5 | http://gondor.apana.org.au/~herbert/dash/files/dash-0.5.13.5.tar.gz (SHA-256 `40090101a2a491f13e901d3d48e90414f26634628b9bfff35ff540363c227a7d`, o mesmo do `.sha512sum` assinado do autor) | BSD-3-Clause (`third_party/dash/COPYING`); o `signames.c` gerado segue o `mksignames.c`, GPL-2.0-or-later | `third_party/dash` | versionado no git, como veio do tarball |
 | Lua | 5.4.9 | https://www.lua.org/ftp/lua-5.4.9.tar.gz (SHA-256 `2335b6c582a52654f94612bf10d2f4672805d05329aa6568b1d8cd9e5c6fb8e6`, o publicado em lua.org) | MIT (aviso no fim de `third_party/lua/src/lua.h`) | `third_party/lua` | versionado no git, como veio do tarball |

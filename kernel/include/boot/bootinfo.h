@@ -27,6 +27,9 @@ struct boot_info {
     const char *bootloader_name;
     const char *bootloader_version;
     const char *firmware;           /* "UEFI 64", "BIOS"... */
+    const char *kernel_path;
+    const char *kernel_media;
+    uint32_t kernel_partition;
 
     uint64_t hhdm_offset;
     struct limine_memmap_response *memmap;

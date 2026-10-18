@@ -48,6 +48,9 @@ def parse_sequences():
                 seq["extra"] = [ps_string(s) for s in STRING.finditer(ex.group(1))]
             seq["gui"] = "-Gui" in c
             seq["image"] = "-Image" in c
+            seq["iso"] = bool(re.search(r"-Iso\b", c))
+            seq["iso_disk"] = "-IsoDisk" in c
+            seq["bios"] = bool(re.search(r"-Bios\b", c))
             hf = re.search(r"-HostFwd\s+@\(([^)]*)\)", c)
             if hf:
                 seq["hostfwd"] = [ps_string(s) for s in STRING.finditer(hf.group(1))]
@@ -155,7 +158,7 @@ def run_stress(seq, rep, runs, smp, image=False):
 
 def main():
     ap = argparse.ArgumentParser(description="Regressao do Orion (le os passos do regressao.ps1)")
-    ap.add_argument("which", nargs="?", default="ABCDE", help="sequencias, ex.: ABCDE ou AC")
+    ap.add_argument("which", nargs="?", default="ABCDFE", help="sequencias, ex.: ABCDFE ou AC")
     ap.add_argument("--smp", type=int, default=4)
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--stress-runs", type=int, default=1)
@@ -186,8 +189,9 @@ def main():
             built = True
         for args in seq["prep"]:
             subprocess.run([sys.executable, str(ROOT / "tools" / "mkext2.py")] + args, check=True, cwd=ROOT)
-        no_build = built and not seq["gui"]
-        if seq["gui"] and a.no_build:
+        wants_iso = seq.get("iso", False) or seq.get("iso_disk", False)
+        no_build = built and not seq["gui"] and not wants_iso
+        if (seq["gui"] or wants_iso) and a.no_build:
             no_build = True
         web = None
         if seq["hostweb"]:
@@ -197,7 +201,9 @@ def main():
         try:
             _, log = qrun.run(seq["steps"], smp=a.smp, disk=seq["disk"], extra_disks=seq["extra"], gui=seq["gui"],
                               no_build=no_build, image=seq["image"], hostfwd=seq["hostfwd"],
-                              boot_timeout=seq["boot"], command_delay=seq["delay"], log_path=seq["log"])
+                              boot_timeout=seq["boot"], command_delay=seq["delay"], log_path=seq["log"],
+                              iso=seq.get("iso", False), iso_disk=seq.get("iso_disk", False),
+                              bios=seq.get("bios", False))
         finally:
             if web:
                 web.kill()

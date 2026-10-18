@@ -8,7 +8,9 @@ param(
     [string]$Accel = "",
     [switch]$Disk,
     [switch]$Gui,
-    [switch]$Image
+    [switch]$Image,
+    [switch]$Iso,
+    [switch]$Bios
 )
 
 $ErrorActionPreference = "Stop"
@@ -240,6 +242,38 @@ if ($Image) {
     if ($LASTEXITCODE -ne 0) { throw "mkimage falhou" }
 }
 
+if ($Iso) {
+    $ToolDir = Join-Path $OutDir "tools"
+    New-Item -ItemType Directory -Force -Path $ToolDir | Out-Null
+    if (-not $Zig) { $Zig = & (Join-Path $Root "tools\zig.ps1") }
+    $hostTools = @(
+        @{ Exe = "mkiso.exe"; Src = (Join-Path $Root "tools\mkiso.c"); Flags = @("-Wall", "-Wextra", "-Werror") },
+        @{ Exe = "limine.exe"; Src = (Join-Path $LimineDir "limine.c"); Flags = @("-D_FILE_OFFSET_BITS=64") }
+    )
+    foreach ($t in $hostTools) {
+        $exe = Join-Path $ToolDir $t.Exe
+        if (-not (Test-Path $exe) -or (Get-Item $exe).LastWriteTime -lt (Get-Item $t.Src).LastWriteTime) {
+            Write-Host "  ZIG  $($t.Exe) (ferramenta do hospedeiro)"
+            $flags = $t.Flags
+            & $Zig cc -O2 -std=c99 @flags -o $exe $t.Src
+            if ($LASTEXITCODE -ne 0) { throw "Erro compilando $($t.Exe)" }
+        }
+    }
+    $IsoDir = Join-Path $OutDir "iso"
+    Remove-Item -Recurse -Force $IsoDir -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path (Join-Path $IsoDir "boot\limine") | Out-Null
+    Copy-Item $KernelElf (Join-Path $IsoDir "boot\$Kernel.elf")
+    Copy-Item (Join-Path $Root "limine.conf") (Join-Path $IsoDir "boot\limine\limine.conf")
+    foreach ($f in "limine-bios.sys", "limine-bios-cd.bin", "limine-uefi-cd.bin") {
+        Copy-Item (Join-Path $LimineDir $f) (Join-Path $IsoDir "boot\limine\$f")
+    }
+    $IsoFile = Join-Path $OutDir "orion.iso"
+    & (Join-Path $ToolDir "mkiso.exe") $IsoDir $IsoFile --bios boot/limine/limine-bios-cd.bin --efi boot/limine/limine-uefi-cd.bin --label ORION
+    if ($LASTEXITCODE -ne 0) { throw "mkiso falhou" }
+    & (Join-Path $ToolDir "limine.exe") bios-install --quiet $IsoFile
+    if ($LASTEXITCODE -ne 0) { throw "limine bios-install falhou" }
+}
+
 if ($Run) {
 
 if ($Disk) {
@@ -259,18 +293,26 @@ if ($Disk) {
     if (-not (Test-Path $ovmfCode)) { throw "Firmware UEFI nao encontrado: $ovmfCode" }
     $ovmfVars = Join-Path $OutDir "ovmf-vars.fd"
     if (-not (Test-Path $ovmfVars)) { Copy-Item $ovmfVarsTemplate $ovmfVars }
+    if ($Iso) {
+        $ovmfVars = Join-Path $OutDir "ovmf-vars-iso.fd"
+        Copy-Item $ovmfVarsTemplate $ovmfVars -Force
+    }
 
     $qemuArgs = @(
         "-M", "q35",
         "-cpu", $Cpu,
         "-smp", "$Smp",
         "-m", "${Memory}M",
-        "-drive", "if=pflash,format=raw,unit=0,file=$ovmfCode,readonly=on",
-        "-drive", "if=pflash,format=raw,unit=1,file=$ovmfVars",
-        "-drive", $(if ($Image) { "format=raw,file=out/orion.img" } else { "format=raw,file=fat:rw:out/esp" }),
-            "-serial", "stdio",
+        "-serial", "stdio",
         "-no-reboot", "-no-shutdown"
     )
+    if (-not $Bios) {
+        $qemuArgs += @("-drive", "if=pflash,format=raw,unit=0,file=$ovmfCode,readonly=on",
+                       "-drive", "if=pflash,format=raw,unit=1,file=$ovmfVars")
+    }
+    if ($Iso) { $qemuArgs += @("-cdrom", "out/orion.iso") }
+    elseif ($Image) { $qemuArgs += @("-drive", "format=raw,file=out/orion.img") }
+    else { $qemuArgs += @("-drive", "format=raw,file=fat:rw:out/esp") }
     $qemuArgs += @("-netdev", "user,id=n0", "-device", "e1000,netdev=n0")
     if ($Disk) { $qemuArgs += @("-drive", "format=raw,file=out/disk.img") }
     if ($Accel) { $qemuArgs += @("-accel", $Accel) }

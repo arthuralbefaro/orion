@@ -80,6 +80,12 @@ void kmain(void)
     log_info("boot", "%s %s via %s, protocolo Limine rev %lu",
              boot_info.bootloader_name, boot_info.bootloader_version,
              boot_info.firmware, boot_info.base_revision);
+    if (boot_info.kernel_partition)
+        log_info("boot", "kernel lido de %s no %s, particao %u", boot_info.kernel_path,
+                 boot_info.kernel_media, boot_info.kernel_partition);
+    else
+        log_info("boot", "kernel lido de %s no %s, sem particao", boot_info.kernel_path,
+                 boot_info.kernel_media);
     log_info("boot", "kernel em fisico %016lx / virtual %016lx, HHDM %016lx",
              boot_info.kernel_phys_base, boot_info.kernel_virt_base, boot_info.hhdm_offset);
     if (boot_info.framebuffer)

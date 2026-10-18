@@ -28,6 +28,8 @@ conferido; versoes e origens estao em `third_party\LICENSES.md`.
     .\build.ps1 -Run -Smp 4 -Gui   # boota direto na interface grafica
     .\build.ps1 -Image            # gera out\orion.img: GPT, EFI em FAT16, raiz em ext2
     .\build.ps1 -Run -Smp 4 -Image  # boota do out\orion.img (o que voce grava fica no disco)
+    .\build.ps1 -Iso              # gera out\orion.iso: ISO hibrida (CD ou pendrive, BIOS ou UEFI)
+    .\build.ps1 -Run -Iso [-Bios]  # boota a ISO como CD (UEFI; -Bios usa o SeaBIOS)
     .\build.ps1 -Clean             # limpa
     .\check.ps1                    # analise do kernel e dos programas (erros e warnings)
     .\regressao.ps1                # bateria automatica (exit 0 = verde)
@@ -185,6 +187,14 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
     .\regressao.ps1 -OnlyA          # so uma sequencia (OnlyA..OnlyE)
     .\regressao.ps1 -NoBuild -OnlyE -StressRuns 5    # o estresse 5 vezes seguidas
     python tools\regress.py ABCDE   # a mesma regressao em Python (Linux e CI)
+
+## ISO
+
+`.\build.ps1 -Iso` gera `out\orion.iso` com uma ferramenta propria
+(`tools\mkiso.c`: ISO9660 com Rock Ridge e El Torito) e o `limine
+bios-install`. A mesma ISO boota como CD ou gravada num pendrive (Rufus em
+modo DD, ou `dd`), em BIOS ou UEFI. Por enquanto ela leva so o kernel: sem
+disco, o boot termina no shell do kernel.
 
 ## Programas proprios em /bin
     sh init edit wm top ps free uptime time kill env printenv clear

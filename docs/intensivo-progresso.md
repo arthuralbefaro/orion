@@ -23,22 +23,20 @@ o `setup.ps1` faz) e baixa sozinho o Zig 0.16.0 (`tools\zig.ps1`) e o Freedoom
 (`tools\freedoom.ps1`) na primeira vez, com SHA-256 conferido. Os programas
 ficam em `user/musl/<nome>` (um `main.c` e/ou um `build.txt`); a interface
 propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
-`kernel/rust/<crate>`. A regressao demora uns 25 minutos; o estresse 5x, outros
+`kernel/rust/<crate>`. A regressao demora uns 40 minutos; o estresse 5x, outros
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 05:28, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1` e
-`v2.2` e `v2.3`), 8.7 commitada; marco da Fase 4 fechado. Versao 2.3.0.
-SMEP, SMAP e ASLR ligados. O boot pede usuario e
-senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram sozinhos como root.
-A regressao inteira roda no `out\orion.img` (GPT, raiz em ext2), com 375
-verificacoes; a sequencia A sobe o `tools/hostweb.py` no hospedeiro e usa
-`hostfwd` (5555 e 8081).
+Estado (2026-10-18, 09:44, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+`v2.2` e `v2.3`), mais 8.7 e 7.1. Versao 2.3.1. O boot pede usuario e senha
+(`root`/`orion`); o `test.ps1` e o `qrun.py` entram sozinhos como root. SMEP,
+SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO hibrida. A regressao roda no
+`out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e na ISO na F, com
+380 verificacoes; a sequencia A sobe o `tools/hostweb.py` no hospedeiro e
+usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 7.1 (ISO hibrida com ferramenta propria em C, `build.ps1
--Iso`), depois 7.2 (sistema live com a raiz em memoria) e 5.1 (uACPI). As
-etapas 7.1 e 7.2, adiantadas pela ordem recomendada, viram 2.3.1 e 2.3.2 (a
-Fase 7 inteira continua sendo a 3.0); a 5.1 abre a 2.4.0-a1.
+Proxima etapa: 7.2 (a ISO boota com a raiz em tmpfs a partir de um initramfs),
+depois 5.1 (uACPI). A 7.2 vira 2.3.2; a 5.1 abre a 2.4.0-a1.
 
 ## Checklist
 
@@ -98,7 +96,7 @@ Fase 7 inteira continua sendo a 3.0); a 5.1 abre a 2.4.0-a1.
 | 6.5 | Compositor com areas sujas | [ ] | | | |
 | 6.6 | Apps | [ ] | | | |
 | 6.7 | Area de trabalho | [ ] | | | |
-| 7.1 | ISO hibrida | [ ] | | | |
+| 7.1 | ISO hibrida | [x] | 06:26 | 09:44 | ver `git log` |
 | 7.2 | Live | [ ] | | | |
 | 7.3 | Instalador | [ ] | | | |
 | 7.4 | Hardware real | [ ] | | | |
@@ -968,6 +966,32 @@ acusou o `cmdline`, mas era so o teste rodado sem os argumentos `um dois`
 que a regressao passa.
 Ficou de fora: executavel em posicao aleatoria (os programas sao `ET_EXEC`
 estaticos; precisa de PIE), `brk` aleatorio, desligar o ASLR por processo.
+
+#### 7.1 ISO hibrida - 06:26 a 09:44 - FEITO
+`tools/mkiso.c` (novo, C99, roda no Windows pelo `zig cc` e no Linux pelo
+`cc`) monta ISO9660 nivel 2 com Rock Ridge e El Torito com duas entradas
+(BIOS com o `limine-bios-cd.bin` e a "boot info table"; UEFI com a imagem FAT
+`limine-uefi-cd.bin`), e poe na area de sistema um MBR com a particao EFI;
+o `limine bios-install` (o `limine.c` do proprio Limine, compilado em
+`out/tools`) completa o boot BIOS por pendrive. `build.ps1 -Iso` gera
+`out/orion.iso`; `-Run -Iso` e `-Bios` bootam. O kernel registra de onde foi
+lido ("kernel lido de /boot/orion.elf no CD"). Harness: `test.ps1 -Iso`,
+`-IsoDisk`, `-Bios` e `reboot:<firmware>,<midia>`; o mesmo no `qrun.py` e no
+`regress.py`. Criterio: a sequencia F (nova) boota a mesma ISO como CD e como
+pendrive, em BIOS e em UEFI, e o kernel chega ao fim do boot nos quatro. Um
+leitor independente em Python conferiu a estrutura (Rock Ridge, tabelas de
+caminhos, catalogo com checksum, MBR). Regressao 375 -> 380. Versao 2.3.1
+(a 7.1 veio antes das Fases 5 e 6 pela ordem recomendada).
+Problemas: (1) os boots UEFI da ISO caiam no "EFI Internal Shell": o NVRAM
+do OVMF, compartilhado com os boots do disco, guardava a ordem de boot do
+disco. Pior: a primeira rodada da sequencia F gravou ali a ordem nova, e a
+regressao inteira seguinte bootou as sequencias A a E no shell do UEFI (298
+de 380 falhas). O harness passou a copiar as variaveis limpas do QEMU a cada
+partida.
+(2) O `zig cc -fsyntax-only` nao funciona para o alvo do hospedeiro no
+Windows; o `check.ps1` compila os `tools/*.c` para um `.o` temporario.
+Ficou de fora: o teste no VirtualBox (nao esta instalado aqui; fica para o
+dono), Joliet e HFS+.
 
 ### Sessao 2 - 2026-10-17
 
