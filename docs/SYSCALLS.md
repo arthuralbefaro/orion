@@ -48,7 +48,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 38 | setitimer | parcial | so `ITIMER_REAL`, com intervalo; resolucao de 5 ms |
 | 39 | getpid | completa | |
 | 41 | socket | parcial | `AF_INET` com `SOCK_STREAM` (TCP, 3.2), `SOCK_DGRAM` e `SOCK_RAW`; `SOCK_NONBLOCK` e `SOCK_CLOEXEC` |
-| 42 | connect | parcial | UDP fixa o destino; TCP faz o handshake e espera ate 20 s (`ETIMEDOUT`), `ECONNREFUSED` com `RST`, `EINPROGRESS` com `O_NONBLOCK`; sem retransmissao do `SYN` ate a 3.3 |
+| 42 | connect | parcial | UDP fixa o destino; TCP faz o handshake (o `SYN` e retransmitido com backoff e desiste em uns 63 s com `ETIMEDOUT`), `ECONNREFUSED` com `RST`, `EINPROGRESS` com `O_NONBLOCK` (3.3) |
 | 44 | sendto | parcial | UDP e ICMP; em TCP e um `write` (o endereco e ignorado); sem `SIGPIPE` com a conexao fechada, so `EPIPE` |
 | 45 | recvfrom | parcial | UDP e ICMP; em TCP e um `read` (sem endereco de volta); `flags` ignoradas |
 | 46 | sendmsg | parcial | como o `sendto`, juntando ate 1024 `iovec`; sem dados de controle (3.2) |

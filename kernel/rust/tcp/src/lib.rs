@@ -276,6 +276,14 @@ impl<T> Table<T> {
     pub fn retain<F: FnMut(&T) -> bool>(&mut self, mut f: F) {
         self.entries.retain(|(_, v)| f(v));
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&Key, &T)> {
+        self.entries.iter().map(|(k, v)| (k, v))
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&Key, &mut T)> {
+        self.entries.iter_mut().map(|(k, v)| (&*k, v))
+    }
 }
 
 #[repr(u32)]
@@ -292,12 +300,21 @@ pub enum State {
     TimeWait = 10,
 }
 
+pub const RTO_INIT: u64 = 1000;
+pub const RTO_MIN: u64 = 200;
+pub const RTO_MAX: u64 = 60_000;
+pub const SYN_RETRIES: u32 = 5;
+pub const DATA_RETRIES: u32 = 8;
+pub const MSL: u64 = 30_000;
+const ETIMEDOUT: i32 = 110;
+
 pub struct Conn {
     pub id: u32,
     pub state: State,
     iss: u32,
     snd_una: u32,
     snd_nxt: u32,
+    snd_max: u32,
     snd_wnd: u32,
     snd_wl1: u32,
     snd_wl2: u32,
@@ -305,6 +322,7 @@ pub struct Conn {
     mss: u16,
     rx: VecDeque<u8>,
     tx: VecDeque<u8>,
+    ooo: Vec<(u32, Vec<u8>)>,
     fin_queued: bool,
     fin_sent: bool,
     fin_acked: bool,
@@ -312,6 +330,21 @@ pub struct Conn {
     ack_pending: bool,
     detached: bool,
     error: i32,
+    rto: u64,
+    srtt: u64,
+    rttvar: u64,
+    rtt_probe: Option<(u32, u64)>,
+    rexmit_at: u64,
+    retries: u32,
+    persist_at: u64,
+    persist_wait: u64,
+    timewait_at: u64,
+    dupacks: u32,
+    fast_rexmit: bool,
+    in_recovery: bool,
+    cwnd: u32,
+    ssthresh: u32,
+    retransmits: u64,
 }
 
 #[derive(Default)]
@@ -328,6 +361,7 @@ impl Conn {
             iss,
             snd_una: iss,
             snd_nxt: iss.wrapping_add(1),
+            snd_max: iss.wrapping_add(1),
             snd_wnd: 0,
             snd_wl1: 0,
             snd_wl2: 0,
@@ -335,6 +369,7 @@ impl Conn {
             mss: MSS_DEFAULT,
             rx: VecDeque::new(),
             tx: VecDeque::new(),
+            ooo: Vec::new(),
             fin_queued: false,
             fin_sent: false,
             fin_acked: false,
@@ -342,6 +377,21 @@ impl Conn {
             ack_pending: false,
             detached: false,
             error: 0,
+            rto: RTO_INIT,
+            srtt: 0,
+            rttvar: 0,
+            rtt_probe: None,
+            rexmit_at: 0,
+            retries: 0,
+            persist_at: 0,
+            persist_wait: 0,
+            timewait_at: 0,
+            dupacks: 0,
+            fast_rexmit: false,
+            in_recovery: false,
+            cwnd: 0,
+            ssthresh: u32::MAX / 2,
+            retransmits: 0,
         }
     }
 
@@ -365,6 +415,9 @@ impl Conn {
         self.error = err;
         self.rx.clear();
         self.tx.clear();
+        self.ooo.clear();
+        self.rexmit_at = 0;
+        self.persist_at = 0;
         EV_ERROR | EV_READABLE | EV_WRITABLE
     }
 
@@ -384,7 +437,45 @@ impl Conn {
         }
     }
 
-    fn input_syn_sent(&mut self, s: &Segment) -> Reply {
+    fn flight(&self) -> u32 {
+        self.snd_max.wrapping_sub(self.snd_una)
+    }
+
+    fn data_in_flight(&self) -> usize {
+        let fin = (self.fin_sent && !self.fin_acked) as usize;
+        (self.snd_nxt.wrapping_sub(self.snd_una) as usize).saturating_sub(fin)
+    }
+
+    fn unsent(&self) -> usize {
+        self.tx.len() - self.data_in_flight().min(self.tx.len())
+    }
+
+    fn arm(&mut self, now: u64) {
+        if self.rexmit_at == 0 {
+            self.rexmit_at = now + self.rto;
+        }
+    }
+
+    fn sample_rtt(&mut self, r: u64) {
+        if self.srtt == 0 {
+            self.srtt = r.max(1);
+            self.rttvar = r / 2;
+        } else {
+            let diff = self.srtt.abs_diff(r);
+            self.rttvar = (3 * self.rttvar + diff) / 4;
+            self.srtt = (7 * self.srtt + r) / 8;
+        }
+        self.rto = (self.srtt + (4 * self.rttvar).max(10)).clamp(RTO_MIN, RTO_MAX);
+    }
+
+    fn set_timewait(&mut self, now: u64) {
+        self.state = State::TimeWait;
+        self.timewait_at = now + 2 * MSL;
+        self.rexmit_at = 0;
+        self.persist_at = 0;
+    }
+
+    fn input_syn_sent(&mut self, s: &Segment, now: u64) -> Reply {
         let mut r = Reply::default();
         let has_ack = s.flags & ACK != 0;
         if has_ack && (le(s.ack, self.iss) || lt(self.snd_nxt, s.ack)) {
@@ -402,26 +493,115 @@ impl Conn {
         if s.flags & SYN == 0 || !has_ack {
             return r;
         }
+        if let Some((seq, at)) = self.rtt_probe.take() {
+            if le(seq, s.ack) {
+                self.sample_rtt(now.saturating_sub(at));
+            }
+        }
         self.rcv_nxt = s.seq.wrapping_add(1);
         self.snd_una = s.ack;
         self.snd_wnd = s.window as u32;
         self.snd_wl1 = s.seq;
         self.snd_wl2 = s.ack;
         self.mss = s.mss().unwrap_or(MSS_DEFAULT).clamp(64, MSS_OURS);
+        self.cwnd = 10 * self.mss as u32;
+        self.rexmit_at = 0;
+        self.retries = 0;
         self.state = State::Established;
         r.flags = ACK;
         r.events = EV_CONNECTED | EV_WRITABLE;
         r
     }
 
-    fn input(&mut self, s: &Segment) -> Reply {
+    fn on_new_ack(&mut self, s: &Segment, now: u64) {
+        let mut acked = s.ack.wrapping_sub(self.snd_una) as usize;
+        if self.fin_queued && !self.fin_acked && self.fin_seq_acked(s.ack) {
+            self.fin_acked = true;
+            self.fin_sent = true;
+            acked -= 1;
+        }
+        let data_acked = acked.min(self.tx.len());
+        self.tx.drain(..data_acked);
+        if let Some((seq, at)) = self.rtt_probe {
+            if le(seq, s.ack) {
+                self.rtt_probe = None;
+                self.sample_rtt(now.saturating_sub(at));
+            }
+        }
+        self.snd_una = s.ack;
+        if lt(self.snd_nxt, self.snd_una) {
+            self.snd_nxt = self.snd_una;
+        }
+        self.retries = 0;
+        self.dupacks = 0;
+        let mss = self.mss as u32;
+        if self.in_recovery {
+            self.in_recovery = false;
+            self.cwnd = self.ssthresh;
+        } else if self.cwnd < self.ssthresh {
+            self.cwnd = self.cwnd.saturating_add((data_acked as u32).min(mss));
+        } else {
+            self.cwnd = self.cwnd.saturating_add((mss * mss / self.cwnd.max(1)).max(1));
+        }
+        self.rexmit_at = if self.snd_una == self.snd_max { 0 } else { now + self.rto };
+    }
+
+    fn fin_seq_acked(&self, ack: u32) -> bool {
+        let fin_seq = self.snd_una.wrapping_add(self.tx.len() as u32);
+        lt(fin_seq, ack)
+    }
+
+    fn take_ooo(&mut self) {
+        loop {
+            let nxt = self.rcv_nxt;
+            self.ooo.retain(|(seq, d)| lt(nxt, seq.wrapping_add(d.len() as u32)));
+            let Some(i) = self.ooo.iter().position(|(seq, _)| le(*seq, nxt)) else { break };
+            let (seq, data) = self.ooo.swap_remove(i);
+            let skip = self.rcv_nxt.wrapping_sub(seq) as usize;
+            let room = RX_CAP - self.rx.len();
+            let take = (data.len() - skip).min(room);
+            if take == 0 {
+                break;
+            }
+            if !self.detached {
+                self.rx.extend(&data[skip..skip + take]);
+            }
+            self.rcv_nxt = self.rcv_nxt.wrapping_add(take as u32);
+        }
+    }
+
+    fn keep_ooo(&mut self, seq: u32, data: &[u8]) {
+        let limit = self.rcv_nxt.wrapping_add(self.rcv_wnd());
+        let mut len = data.len();
+        if lt(limit, seq.wrapping_add(len as u32)) {
+            len = limit.wrapping_sub(seq) as usize;
+        }
+        if len == 0 || self.ooo.iter().any(|(s, d)| *s == seq && d.len() >= len) {
+            return;
+        }
+        let held: usize = self.ooo.iter().map(|(_, d)| d.len()).sum();
+        if held + len > RX_CAP || self.ooo.try_reserve(1).is_err() {
+            return;
+        }
+        let mut v = Vec::new();
+        if v.try_reserve_exact(len).is_err() {
+            return;
+        }
+        v.extend_from_slice(&data[..len]);
+        self.ooo.push((seq, v));
+    }
+
+    fn input(&mut self, s: &Segment, now: u64) -> Reply {
         if self.state == State::SynSent {
-            return self.input_syn_sent(s);
+            return self.input_syn_sent(s, now);
         }
         let mut r = Reply::default();
         if !self.acceptable(s) {
             if s.flags & RST == 0 {
                 r.flags = ACK;
+            }
+            if self.state == State::TimeWait && s.flags & FIN != 0 {
+                self.timewait_at = now + 2 * MSL;
             }
             return r;
         }
@@ -436,23 +616,35 @@ impl Conn {
         if s.flags & ACK == 0 {
             return r;
         }
-        if lt(self.snd_una, s.ack) && le(s.ack, self.snd_nxt) {
-            let mut acked = s.ack.wrapping_sub(self.snd_una) as usize;
-            if self.fin_sent && s.ack == self.snd_nxt {
-                self.fin_acked = true;
-                acked -= 1;
-            }
-            let acked = acked.min(self.tx.len());
-            self.tx.drain(..acked);
-            self.snd_una = s.ack;
+        if lt(self.snd_una, s.ack) && le(s.ack, self.snd_max) {
+            self.on_new_ack(s, now);
             r.events |= EV_WRITABLE;
-        } else if lt(self.snd_nxt, s.ack) {
+        } else if lt(self.snd_max, s.ack) {
             r.flags = ACK;
             return r;
-        }
-        if le(s.ack, self.snd_nxt)
-            && (lt(self.snd_wl1, s.seq) || (self.snd_wl1 == s.seq && le(self.snd_wl2, s.ack)))
+        } else if s.ack == self.snd_una
+            && s.payload.is_empty()
+            && s.flags & FIN == 0
+            && s.window as u32 == self.snd_wnd
+            && self.flight() > 0
         {
+            self.dupacks += 1;
+            if self.dupacks == 3 {
+                let mss = self.mss as u32;
+                self.ssthresh = (self.flight() / 2).max(2 * mss);
+                self.cwnd = self.ssthresh + 3 * mss;
+                self.in_recovery = true;
+                self.fast_rexmit = true;
+                self.rtt_probe = None;
+            } else if self.dupacks > 3 {
+                self.cwnd = self.cwnd.saturating_add(self.mss as u32);
+            }
+        }
+        if le(s.ack, self.snd_max) && (lt(self.snd_wl1, s.seq) || (self.snd_wl1 == s.seq && le(self.snd_wl2, s.ack))) {
+            if self.snd_wnd == 0 && s.window != 0 {
+                self.persist_at = 0;
+                self.persist_wait = 0;
+            }
             self.snd_wnd = s.window as u32;
             self.snd_wl1 = s.seq;
             self.snd_wl2 = s.ack;
@@ -461,9 +653,10 @@ impl Conn {
         if self.fin_acked {
             match self.state {
                 State::FinWait1 => self.state = State::FinWait2,
-                State::Closing => self.state = State::TimeWait,
+                State::Closing => self.set_timewait(now),
                 State::LastAck => {
                     self.state = State::Closed;
+                    self.rexmit_at = 0;
                     r.events |= EV_CLOSED;
                 }
                 _ => {}
@@ -487,51 +680,64 @@ impl Conn {
                 }
                 self.rcv_nxt = self.rcv_nxt.wrapping_add(take as u32);
                 all_in = take == data.len();
-                if take > 0 {
-                    r.events |= EV_READABLE;
-                }
+                self.take_ooo();
+                r.events |= EV_READABLE;
+            } else if receiving && lt(self.rcv_nxt, seq) {
+                self.keep_ooo(seq, data);
             }
         }
-        if s.flags & FIN != 0 && all_in && !self.peer_fin {
+        if s.flags & FIN != 0 && all_in && !self.peer_fin && seq.wrapping_add(data.len() as u32) == self.rcv_nxt {
             self.rcv_nxt = self.rcv_nxt.wrapping_add(1);
             self.peer_fin = true;
             r.flags = ACK;
             r.events |= EV_READABLE;
-            self.state = match self.state {
-                State::Established => State::CloseWait,
-                State::FinWait1 if self.fin_acked => State::TimeWait,
-                State::FinWait1 => State::Closing,
-                State::FinWait2 => State::TimeWait,
-                other => other,
-            };
+            match self.state {
+                State::Established => self.state = State::CloseWait,
+                State::FinWait1 if self.fin_acked => self.set_timewait(now),
+                State::FinWait1 => self.state = State::Closing,
+                State::FinWait2 => self.set_timewait(now),
+                _ => {}
+            }
         } else if s.flags & FIN != 0 && self.peer_fin {
             r.flags = ACK;
-        }
-        if self.detached && self.peer_fin && self.state == State::FinWait2 {
-            self.state = State::TimeWait;
+            if self.state == State::TimeWait {
+                self.timewait_at = now + 2 * MSL;
+            }
         }
         r
     }
 
-    fn data_in_flight(&self) -> usize {
-        let fin = (self.fin_sent && !self.fin_acked) as usize;
-        (self.snd_nxt.wrapping_sub(self.snd_una) as usize).saturating_sub(fin)
-    }
-
-    fn unsent(&self) -> usize {
-        self.tx.len() - self.data_in_flight().min(self.tx.len())
-    }
-
-    fn output(&mut self, key: &Key, out: &mut [u8]) -> Result<usize, i32> {
+    fn output(&mut self, key: &Key, out: &mut [u8], now: u64) -> Result<usize, i32> {
         if !self.synchronized() {
             return Ok(0);
+        }
+        let mss = self.mss as usize;
+        if self.fast_rexmit {
+            self.fast_rexmit = false;
+            let n = self.tx.len().min(mss);
+            if n > 0 {
+                let mut payload = [0u8; MSS_OURS as usize];
+                for (i, b) in self.tx.range(..n).enumerate() {
+                    payload[i] = *b;
+                }
+                let h = self.header(key, self.snd_una, ACK);
+                let len = build(out, key.local_ip, key.remote_ip, &h, &payload[..n])?;
+                self.retransmits += 1;
+                self.ack_pending = false;
+                self.rexmit_at = now + self.rto;
+                return Ok(len);
+            }
         }
         let in_flight = self.snd_nxt.wrapping_sub(self.snd_una);
         let sent = self.data_in_flight();
         let unsent = self.unsent();
-        let room = self.snd_wnd.saturating_sub(in_flight) as usize;
-        let n = unsent.min(room).min(self.mss as usize);
-        let sending = matches!(self.state, State::Established | State::CloseWait);
+        let wnd = self.snd_wnd.min(self.cwnd.max(mss as u32));
+        let room = wnd.saturating_sub(in_flight) as usize;
+        let n = unsent.min(room).min(mss);
+        let sending = matches!(
+            self.state,
+            State::Established | State::CloseWait | State::FinWait1 | State::Closing | State::LastAck
+        );
         if n > 0 && sending && !self.fin_sent {
             let mut payload = [0u8; MSS_OURS as usize];
             for (i, b) in self.tx.range(sent..sent + n).enumerate() {
@@ -540,17 +746,39 @@ impl Conn {
             let flags = if n == unsent { ACK | PSH } else { ACK };
             let h = self.header(key, self.snd_nxt, flags);
             let len = build(out, key.local_ip, key.remote_ip, &h, &payload[..n])?;
-            self.snd_nxt = self.snd_nxt.wrapping_add(n as u32);
+            let end = self.snd_nxt.wrapping_add(n as u32);
+            if lt(self.snd_nxt, self.snd_max) {
+                self.retransmits += 1;
+            } else if self.rtt_probe.is_none() {
+                self.rtt_probe = Some((end, now));
+            }
+            self.snd_nxt = end;
+            if lt(self.snd_max, end) {
+                self.snd_max = end;
+            }
             self.ack_pending = false;
+            self.arm(now);
             return Ok(len);
         }
-        if self.fin_queued && !self.fin_sent && unsent == 0 && sending {
+        if self.fin_queued && !self.fin_sent && unsent == 0 && sending && !self.fin_acked {
             let h = self.header(key, self.snd_nxt, FIN | ACK);
             let len = build(out, key.local_ip, key.remote_ip, &h, &[])?;
-            self.snd_nxt = self.snd_nxt.wrapping_add(1);
+            let end = self.snd_nxt.wrapping_add(1);
+            if lt(self.snd_nxt, self.snd_max) {
+                self.retransmits += 1;
+            }
+            self.snd_nxt = end;
+            if lt(self.snd_max, end) {
+                self.snd_max = end;
+            }
             self.fin_sent = true;
             self.ack_pending = false;
-            self.state = if self.state == State::Established { State::FinWait1 } else { State::LastAck };
+            self.arm(now);
+            self.state = match self.state {
+                State::Established => State::FinWait1,
+                State::CloseWait => State::LastAck,
+                other => other,
+            };
             return Ok(len);
         }
         if self.ack_pending {
@@ -559,11 +787,73 @@ impl Conn {
             self.ack_pending = false;
             return Ok(len);
         }
+        if unsent > 0 && sending && self.snd_wnd == 0 && in_flight == 0 && self.persist_at == 0 {
+            self.persist_wait = self.rto;
+            self.persist_at = now + self.persist_wait;
+        }
+        Ok(0)
+    }
+
+    fn syn(&self, key: &Key, out: &mut [u8]) -> Result<usize, i32> {
+        let h = Header {
+            sport: key.local_port,
+            dport: key.remote_port,
+            seq: self.iss,
+            ack: 0,
+            flags: SYN,
+            window: self.rcv_wnd().min(0xFFFF) as u16,
+        };
+        let mss = MSS_OURS.to_be_bytes();
+        build_with(out, key.local_ip, key.remote_ip, &h, &[2, 4, mss[0], mss[1]], &[])
+    }
+
+    fn tick(&mut self, key: &Key, now: u64, out: &mut [u8], ev: &mut u32) -> Result<usize, i32> {
+        if self.state == State::TimeWait && self.timewait_at != 0 && now >= self.timewait_at {
+            self.state = State::Closed;
+            self.timewait_at = 0;
+            *ev |= EV_CLOSED;
+            return Ok(0);
+        }
+        if self.rexmit_at != 0 && now >= self.rexmit_at {
+            self.retries += 1;
+            let limit = if self.state == State::SynSent { SYN_RETRIES } else { DATA_RETRIES };
+            if self.retries > limit {
+                *ev |= self.fail(ETIMEDOUT);
+                return Ok(0);
+            }
+            self.rto = (self.rto * 2).min(RTO_MAX);
+            self.rexmit_at = now + self.rto;
+            self.rtt_probe = None;
+            self.retransmits += 1;
+            if self.state == State::SynSent {
+                return self.syn(key, out);
+            }
+            let mss = self.mss as u32;
+            self.ssthresh = (self.flight() / 2).max(2 * mss);
+            self.cwnd = mss;
+            self.in_recovery = false;
+            self.dupacks = 0;
+            self.snd_nxt = self.snd_una;
+            if self.fin_sent && !self.fin_acked {
+                self.fin_sent = false;
+            }
+            return self.output(key, out, now);
+        }
+        if self.persist_at != 0 && now >= self.persist_at {
+            if self.snd_wnd != 0 || self.unsent() == 0 {
+                self.persist_at = 0;
+                return Ok(0);
+            }
+            self.persist_wait = (self.persist_wait * 2).min(RTO_MAX);
+            self.persist_at = now + self.persist_wait;
+            let h = self.header(key, self.snd_una.wrapping_sub(1), ACK);
+            return build(out, key.local_ip, key.remote_ip, &h, &[]);
+        }
         Ok(0)
     }
 
     fn finished(&self) -> bool {
-        matches!(self.state, State::Closed | State::TimeWait)
+        self.state == State::Closed || (self.state == State::TimeWait && self.timewait_at == 0)
     }
 }
 
@@ -575,6 +865,7 @@ pub struct TcpStats {
     pub rx_dropped: u64,
     pub tx_resets: u64,
     pub connections: u64,
+    pub retransmits: u64,
 }
 
 #[repr(C)]
@@ -597,6 +888,8 @@ pub struct TcpInfo {
     pub remote_ip: u32,
     pub local_port: u16,
     pub remote_port: u16,
+    pub rto_ms: u32,
+    pub cwnd: u32,
 }
 
 pub struct Stack {
@@ -604,16 +897,31 @@ pub struct Stack {
     stats: TcpStats,
     next_id: u32,
     next_port: u16,
+    retired_retransmits: u64,
 }
 
 impl Default for Stack {
     fn default() -> Self {
-        Stack { table: Table::default(), stats: TcpStats::default(), next_id: 1, next_port: PORT_FIRST }
+        Stack {
+            table: Table::default(),
+            stats: TcpStats::default(),
+            next_id: 1,
+            next_port: PORT_FIRST,
+            retired_retransmits: 0,
+        }
     }
 }
 
 impl Stack {
-    pub fn input(&mut self, src: u32, dst: u32, seg: &[u8], out: &mut [u8], ev: &mut TcpEvent) -> Result<usize, i32> {
+    pub fn input(
+        &mut self,
+        src: u32,
+        dst: u32,
+        seg: &[u8],
+        now: u64,
+        out: &mut [u8],
+        ev: &mut TcpEvent,
+    ) -> Result<usize, i32> {
         *ev = TcpEvent::default();
         let s = match parse(src, dst, seg) {
             Ok(s) => s,
@@ -625,7 +933,7 @@ impl Stack {
         self.stats.rx_segments += 1;
         let key = Key { local_ip: dst, local_port: s.dport, remote_ip: src, remote_port: s.sport };
         if let Some(c) = self.table.lookup(&key).filter(|c| c.state != State::Closed) {
-            let r = c.input(&s);
+            let r = c.input(&s, now);
             ev.conn = c.id;
             ev.events = r.events;
             let n = if r.flags & RST != 0 {
@@ -656,7 +964,15 @@ impl Stack {
     }
 
     fn reap(&mut self) {
-        self.table.retain(|c| !(c.detached && c.finished()));
+        let mut gone = 0;
+        self.table.retain(|c| {
+            let keep = !(c.detached && c.finished());
+            if !keep {
+                gone += c.retransmits;
+            }
+            keep
+        });
+        self.retired_retransmits += gone;
     }
 
     fn free_port(&mut self) -> Option<u16> {
@@ -670,7 +986,15 @@ impl Stack {
         None
     }
 
-    pub fn connect(&mut self, local_ip: u32, remote_ip: u32, remote_port: u16, iss: u32, out: &mut [u8]) -> Result<(u32, usize), i32> {
+    pub fn connect(
+        &mut self,
+        local_ip: u32,
+        remote_ip: u32,
+        remote_port: u16,
+        iss: u32,
+        now: u64,
+        out: &mut [u8],
+    ) -> Result<(u32, usize), i32> {
         if remote_ip == 0 || remote_port == 0 || local_ip == 0 {
             return Err(EINVAL);
         }
@@ -678,10 +1002,10 @@ impl Stack {
         let key = Key { local_ip, local_port: port, remote_ip, remote_port };
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1).max(1);
-        let c = Conn::new(id, iss);
-        let h = Header { sport: port, dport: remote_port, seq: iss, ack: 0, flags: SYN, window: c.rcv_wnd() as u16 };
-        let mss = MSS_OURS.to_be_bytes();
-        let n = build_with(out, local_ip, remote_ip, &h, &[2, 4, mss[0], mss[1]], &[])?;
+        let mut c = Conn::new(id, iss);
+        let n = c.syn(&key, out)?;
+        c.rtt_probe = Some((iss.wrapping_add(1), now));
+        c.arm(now);
         self.table.insert(key, c)?;
         Ok((id, n))
     }
@@ -705,10 +1029,27 @@ impl Stack {
         Ok(take)
     }
 
-    pub fn output(&mut self, id: u32, out: &mut [u8]) -> Result<(usize, u32), i32> {
+    pub fn output(&mut self, id: u32, out: &mut [u8], now: u64) -> Result<(usize, u32), i32> {
         let (key, c) = self.conn(id)?;
-        let n = c.output(&key, out)?;
+        let n = c.output(&key, out, now)?;
         Ok((n, key.remote_ip))
+    }
+
+    pub fn tick(&mut self, now: u64, out: &mut [u8], ev: &mut TcpEvent) -> Result<(usize, u32), i32> {
+        *ev = TcpEvent::default();
+        let mut found = (0, 0);
+        for (key, c) in self.table.iter_mut() {
+            let mut e = 0;
+            let n = c.tick(key, now, out, &mut e)?;
+            if n > 0 || e != 0 {
+                ev.conn = c.id;
+                ev.events = e;
+                found = (n, key.remote_ip);
+                break;
+            }
+        }
+        self.reap();
+        Ok(found)
     }
 
     pub fn read(&mut self, id: u32, buf: &mut [u8]) -> Result<usize, i32> {
@@ -730,7 +1071,10 @@ impl Stack {
     pub fn close(&mut self, id: u32) -> Result<(), i32> {
         let (_, c) = self.conn(id)?;
         match c.state {
-            State::SynSent => c.state = State::Closed,
+            State::SynSent => {
+                c.state = State::Closed;
+                c.rexmit_at = 0;
+            }
             State::Established | State::CloseWait => c.fin_queued = true,
             _ => {}
         }
@@ -741,6 +1085,7 @@ impl Stack {
         if let Ok((_, c)) = self.conn(id) {
             c.detached = true;
             c.rx.clear();
+            c.ooo.clear();
         }
         self.reap();
     }
@@ -752,18 +1097,21 @@ impl Stack {
             error: c.error,
             readable: c.rx.len() as u32,
             writable: (TX_CAP - c.tx.len()) as u32,
-            unacked: c.snd_nxt.wrapping_sub(c.snd_una),
+            unacked: c.snd_max.wrapping_sub(c.snd_una),
             eof: (c.peer_fin && c.rx.is_empty()) as u32,
             local_ip: key.local_ip,
             remote_ip: key.remote_ip,
             local_port: key.local_port,
             remote_port: key.remote_port,
+            rto_ms: c.rto as u32,
+            cwnd: c.cwnd,
         })
     }
 
     pub fn stats(&self) -> TcpStats {
         let mut st = self.stats;
         st.connections = self.table.len() as u64;
+        st.retransmits = self.retired_retransmits + self.table.iter().map(|(_, c)| c.retransmits).sum::<u64>();
         st
     }
 }
@@ -785,12 +1133,14 @@ fn ret(r: Result<usize, i32>) -> i64 {
 }
 
 #[no_mangle]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn tcp_input(
     st: *mut Stack,
     src: u32,
     dst: u32,
     seg: *const u8,
     len: usize,
+    now: u64,
     out: *mut u8,
     cap: usize,
     ev: *mut TcpEvent,
@@ -800,7 +1150,7 @@ pub unsafe extern "C" fn tcp_input(
     }
     let seg = core::slice::from_raw_parts(seg, len);
     let out = core::slice::from_raw_parts_mut(out, cap);
-    ret((*st).input(src, dst, seg, out, &mut *ev))
+    ret((*st).input(src, dst, seg, now, out, &mut *ev))
 }
 
 #[no_mangle]
@@ -811,6 +1161,7 @@ pub unsafe extern "C" fn tcp_connect(
     remote_ip: u32,
     remote_port: u16,
     iss: u32,
+    now: u64,
     out: *mut u8,
     cap: usize,
     id: *mut u32,
@@ -819,7 +1170,7 @@ pub unsafe extern "C" fn tcp_connect(
         return -(EINVAL as i64);
     }
     let out = core::slice::from_raw_parts_mut(out, cap);
-    match (*st).connect(local_ip, remote_ip, remote_port, iss, out) {
+    match (*st).connect(local_ip, remote_ip, remote_port, iss, now, out) {
         Ok((c, n)) => {
             *id = c;
             n as i64
@@ -838,12 +1189,34 @@ pub unsafe extern "C" fn tcp_write(st: *mut Stack, id: u32, data: *const u8, len
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tcp_output(st: *mut Stack, id: u32, out: *mut u8, cap: usize, dst: *mut u32) -> i64 {
+pub unsafe extern "C" fn tcp_output(st: *mut Stack, id: u32, now: u64, out: *mut u8, cap: usize, dst: *mut u32) -> i64 {
     if st.is_null() || out.is_null() || dst.is_null() {
         return -(EINVAL as i64);
     }
     let out = core::slice::from_raw_parts_mut(out, cap);
-    match (*st).output(id, out) {
+    match (*st).output(id, out, now) {
+        Ok((n, ip)) => {
+            *dst = ip;
+            n as i64
+        }
+        Err(e) => -(e as i64),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tcp_tick(
+    st: *mut Stack,
+    now: u64,
+    out: *mut u8,
+    cap: usize,
+    dst: *mut u32,
+    ev: *mut TcpEvent,
+) -> i64 {
+    if st.is_null() || out.is_null() || dst.is_null() || ev.is_null() {
+        return -(EINVAL as i64);
+    }
+    let out = core::slice::from_raw_parts_mut(out, cap);
+    match (*st).tick(now, out, &mut *ev) {
         Ok((n, ip)) => {
             *dst = ip;
             n as i64

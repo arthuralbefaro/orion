@@ -25,6 +25,7 @@
 #include <mm/pmm.h>
 #include <mm/vmm.h>
 #include <net/net.h>
+#include <net/tcp.h>
 #include <mm/heap.h>
 #include <mm/memory.h>
 #include <mm/uaccess.h>
@@ -509,6 +510,24 @@ static void cmd_net(const char *args)
     net_dump();
 }
 
+static void cmd_tcploss(const char *args)
+{
+    uint32_t n = 0;
+    while (args && *args == ' ')
+        args++;
+    if (!args || !*args) {
+        kprintf("tcploss: 1 em %u segmento(s) TCP descartado(s) (0 desliga)\n", net_tcp_loss());
+        return;
+    }
+    for (; *args >= '0' && *args <= '9' && n < 100000000; args++)
+        n = n * 10 + (uint32_t)(*args - '0');
+    net_tcp_set_loss(n);
+    if (n >= 2)
+        kprintf("tcploss: descartando 1 em %u segmento(s) TCP, nos dois sentidos\n", n);
+    else
+        kprintf("tcploss: desligado\n");
+}
+
 static void cmd_arp(const char *args)
 {
     (void)args;
@@ -594,6 +613,7 @@ static const struct command commands[] = {
     { "procs",  "lista os processos",                   cmd_procs },
     { "pci",    "dispositivos PCI",                     cmd_pci },
     { "net",    "estado da rede",                       cmd_net },
+    { "tcploss", "descarta 1 em N segmentos TCP (teste)", cmd_tcploss },
     { "arp",    "cache ARP",                            cmd_arp },
     { "dhcp",   "pede um endereco por DHCP",            cmd_dhcp },
     { "ifconfig", "configura a rede a mao",             cmd_ifconfig },

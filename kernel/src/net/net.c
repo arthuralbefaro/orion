@@ -80,6 +80,36 @@ static bool running;
 static struct tcp_rs *tcp;
 static struct mutex tcp_lock = MUTEX_INIT("tcp");
 static struct mutex tcp_tx_lock = MUTEX_INIT("tcp-tx");
+static uint32_t tcp_loss;
+static uint32_t tcp_loss_count;
+static uint64_t tcp_lost_rx, tcp_lost_tx;
+
+void net_tcp_set_loss(uint32_t one_in)
+{
+    __atomic_store_n(&tcp_loss, one_in, __ATOMIC_RELAXED);
+}
+
+uint32_t net_tcp_loss(void)
+{
+    return __atomic_load_n(&tcp_loss, __ATOMIC_RELAXED);
+}
+
+static bool tcp_drop(uint64_t *counter)
+{
+    uint32_t n = net_tcp_loss();
+    if (n < 2)
+        return false;
+    if (__atomic_add_fetch(&tcp_loss_count, 1, __ATOMIC_RELAXED) % n)
+        return false;
+    __atomic_add_fetch(counter, 1, __ATOMIC_RELAXED);
+    return true;
+}
+
+static void tcp_send(uint32_t dst, const uint8_t *seg, int len)
+{
+    if (!tcp_drop(&tcp_lost_tx))
+        net_send_ip(dst, IPPROTO_TCP, seg, len);
+}
 
 uint16_t net_checksum(const void *data, int len)
 {
@@ -314,11 +344,11 @@ static void tcp_flush(uint32_t id)
     for (;;) {
         uint32_t dst = 0;
         mutex_lock(&tcp_lock);
-        int64_t n = tcp_output(tcp, id, seg, TCP_SEG_MAX, &dst);
+        int64_t n = tcp_output(tcp, id, time_uptime_ms(), seg, TCP_SEG_MAX, &dst);
         mutex_unlock(&tcp_lock);
         if (n <= 0)
             break;
-        net_send_ip(dst, IPPROTO_TCP, seg, (int)n);
+        tcp_send(dst, seg, (int)n);
     }
     mutex_unlock(&tcp_tx_lock);
     kfree(seg);
@@ -329,13 +359,15 @@ static void handle_tcp(uint32_t src, uint32_t dst, const uint8_t *seg, int len)
     stats.rx_tcp++;
     if (!tcp || !netif.configured || dst != netif.ip)
         return;
+    if (tcp_drop(&tcp_lost_rx))
+        return;
     uint8_t reply[64];
     struct tcp_event ev;
     mutex_lock(&tcp_lock);
-    int64_t n = tcp_input(tcp, src, dst, seg, (size_t)len, reply, sizeof(reply), &ev);
+    int64_t n = tcp_input(tcp, src, dst, seg, (size_t)len, time_uptime_ms(), reply, sizeof(reply), &ev);
     mutex_unlock(&tcp_lock);
     if (n > 0)
-        net_send_ip(src, IPPROTO_TCP, reply, (int)n);
+        tcp_send(src, reply, (int)n);
     if (n >= 0 && ev.conn) {
         tcp_flush(ev.conn);
         if (ev.events)
@@ -351,15 +383,17 @@ long net_tcp_connect(uint32_t ip, uint16_t port, uint32_t *id)
         return -ENETUNREACH;
     uint8_t syn[64];
     mutex_lock(&tcp_lock);
-    int64_t n = tcp_connect(tcp, netif.ip, ip, port, (uint32_t)random_u64(), syn, sizeof(syn), id);
+    int64_t n = tcp_connect(tcp, netif.ip, ip, port, (uint32_t)random_u64(), time_uptime_ms(), syn, sizeof(syn), id);
     mutex_unlock(&tcp_lock);
     if (n < 0)
         return n;
-    int r = net_send_ip(ip, IPPROTO_TCP, syn, (int)n);
+    uint8_t mac[ETH_ALEN];
+    int r = net_resolve(ip, mac, 1000);
     if (r < 0) {
         net_tcp_close(*id);
         return r;
     }
+    tcp_send(ip, syn, (int)n);
     return 0;
 }
 
@@ -525,6 +559,32 @@ void net_get_stats(struct net_stats *out)
     *out = stats;
 }
 
+static void tcp_timer_thread(void *arg)
+{
+    (void)arg;
+    uint8_t *seg = kmalloc(TCP_SEG_MAX);
+    if (!seg)
+        return;
+    for (;;) {
+        thread_sleep_ms(50);
+        mutex_lock(&tcp_tx_lock);
+        for (;;) {
+            uint32_t dst = 0;
+            struct tcp_event ev;
+            mutex_lock(&tcp_lock);
+            int64_t n = tcp_tick(tcp, time_uptime_ms(), seg, TCP_SEG_MAX, &dst, &ev);
+            mutex_unlock(&tcp_lock);
+            if (n > 0)
+                tcp_send(dst, seg, (int)n);
+            if (ev.conn && ev.events)
+                socket_tcp_event(ev.conn, ev.events);
+            if (n <= 0 && !ev.conn)
+                break;
+        }
+        mutex_unlock(&tcp_tx_lock);
+    }
+}
+
 void net_init(void)
 {
     if (!e1000_present())
@@ -534,6 +594,8 @@ void net_init(void)
     if (!tcp)
         log_warn("net", "sem memoria para a tabela do TCP");
     running = true;
+    if (tcp)
+        thread_create("tcptimer", tcp_timer_thread, NULL);
     thread_create("netrx", rx_thread, NULL);
     log_info("net", "pilha IPv4 no ar (ARP, ICMP, UDP, TCP); use 'dhcp' ou 'ifconfig'");
 }
@@ -585,4 +647,6 @@ void net_dump(void)
     net_tcp_stats(&ts);
     kprintf("  tcp: %lu segmento(s), %lu com erro, %lu descartado(s), %lu RST enviado(s), %lu conexao(oes)\n",
             ts.rx_segments, ts.rx_bad, ts.rx_dropped, ts.tx_resets, ts.connections);
+    kprintf("  tcp: %lu retransmissao(oes); perda simulada 1 em %u: %lu recebido(s) e %lu enviado(s) descartado(s)\n",
+            ts.retransmits, net_tcp_loss(), tcp_lost_rx, tcp_lost_tx);
 }

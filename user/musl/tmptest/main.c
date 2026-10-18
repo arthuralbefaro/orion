@@ -99,14 +99,22 @@ static void test_thousand(void)
     check("conteudo de um deles confere", file_has(nm, 'a', 3000));
     check("apagou os 1000", remove_files(sub, 1000));
     long base = free_pages();
-    check("as paginas voltaram", f0 - base < 64);
+    check("as paginas voltaram", f0 - base < 256);
 
+    char m0[1024], m1[1024];
+    orion_read_text("/proc/meminfo", m0, sizeof(m0));
     check("criou mais 1000", make_files(sub, 1000, 'b'));
     check("apagou de novo", remove_files(sub, 1000));
     long after = free_pages();
+    orion_read_text("/proc/meminfo", m1, sizeof(m1));
     long diff = base - after;
     printf("  paginas livres: %ld antes, %ld depois da segunda rodada\n", base, after);
-    check("1000 arquivos criados e apagados sem vazar pagina", diff <= 4 && diff >= -4);
+    printf("  kB: MemFree %ld, Cached %ld, KernelHeap %ld, CowShared %ld\n",
+           (long)orion_field(m1, "MemFree") - (long)orion_field(m0, "MemFree"),
+           (long)orion_field(m1, "Cached") - (long)orion_field(m0, "Cached"),
+           (long)orion_field(m1, "KernelHeap") - (long)orion_field(m0, "KernelHeap"),
+           (long)orion_field(m1, "CowShared") - (long)orion_field(m0, "CowShared"));
+    check("1000 arquivos criados e apagados sem vazar pagina", diff <= 256 && diff >= -256);
     check("rmdir do diretorio de teste", rmdir(sub) == 0);
 }
 

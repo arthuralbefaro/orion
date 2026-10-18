@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -68,20 +69,23 @@ static double now_s(void)
 int main(int argc, char **argv)
 {
     const char *outfile = NULL;
+    const char *upload = NULL;
     int quiet = 0;
     int i = 1;
     for (; i < argc && argv[i][0] == '-'; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
             outfile = argv[++i];
+        else if (strcmp(argv[i], "-u") == 0 && i + 1 < argc)
+            upload = argv[++i];
         else if (strcmp(argv[i], "-q") == 0)
             quiet = 1;
         else {
-            fprintf(stderr, "uso: httpget [-q] [-o arquivo] <host> [porta] [caminho]\n");
+            fprintf(stderr, "uso: httpget [-q] [-o arquivo] [-u arquivo] <host> [porta] [caminho]\n");
             return 2;
         }
     }
     if (i >= argc) {
-        fprintf(stderr, "uso: httpget [-q] [-o arquivo] <host> [porta] [caminho]\n");
+        fprintf(stderr, "uso: httpget [-q] [-o arquivo] [-u arquivo] <host> [porta] [caminho]\n");
         return 2;
     }
     const char *host = argv[i];
@@ -106,13 +110,46 @@ int main(int argc, char **argv)
         close(s);
         return 1;
     }
+    int up = -1;
+    long long up_size = 0;
+    if (upload) {
+        up = open(upload, O_RDONLY);
+        struct stat st;
+        if (up < 0 || fstat(up, &st) < 0) {
+            fprintf(stderr, "httpget: %s: %s\n", upload, strerror(errno));
+            close(s);
+            return 1;
+        }
+        up_size = (long long)st.st_size;
+    }
     char req[1024];
-    int rl = snprintf(req, sizeof(req), "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: orion-httpget\r\nConnection: close\r\n\r\n",
+    int rl = upload ? snprintf(req, sizeof(req),
+                               "PUT %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: orion-httpget\r\nContent-Length: %lld\r\n"
+                               "Connection: close\r\n\r\n",
+                               path, host, up_size)
+                    : snprintf(req, sizeof(req), "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: orion-httpget\r\nConnection: close\r\n\r\n",
                       path, host);
     if (write_all(s, req, (size_t)rl) < 0) {
         fprintf(stderr, "httpget: envio: %s\n", strerror(errno));
         close(s);
         return 1;
+    }
+    if (up >= 0) {
+        char ub[16384];
+        uint32_t ucrc = 0xFFFFFFFFu;
+        long long sent = 0;
+        ssize_t n;
+        while ((n = read(up, ub, sizeof(ub))) > 0) {
+            if (write_all(s, ub, (size_t)n) < 0) {
+                fprintf(stderr, "httpget: envio do corpo: %s\n", strerror(errno));
+                close(s);
+                return 1;
+            }
+            ucrc = crc_update(ucrc, (const unsigned char *)ub, (size_t)n);
+            sent += n;
+        }
+        close(up);
+        printf("httpget: enviado %lld bytes, crc32 %08x\n", sent, ucrc ^ 0xFFFFFFFFu);
     }
     int out = -1;
     if (outfile) {

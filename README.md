@@ -189,12 +189,15 @@ O QEMU sobe uma e1000 com a rede de usuario (SLIRP): 10.0.2.15 para o Orion,
     nslookup example.com      consulta A no DNS
 
 A pilha faz ARP, IPv4, ICMP, UDP e TCP (em Rust, `kernel/rust/tcp`); sockets
-`SOCK_STREAM`, `SOCK_DGRAM` e `SOCK_RAW`. O TCP ja conecta, manda e recebe
-(cliente); retransmissao e servidor (`listen`/`accept`) vem nas proximas
-etapas da fase 3. O comando `net` do shell do kernel mostra os contadores.
+`SOCK_STREAM`, `SOCK_DGRAM` e `SOCK_RAW`. O TCP conecta, manda e recebe
+(cliente) com retransmissao, controle de congestionamento, reordenacao e
+`TIME_WAIT`; servidor (`listen`/`accept`) vem na 3.4. O comando `net` do shell
+do kernel mostra os contadores, e `tcploss N` descarta 1 em N segmentos TCP
+para testar a retransmissao (o SLIRP do QEMU nao perde nada).
 
     httpget example.com               baixa e mostra a pagina (HTTP/1.0)
     httpget -o /tmp/x 10.0.2.2 8000 /arquivo   grava o corpo; 10.0.2.2 e o hospedeiro
+    httpget -u /tmp/x 10.0.2.2 8000 /destino   envia o arquivo com PUT
  O `test.ps1` grava o
 trafego em `out\net.pcap`.
 

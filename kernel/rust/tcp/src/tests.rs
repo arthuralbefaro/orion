@@ -135,15 +135,15 @@ fn closed_port_answers_with_a_valid_reset() {
     let mut st = Stack::default();
     let syn = segment(SYN, 4242, 0, &[]);
     let mut out = [0u8; 64];
-    let n = st.input(HOST, ME, &syn, &mut out, &mut TcpEvent::default()).expect("entrada");
+    let n = st.input(HOST, ME, &syn, 0, &mut out, &mut TcpEvent::default()).expect("entrada");
     assert_eq!(n, HDR_LEN);
     let r = parse(ME, HOST, &out[..n]).expect("o RST tem checksum certo do nosso lado");
     assert_eq!((r.sport, r.dport, r.seq, r.ack, r.flags), (7, 40000, 0, 4243, RST | ACK));
-    assert_eq!(st.input(HOST, ME, &segment(RST, 1, 0, &[]), &mut out, &mut TcpEvent::default()), Ok(0));
+    assert_eq!(st.input(HOST, ME, &segment(RST, 1, 0, &[]), 0, &mut out, &mut TcpEvent::default()), Ok(0));
     let mut broken = syn.clone();
     broken[4] ^= 0x80;
-    assert_eq!(st.input(HOST, ME, &broken, &mut out, &mut TcpEvent::default()), Err(EINVAL));
-    assert_eq!(st.input(HOST, ME, &syn, &mut [0u8; 10], &mut TcpEvent::default()), Err(ENOBUFS));
+    assert_eq!(st.input(HOST, ME, &broken, 0, &mut out, &mut TcpEvent::default()), Err(EINVAL));
+    assert_eq!(st.input(HOST, ME, &syn, 0, &mut [0u8; 10], &mut TcpEvent::default()), Err(ENOBUFS));
     let s = st.stats();
     assert_eq!((s.rx_segments, s.rx_bad, s.tx_resets, s.rx_dropped), (3, 1, 1, 1));
 }
@@ -163,7 +163,7 @@ fn random_input_never_panics() {
             let c = checksum(HOST, ME, &seg);
             seg[16..18].copy_from_slice(&c.to_be_bytes());
         }
-        let _ = st.input(HOST, ME, &seg, &mut out, &mut TcpEvent::default());
+        let _ = st.input(HOST, ME, &seg, 0, &mut out, &mut TcpEvent::default());
     }
     assert!(st.stats().tx_resets > 0);
 }
@@ -186,7 +186,7 @@ impl Peer {
 fn feed(st: &mut Stack, seg: &[u8]) -> (Option<Segment<'static>>, TcpEvent) {
     let mut out = vec![0u8; 2048];
     let mut ev = TcpEvent::default();
-    let n = st.input(HOST, ME, seg, &mut out, &mut ev).expect("entrada");
+    let n = st.input(HOST, ME, seg, 0, &mut out, &mut ev).expect("entrada");
     out.truncate(n);
     let leaked: &'static [u8] = Box::leak(out.into_boxed_slice());
     let reply = if n == 0 { None } else { Some(parse(ME, HOST, leaked).expect("resposta valida")) };
@@ -197,7 +197,7 @@ fn drain(st: &mut Stack, id: u32) -> StdVec<Segment<'static>> {
     let mut segs = StdVec::new();
     loop {
         let mut out = vec![0u8; 2048];
-        let (n, ip) = st.output(id, &mut out).expect("saida");
+        let (n, ip) = st.output(id, &mut out, 0).expect("saida");
         if n == 0 {
             return segs;
         }
@@ -214,7 +214,7 @@ const PEER_ISS: u32 = 5000;
 fn connected(window: u16, mss: u16) -> (Stack, u32, Peer) {
     let mut st = Stack::default();
     let mut out = [0u8; 64];
-    let (id, n) = st.connect(ME, HOST, 80, ISS, &mut out).expect("connect");
+    let (id, n) = st.connect(ME, HOST, 80, ISS, 0, &mut out).expect("connect");
     let syn = parse(ME, HOST, &out[..n]).expect("SYN valido");
     assert_eq!((syn.flags, syn.seq, syn.dport), (SYN, ISS, 80));
     assert_eq!(syn.mss(), Some(MSS_OURS));
@@ -321,7 +321,13 @@ fn active_close_goes_through_fin_wait() {
     let info = st.info(id).unwrap();
     assert_eq!((info.state, info.eof), (State::TimeWait as u32, 1));
     st.detach(id);
-    assert_eq!(st.stats().connections, 0, "conexao terminada e solta sai da tabela");
+    assert_eq!(st.stats().connections, 1, "TIME_WAIT segura a conexao por 2*MSL");
+    let mut out = [0u8; 64];
+    let mut ev = TcpEvent::default();
+    assert_eq!(st.tick(2 * MSL - 1, &mut out, &mut ev), Ok((0, 0)));
+    assert_eq!(st.stats().connections, 1);
+    st.tick(2 * MSL + 1, &mut out, &mut ev).unwrap();
+    assert_eq!(st.stats().connections, 0, "depois de 2*MSL a conexao solta sai da tabela");
 }
 
 #[test]
@@ -356,7 +362,7 @@ fn reset_and_refusal() {
 
     let mut st2 = Stack::default();
     let mut out = [0u8; 64];
-    let (id2, n) = st2.connect(ME, HOST, 81, 77, &mut out).unwrap();
+    let (id2, n) = st2.connect(ME, HOST, 81, 77, 0, &mut out).unwrap();
     let peer2 = Peer { port: 81, local_port: parse(ME, HOST, &out[..n]).unwrap().sport };
     let (r, ev) = feed(&mut st2, &peer2.seg(ACK, 1, 12345, 0, &[], &[]));
     let r = r.expect("ACK que nao reconhece o SYN recebe RST");
@@ -373,7 +379,7 @@ fn ports_are_distinct_and_connections_counted() {
     let mut out = [0u8; 64];
     let mut ports = StdVec::new();
     for i in 0..50 {
-        let (id, n) = st.connect(ME, HOST, 80, i, &mut out).unwrap();
+        let (id, n) = st.connect(ME, HOST, 80, i, 0, &mut out).unwrap();
         ports.push(parse(ME, HOST, &out[..n]).unwrap().sport);
         assert_eq!(st.info(id).unwrap().local_port, *ports.last().unwrap());
     }
@@ -381,7 +387,7 @@ fn ports_are_distinct_and_connections_counted() {
     ports.dedup();
     assert_eq!(ports.len(), 50);
     assert_eq!(st.stats().connections, 50);
-    assert_eq!(st.connect(0, HOST, 80, 1, &mut out), Err(EINVAL));
+    assert_eq!(st.connect(0, HOST, 80, 1, 0, &mut out), Err(EINVAL));
 }
 
 #[test]
@@ -395,7 +401,7 @@ fn random_segments_on_a_live_connection_never_panic() {
             let base = if i % 3 == 0 { PEER_ISS + 1 } else { rng.next() as u32 };
             let ack = if i % 2 == 0 { ISS.wrapping_add(rng.next() as u32 % 4000) } else { rng.next() as u32 };
             let payload = vec![b'q'; (rng.next() % 1500) as usize];
-            let _ = st.input(HOST, ME, &peer.seg(flags, base, ack, rng.next() as u16, &[], &payload), &mut [0u8; 2048], &mut TcpEvent::default());
+            let _ = st.input(HOST, ME, &peer.seg(flags, base, ack, rng.next() as u16, &[], &payload), 0, &mut [0u8; 2048], &mut TcpEvent::default());
             let _ = drain(&mut st, id);
             let _ = st.read(id, &mut [0u8; 700]);
             if round % 7 == 0 && i == 30 {
@@ -403,5 +409,292 @@ fn random_segments_on_a_live_connection_never_panic() {
             }
         }
         st.detach(id);
+    }
+}
+
+fn drain_at(st: &mut Stack, id: u32, now: u64) -> StdVec<Segment<'static>> {
+    let mut segs = StdVec::new();
+    loop {
+        let mut out = vec![0u8; 2048];
+        let (n, _) = st.output(id, &mut out, now).expect("saida");
+        if n == 0 {
+            return segs;
+        }
+        out.truncate(n);
+        let leaked: &'static [u8] = Box::leak(out.into_boxed_slice());
+        segs.push(parse(ME, HOST, leaked).expect("segmento valido"));
+    }
+}
+
+fn tick_at(st: &mut Stack, now: u64) -> (StdVec<Segment<'static>>, StdVec<TcpEvent>) {
+    let mut segs = StdVec::new();
+    let mut evs = StdVec::new();
+    loop {
+        let mut out = vec![0u8; 2048];
+        let mut ev = TcpEvent::default();
+        let (n, _) = st.tick(now, &mut out, &mut ev).expect("tick");
+        if ev.conn != 0 && ev.events != 0 {
+            evs.push(ev);
+        }
+        if n == 0 && ev.conn == 0 {
+            return (segs, evs);
+        }
+        if n > 0 {
+            out.truncate(n);
+            let leaked: &'static [u8] = Box::leak(out.into_boxed_slice());
+            segs.push(parse(ME, HOST, leaked).expect("segmento valido"));
+        }
+    }
+}
+
+fn feed_at(st: &mut Stack, seg: &[u8], now: u64) -> (Option<Segment<'static>>, TcpEvent) {
+    let mut out = vec![0u8; 2048];
+    let mut ev = TcpEvent::default();
+    let n = st.input(HOST, ME, seg, now, &mut out, &mut ev).expect("entrada");
+    out.truncate(n);
+    let leaked: &'static [u8] = Box::leak(out.into_boxed_slice());
+    let reply = if n == 0 { None } else { Some(parse(ME, HOST, leaked).expect("resposta valida")) };
+    (reply, ev)
+}
+
+#[test]
+fn syn_is_retransmitted_with_backoff_then_times_out() {
+    let mut st = Stack::default();
+    let mut out = [0u8; 64];
+    let (id, _) = st.connect(ME, HOST, 80, 9, 0, &mut out).unwrap();
+    assert!(tick_at(&mut st, RTO_INIT - 1).0.is_empty());
+    let mut at = 0;
+    let mut rto = RTO_INIT;
+    for _ in 0..SYN_RETRIES {
+        at += rto;
+        let (segs, _) = tick_at(&mut st, at);
+        assert_eq!(segs.len(), 1, "um SYN por vencimento");
+        assert_eq!((segs[0].flags, segs[0].seq), (SYN, 9));
+        assert!(tick_at(&mut st, at + 1).0.is_empty());
+        rto *= 2;
+    }
+    at += rto;
+    let (segs, evs) = tick_at(&mut st, at);
+    assert!(segs.is_empty());
+    assert_eq!(evs.len(), 1);
+    assert!(evs[0].events & EV_ERROR != 0);
+    assert_eq!(st.info(id).unwrap().error, ETIMEDOUT);
+}
+
+#[test]
+fn rtt_sample_sets_the_rto() {
+    let mut st = Stack::default();
+    let mut out = [0u8; 64];
+    let (id, n) = st.connect(ME, HOST, 80, ISS, 0, &mut out).unwrap();
+    let peer = Peer { port: 80, local_port: parse(ME, HOST, &out[..n]).unwrap().sport };
+    feed_at(&mut st, &peer.seg(SYN | ACK, PEER_ISS, ISS.wrapping_add(1), 8192, &[], &[]), 100);
+    assert_eq!(st.info(id).unwrap().rto_ms, 300, "RTT de 100 ms: SRTT 100 + 4 * 50");
+}
+
+#[test]
+fn lost_data_is_resent_from_snd_una() {
+    let (mut st, id, peer) = connected(65535, 1000);
+    let data: StdVec<u8> = (0..3000u32).map(|i| i as u8).collect();
+    st.write(id, &data).unwrap();
+    let first = drain_at(&mut st, id, 0);
+    assert_eq!(first.len(), 3);
+    let rto = st.info(id).unwrap().rto_ms as u64;
+    assert!(tick_at(&mut st, rto - 1).0.is_empty());
+    let (again, _) = tick_at(&mut st, rto);
+    assert_eq!(again.len(), 1, "a janela de congestionamento cai para 1 MSS");
+    assert_eq!((again[0].seq, again[0].payload.len()), (ISS.wrapping_add(1), 1000));
+    assert_eq!(st.info(id).unwrap().rto_ms as u64, 2 * rto, "backoff exponencial");
+    feed_at(&mut st, &peer.seg(ACK, PEER_ISS + 1, ISS.wrapping_add(1001), 65535, &[], &[]), rto + 10);
+    let rest = drain_at(&mut st, id, rto + 10);
+    assert_eq!(rest.len(), 2, "o resto sai de novo, a partir de onde parou");
+    assert_eq!(rest[0].seq, ISS.wrapping_add(1001));
+    let mut got = again[0].payload.to_vec();
+    for s in &rest {
+        got.extend_from_slice(s.payload);
+    }
+    assert_eq!(got, data);
+    feed_at(&mut st, &peer.seg(ACK, PEER_ISS + 1, ISS.wrapping_add(3001), 65535, &[], &[]), rto + 20);
+    assert_eq!(st.info(id).unwrap().unacked, 0);
+    assert!(tick_at(&mut st, 100_000).0.is_empty(), "sem nada em voo nao ha retransmissao");
+    assert!(st.stats().retransmits >= 3);
+}
+
+#[test]
+fn three_duplicate_acks_trigger_fast_retransmit() {
+    let (mut st, id, peer) = connected(65535, 1000);
+    st.write(id, &vec![7u8; 6000]).unwrap();
+    assert_eq!(drain_at(&mut st, id, 0).len(), 6);
+    let una = ISS.wrapping_add(1001);
+    feed_at(&mut st, &peer.seg(ACK, PEER_ISS + 1, una, 65535, &[], &[]), 10);
+    for _ in 0..2 {
+        feed_at(&mut st, &peer.seg(ACK, PEER_ISS + 1, una, 65535, &[], &[]), 11);
+        assert!(drain_at(&mut st, id, 11).is_empty());
+    }
+    feed_at(&mut st, &peer.seg(ACK, PEER_ISS + 1, una, 65535, &[], &[]), 12);
+    let r = drain_at(&mut st, id, 12);
+    assert_eq!(r.len(), 1);
+    assert_eq!((r[0].seq, r[0].payload.len()), (una, 1000), "reenvia o segmento perdido sem esperar o RTO");
+}
+
+#[test]
+fn out_of_order_segments_are_reassembled() {
+    let (mut st, id, peer) = connected(8192, 1460);
+    let (r, _) = feed_at(&mut st, &peer.seg(ACK, PEER_ISS + 6, ISS.wrapping_add(1), 8192, &[], b"world"), 1);
+    assert_eq!(r.unwrap().ack, PEER_ISS + 1, "o buraco ainda nao foi preenchido");
+    let (r, _) = feed_at(&mut st, &peer.seg(ACK, PEER_ISS + 11, ISS.wrapping_add(1), 8192, &[], b"!"), 2);
+    assert_eq!(r.unwrap().ack, PEER_ISS + 1);
+    let (r, _) = feed_at(&mut st, &peer.seg(ACK, PEER_ISS + 1, ISS.wrapping_add(1), 8192, &[], b"hello"), 3);
+    assert_eq!(r.unwrap().ack, PEER_ISS + 12, "o ACK pula o que estava guardado");
+    let mut buf = [0u8; 32];
+    let n = st.read(id, &mut buf).unwrap();
+    assert_eq!(&buf[..n], b"helloworld!");
+}
+
+#[test]
+fn zero_window_is_probed_until_it_opens() {
+    let (mut st, id, peer) = connected(0, 1460);
+    st.write(id, b"dados").unwrap();
+    assert!(drain_at(&mut st, id, 0).is_empty());
+    let rto = st.info(id).unwrap().rto_ms as u64;
+    let (probe, _) = tick_at(&mut st, rto);
+    assert_eq!(probe.len(), 1);
+    assert_eq!((probe[0].seq, probe[0].payload.len()), (ISS, 0), "sonda com SEQ = SND.UNA - 1");
+    let (later, _) = tick_at(&mut st, rto + 2 * rto);
+    assert_eq!(later.len(), 1, "a sonda tambem tem backoff");
+    feed_at(&mut st, &peer.seg(ACK, PEER_ISS + 1, ISS.wrapping_add(1), 500, &[], &[]), 5000);
+    let segs = drain_at(&mut st, id, 5000);
+    assert_eq!(segs.len(), 1);
+    assert_eq!(segs[0].payload, b"dados");
+}
+
+#[test]
+fn fin_is_retransmitted() {
+    let (mut st, id, peer) = connected(8192, 1460);
+    st.close(id).unwrap();
+    let fin = drain_at(&mut st, id, 0);
+    assert_eq!(fin.len(), 1);
+    let rto = st.info(id).unwrap().rto_ms as u64;
+    let (again, _) = tick_at(&mut st, rto);
+    assert_eq!(again.len(), 1);
+    assert_eq!((again[0].flags, again[0].seq), (FIN | ACK, fin[0].seq));
+    feed_at(&mut st, &peer.seg(ACK, PEER_ISS + 1, ISS.wrapping_add(2), 8192, &[], &[]), rto + 1);
+    assert_eq!(st.info(id).unwrap().state, State::FinWait2 as u32);
+}
+
+#[test]
+fn data_gives_up_after_the_retries() {
+    let (mut st, id, _) = connected(8192, 1460);
+    st.write(id, b"ninguem ouve").unwrap();
+    drain_at(&mut st, id, 0);
+    let mut at = 0;
+    let mut evs = StdVec::new();
+    for _ in 0..40 {
+        at += RTO_MAX;
+        evs.extend(tick_at(&mut st, at).1);
+    }
+    assert!(evs.iter().any(|e| e.events & EV_ERROR != 0));
+    assert_eq!(st.info(id).unwrap().error, ETIMEDOUT);
+}
+
+struct Wire(Rng, u64);
+
+impl Wire {
+    fn lose(&mut self) -> bool {
+        self.0.next() % 100 < self.1
+    }
+}
+
+#[test]
+fn bulk_send_survives_loss() {
+    for (seed, loss) in [(1u64, 0u64), (2, 5), (3, 15), (4, 30)] {
+        let (mut st, id, peer) = connected(32768, 1000);
+        let total = 200_000usize;
+        let data: StdVec<u8> = (0..total).map(|i| (i * 31 + i / 997) as u8).collect();
+        let mut wire = Wire(Rng(0xABCD_0000 + seed), loss);
+        let mut written = 0;
+        let mut got: StdVec<u8> = StdVec::new();
+        let mut held: StdVec<(u32, StdVec<u8>)> = StdVec::new();
+        let base = ISS.wrapping_add(1);
+        let mut now = 0u64;
+        while got.len() < total && now < 3_600_000 {
+            if written < total {
+                written += st.write(id, &data[written..]).unwrap();
+            }
+            let mut segs = drain_at(&mut st, id, now);
+            segs.extend(tick_at(&mut st, now).0);
+            for s in segs {
+                if wire.lose() || s.payload.is_empty() {
+                    continue;
+                }
+                held.push((s.seq, s.payload.to_vec()));
+                loop {
+                    let want = base.wrapping_add(got.len() as u32);
+                    let Some(i) = held.iter().position(|(q, d)| le(*q, want) && lt(want, q.wrapping_add(d.len() as u32))) else { break };
+                    let (q, d) = held.swap_remove(i);
+                    got.extend_from_slice(&d[want.wrapping_sub(q) as usize..]);
+                }
+                let ack = base.wrapping_add(got.len() as u32);
+                if !wire.lose() {
+                    feed_at(&mut st, &peer.seg(ACK, PEER_ISS + 1, ack, 32768, &[], &[]), now);
+                }
+            }
+            now += 10;
+        }
+        assert_eq!(got.len(), total, "perda de {}%: entregou {} de {}", loss, got.len(), total);
+        assert_eq!(got, data, "perda de {}%: conteudo", loss);
+        if loss > 0 {
+            assert!(st.stats().retransmits > 0);
+        }
+    }
+}
+
+#[test]
+fn bulk_receive_survives_loss_and_reordering() {
+    for (seed, loss) in [(5u64, 0u64), (6, 10), (7, 25)] {
+        let (mut st, id, peer) = connected(8192, 1460);
+        let total = 150_000usize;
+        let data: StdVec<u8> = (0..total).map(|i| (i * 13 + i / 101) as u8).collect();
+        let mut wire = Wire(Rng(0x5EED_0000 + seed), loss);
+        let mut acked = 0usize;
+        let mut got: StdVec<u8> = StdVec::new();
+        let mut now = 0u64;
+        while got.len() < total && now < 2_000_000 {
+            let window = 8 * 1000;
+            let mut burst: StdVec<usize> = (0..)
+                .map(|k| acked + k * 1000)
+                .take_while(|&off| off < total && off < acked + window)
+                .collect();
+            if burst.len() > 1 && wire.0.next() % 2 == 0 {
+                burst.swap(0, 1);
+            }
+            for off in burst {
+                if wire.lose() {
+                    continue;
+                }
+                let end = (off + 1000).min(total);
+                let seq = PEER_ISS + 1 + off as u32;
+                let (r, _) = feed_at(&mut st, &peer.seg(ACK, seq, ISS.wrapping_add(1), 8192, &[], &data[off..end]), now);
+                if let Some(r) = r {
+                    if !wire.lose() {
+                        acked = acked.max(r.ack.wrapping_sub(PEER_ISS + 1) as usize);
+                    }
+                }
+            }
+            let mut buf = vec![0u8; 4096];
+            loop {
+                let n = st.read(id, &mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                got.extend_from_slice(&buf[..n]);
+            }
+            for s in drain_at(&mut st, id, now) {
+                if !wire.lose() {
+                    acked = acked.max(s.ack.wrapping_sub(PEER_ISS + 1) as usize);
+                }
+            }
+            now += 50;
+        }
+        assert_eq!(got, data, "perda de {}%", loss);
     }
 }

@@ -17,12 +17,17 @@ def prepare(path):
     os.makedirs(path, exist_ok=True)
     with open(os.path.join(path, 'index.html'), 'wb') as fh:
         fh.write(b'<html><body>ola do hospedeiro</body></html>\n')
-    big = os.path.join(path, 'big.bin')
     data = big_data()
-    if not os.path.exists(big) or os.path.getsize(big) != BIG:
-        with open(big, 'wb') as fh:
-            fh.write(data)
-    return zlib.crc32(data) & 0xFFFFFFFF
+    crc = 0
+    for name, copies in (('big.bin', 1), ('big10.bin', 10)):
+        full = os.path.join(path, name)
+        if not os.path.exists(full) or os.path.getsize(full) != BIG * copies:
+            with open(full, 'wb') as fh:
+                for k in range(copies):
+                    fh.write(bytes((b + k) & 0xFF for b in data) if k else data)
+        if copies == 1:
+            crc = zlib.crc32(data) & 0xFFFFFFFF
+    return crc
 
 
 class Quiet(http.server.SimpleHTTPRequestHandler):
@@ -30,6 +35,23 @@ class Quiet(http.server.SimpleHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         sys.stderr.write('hostweb: ' + (fmt % args) + '\n')
+
+    def do_PUT(self):
+        left = int(self.headers.get('Content-Length', '0'))
+        crc = 0
+        total = 0
+        while left > 0:
+            chunk = self.rfile.read(min(left, 65536))
+            if not chunk:
+                break
+            crc = zlib.crc32(chunk, crc)
+            total += len(chunk)
+            left -= len(chunk)
+        body = ('recebido %d bytes, crc32 %08x\n' % (total, crc & 0xFFFFFFFF)).encode()
+        self.send_response(200)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 def main():

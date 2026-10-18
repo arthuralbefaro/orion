@@ -169,6 +169,12 @@ if ($runAll -or $OnlyA) {
         "cmd:httpget -o /tmp/big.bin 10.0.2.2 8088 /big.bin", "until:90:crc32",
         "cmd:wc /tmp/big.bin", "cmd:rm /tmp/big.bin", "wait:1",
         "cmd:httpget example.com 80 /", "until:30:httpget:",
+        "cmd:httpget -q 10.0.2.2 8088 /big10.bin", "until:120:corpo de",
+        "cmd:head -c 1000000 /dev/random > /tmp/up.bin", "wait:3",
+        "key:0B", "cmd:tcploss 10", "key:0B",
+        "cmd:httpget -u /tmp/up.bin 10.0.2.2 8088 /up", "until:240:corpo de",
+        "cmd:httpget -q 10.0.2.2 8088 /big.bin", "until:240:corpo de",
+        "key:0B", "cmd:tcploss 0", "key:0B", "cmd:rm /tmp/up.bin", "wait:1",
         "cmd:nslookup example.com", "wait:8",
         "cmd:nslookup example.com", "wait:8",
         "cmd:GREETING=ola-mundo", "wait:1",
@@ -346,6 +352,10 @@ if ($runAll -or $OnlyA) {
     Expect $a "wc /tmp/big\.bin\s*\n[^\n]*\s1048576 /tmp/big\.bin" "TCP: arquivo baixado gravado inteiro"
     Expect $a "(?s)httpget example\.com 80 /.*?Example Domain.*?httpget: HTTP/1\.[01] 200" "TCP: httpget baixou example.com (depende da internet do hospedeiro)"
     Expect $a "RST enviado\(s\), 0 conexao\(oes\)" "TCP: conexoes encerradas saem da tabela"
+    Expect $a "httpget: corpo de 10485760 bytes, crc32 1a960f7c" "TCP: 10 MiB do hospedeiro sem corromper (crc32)"
+    Expect $a "(?s)tcploss: descartando 1 em 10 .*?httpget: enviado (\d+) bytes, crc32 ([0-9a-f]{8})\s*\nrecebido \1 bytes, crc32 \2" "TCP: envio de 1 MB com 10% de perda chega inteiro (crc32 no hospedeiro)"
+    Expect $a "(?s)tcploss: descartando 1 em 10 .*?corpo de 1048576 bytes, crc32 a2dcf263.*?tcploss: desligado" "TCP: 1 MiB recebido com 10% de perda sem corromper"
+    Expect $a "tcp: [1-9]\d* retransmissao\(oes\)" "TCP: retransmissoes contadas no comando net"
     Expect $a "(?s)----- reboot -----.*?cat /reboot\.txt\s*\n\s*sobrevive-ao-reboot" "arquivo gravado na raiz sobrevive a reboot"
     Expect $a "(?s)cat /proc/self/maps\s*\n\s*[0-9a-f]{8,}-[0-9a-f]{8,} r--p [0-9a-f]{8} 00:00 \d+\s+/bin/cat" "cat /proc/self/maps mostra as VMAs do proprio cat"
     Expect $a "[0-9a-f]+-7ffffffff000 rw-p 00000000 00:00 0\s+\[stack\]" "maps mostra a pilha"

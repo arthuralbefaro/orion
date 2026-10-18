@@ -2016,3 +2016,64 @@ Uma linha por decisao, na ordem em que foram tomadas.
   raiz, que voltam depois, e o `MemFree` variou de -262 a +74 paginas entre
   rodadas iguais. A medida passou a ser `MemFree + Cached` (pagina do tmpfs
   nao entra no `Cached`, e despejar ou reler cache nao muda a soma).
+
+## v2.2.0-a3 (etapa 3.3: TCP parte 3)
+
+- O relogio continua fora do Rust: o C passa `now` em milissegundos ao
+  `tcp_input`, ao `tcp_output` e ao `tcp_connect`, e uma thread do kernel
+  (`tcptimer`) chama `tcp_tick` a cada 50 ms, que devolve um segmento por vez
+  (retransmissao, sonda) e os eventos (desistencia, fim do `TIME_WAIT`). O que
+  o `tick` manda tambem passa pelo mutex `tcp-tx`.
+- Retransmissao pela RFC 6298: RTO inicial de 1 s, SRTT e RTTVAR de
+  Jacobson/Karels medidos com um segmento por vez (o `SYN` tambem conta), sem
+  medir segmento retransmitido (Karn), RTO entre 200 ms e 60 s, dobrando a
+  cada vencimento. Vencido, o envio volta a `SND.UNA` (go-back-N: o
+  `SND.NXT` volta e o `SND.MAX` guarda ate onde ja se mandou, para separar
+  envio novo de retransmissao) e o `FIN` volta para depois dos dados. O `SYN`
+  desiste depois de 5 retransmissoes e os dados depois de 8, com `ETIMEDOUT`.
+- Controle de congestionamento Reno simples: `cwnd` inicial de 10 MSS
+  (RFC 6928), crescimento exponencial ate o `ssthresh` e linear depois; no
+  RTO, `ssthresh` = metade do que esta em voo e `cwnd` = 1 MSS; com 3 ACKs
+  repetidos (mesmo `ack`, sem dados, mesma janela, algo em voo), retransmissao
+  rapida do segmento em `SND.UNA` e recuperacao com `cwnd` = `ssthresh` +
+  3 MSS, voltando a `ssthresh` no proximo ACK novo. A janela efetiva e o
+  menor entre a do outro lado e a `cwnd`.
+- Recepcao com reordenacao: segmento adiante do `RCV.NXT` (dentro da janela)
+  fica guardado, ate 32 KiB, e entra quando o buraco e preenchido; o ACK pula
+  tudo de uma vez. `FIN` fora de ordem nao e guardado (o outro lado manda de
+  novo).
+- Sonda de janela zero: com dados esperando, nada em voo e janela zero, sai a
+  cada RTO (dobrando ate 60 s) um ACK com `SEQ = SND.UNA - 1`, que obriga o
+  outro lado a responder com a janela atual. A sonda nao conta tentativas: a
+  conexao pode esperar a janela abrir indefinidamente, como no Linux.
+- `TIME_WAIT` de verdade: 2*MSL com MSL de 30 s; um `FIN` repetido nesse
+  estado recebe ACK e reinicia o tempo. Conexao solta (`close` feito) sai da
+  tabela quando o `TIME_WAIT` vence.
+- O `connect` espera ate 75 s (o `SYN` desiste antes, em uns 63 s) e
+  resolve o ARP antes de mandar o `SYN`.
+- Teste de perda de verdade: o SLIRP nao perde nada, entao o comando
+  `tcploss N` do shell do kernel descarta 1 em cada N segmentos TCP (contados
+  juntos nos dois sentidos, antes do `tcp_input` e no envio). O comando `net`
+  mostra as retransmissoes e o que foi descartado. A regressao baixa 10 MiB sem
+  perda (o criterio da etapa), e com 1 em 10 descartado envia 1 MB (o
+  `tools/hostweb.py` ganhou `PUT`, que responde com tamanho e CRC32 do que
+  chegou; o `httpget` ganhou `-u`) e recebe 1 MiB, conferindo os CRC32.
+  Medido: 10 MiB em 0,7 s sem perda e 16 s com 1 em 20; 2 MB enviados em 15 s
+  com 1 em 10 (342 retransmissoes). Com perda alta recebendo, quem manda e o
+  TCP do SLIRP, com RTO minimo de 1 s, e fica lento (10 MiB com 1 em 7 levou
+  quase 5 minutos).
+- No crate, os testes simulam o outro lado: `SYN` com backoff ate
+  `ETIMEDOUT`, RTO com volta a `SND.UNA`, amostra de RTT, retransmissao
+  rapida, reordenacao, sonda de janela zero, `FIN` retransmitido, desistencia
+  dos dados, e duas simulacoes com perda aleatoria (0 a 30% enviando 200 KB e
+  0 a 25% recebendo 150 KB com troca de ordem) conferindo o conteudo inteiro.
+- O `tmptest` ainda falhava as vezes com `MemFree + Cached` (-32 paginas na
+  regressao). Mostrando os componentes, a variacao (de -70 a +184 paginas
+  entre rodadas iguais) estava toda no `MemFree`, com `Cached` e
+  `KernelHeap` parados: sao paginas de slab do heap do kernel, que entram e
+  saem conforme a fragmentacao dos 1000 nos criados e apagados (o
+  `KernelHeap` conta bytes em uso, nao as paginas dos slabs; o no do tmpfs
+  cresceu na 2.7 e mudou de tamanho de slab). Um vazamento de pagina do tmpfs
+  nesse teste seria de pelo menos 1000 paginas (uma por arquivo de 3000
+  bytes), entao a tolerancia foi para 256 paginas, e o teste imprime os
+  componentes para a proxima investigacao.
