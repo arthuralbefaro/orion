@@ -129,6 +129,9 @@ if ($runAll -or $OnlyA) {
         "cmd:vfstest /tmp", "until:200:falha(s))",
         "cmd:linktest /tmp", "until:120:falha(s))",
         "cmd:ln -s alvo-do-ln /tmp/lnx", "cmd:readlink /tmp/lnx", "cmd:rm /tmp/lnx", "wait:1",
+        "cmd:attrtest /tmp", "until:120:falha(s))", "cmd:attrtest -k /tmp", "until:60:falha(s))",
+        "cmd:touch /tmp/lsx", "cmd:chmod 640 /tmp/lsx", "cmd:chown 12:34 /tmp/lsx", "cmd:ln -s lsx /tmp/lsl",
+        "cmd:ls -l /tmp/lsx /tmp/lsl", "wait:2", "cmd:rm /tmp/lsx /tmp/lsl", "cmd:ls -l /bin/ls", "wait:1",
         "cmd:cat /proc/self/maps", "wait:1", "cmd:cat /proc/mounts", "wait:1",
         "cmd:proctest um dois", "until:60:falha(s))",
         "cmd:pctest", "until:120:falha(s))",
@@ -306,6 +309,11 @@ if ($runAll -or $OnlyA) {
     Expect $a "(?s)vfstest /tmp.*?vfstest: TUDO OK" "vfstest no tmpfs"
     Expect $a "(?s)linktest: links simbolicos em /tmp\s.*?linktest: TUDO OK" "linktest no tmpfs"
     Expect $a "readlink /tmp/lnx\s*\n\s*alvo-do-ln" "ln -s e readlink do sbase"
+    Expect $a "(?s)attrtest: modo, dono e datas em /tmp\s.*?attrtest: TUDO OK" "attrtest no tmpfs: chmod, chown, utimensat, umask, nlink"
+    Expect $a "(?s)attrtest: conferindo at/keep em /tmp\s.*?attrtest: TUDO OK" "attrtest no tmpfs: atributos guardados"
+    Expect $a "-rw-r-----\s+1\s+12\s+34\s+0 \w{3} [ \d]\d \d\d:\d\d /tmp/lsx" "ls -l mostra modo, dono e grupo (chmod e chown do sbase)"
+    Expect $a "lrwxrwxrwx\s+1\s+root\s+root\s+3 \w{3} [ \d]\d \d\d:\d\d /tmp/lsl -> lsx" "ls -l mostra o link, o alvo e o nome do dono pelo /etc/passwd"
+    Expect $a "-rw-r--r--\s+1\s+root\s+root\s+\d+ \w{3} [ \d]\d( \d\d:\d\d|  \d{4}) /bin/ls" "ls -l no FAT com a data do diretorio"
     Expect $a "(?s)cat /proc/self/maps\s*\n\s*[0-9a-f]{8,}-[0-9a-f]{8,} r--p [0-9a-f]{8} 00:00 \d+\s+/bin/cat" "cat /proc/self/maps mostra as VMAs do proprio cat"
     Expect $a "[0-9a-f]+-7ffffffff000 rw-p 00000000 00:00 0\s+\[stack\]" "maps mostra a pilha"
     Expect $a "proc /proc proc ro 0 0" "/proc/mounts lista o procfs"
@@ -386,7 +394,7 @@ if ($runAll -or $OnlyA) {
     Expect $a ": OK" "heaptest OK"
     Expect $a "OK \(as duas rodaram\)" "preempt OK"
     Expect $a "0 pty\(s\) viva\(s\)" "nenhuma pty vazada"
-    Test-MemDelta $a "memoria estavel na sequencia A" 16
+    Test-MemDelta $a "memoria estavel na sequencia A" 24
 }
 
 # ---------------- Sequencia B: grafica ----------------
@@ -467,6 +475,8 @@ if ($runAll -or $OnlyC) {
         "cmd:mount -r /dev/sdb /mnt", "cmd:cat /mnt/f1.txt | grep TUDO | wc", "cmd:echo x > /mnt/ro.txt",
         "cmd:umount /mnt", "cmd:mount /dev/sdb /mnt",
         "cmd:echo rw-ok > /mnt/rw.txt", "cmd:cat /mnt/rw.txt", "cmd:rm /mnt/rw.txt",
+        "cmd:touch /mnt/t1", "cmd:chmod 444 /mnt/t1", "cmd:ls -l /mnt/t1", "cmd:chmod 600 /mnt/t1",
+        "cmd:chmod 644 /mnt/t1", "cmd:rm /mnt/t1", "wait:1",
         "cmd:mkdir /mnt/q", "cmd:mount /dev/sdb /mnt/q", "cmd:rm -r /mnt/q", "wait:1",
         "cmd:mkdir /tmp/e4", "cmd:mount -t ext2 /dev/sdc /tmp/e4", "cmd:ext2test /tmp/e4", "until:300:falha(s))",
         "cmd:/tmp/e4/bin/hello ext2", "wait:2",
@@ -480,6 +490,9 @@ if ($runAll -or $OnlyC) {
         "cmd:mount -t ext2 /dev/sdd /tmp/e1", "cmd:ls /tmp/e1",
         "cmd:fstest -a /tmp/e1", 'cmd:echo FIM$X-FSTEST', "until:600:FIM-FSTEST",
         "cmd:linktest /tmp/e1", 'cmd:echo FIM$X-LINK', "until:200:FIM-LINK",
+        "cmd:attrtest /tmp/e1", 'cmd:echo FIM$X-ATTR', "until:200:FIM-ATTR",
+        "cmd:umount /tmp/e1", "cmd:mount -t ext2 /dev/sdd /tmp/e1",
+        "cmd:attrtest -k /tmp/e1", 'cmd:echo FIM$X-KEEP', "until:60:FIM-KEEP",
         "cmd:umount /tmp/e1", "wait:1",
         "cmd:fsck.ext2 /dev/sdd", 'cmd:echo FIM$X-FSCK4', "until:120:FIM-FSCK4",
         "key:0B", "cmd:mem", "cmd:lsblk", "cmd:mutex"
@@ -549,7 +562,11 @@ if ($runAll -or $OnlyC) {
     Expect $c "ls /tmp/e1\s*\n\s*<DIR>\s+lost\+found/" "ext2 novo tem o lost+found"
     Expect $c "(?s)fstest -a /tmp/e1.*?criou 300 arquivos com nome longo\s+ok.*?escreveu 3 MiB\s+ok.*?fstest: TUDO OK.*?FIM-FSTEST" "fstest -a no ext2"
     Expect $c "(?s)linktest: links simbolicos em /tmp/e1.*?linktest: TUDO OK.*?FIM-LINK" "linktest no ext2"
-    Expect $c "(?s)FIM-LINK.*?fsck\.ext2: /dev/sdd: limpo.*?FIM-FSCK4" "ext2 limpo no fsck depois do fstest -a e do linktest"
+    Expect $c "(?s)attrtest: modo, dono e datas em /tmp/e1.*?attrtest: TUDO OK.*?FIM-ATTR" "attrtest no ext2"
+    Expect $c "(?s)attrtest: conferindo at/keep em /tmp/e1.*?modo sobreviveu\s+ok.*?dono e grupo sobreviveram\s+ok.*?datas sobreviveram\s+ok.*?attrtest: TUDO OK.*?FIM-KEEP" "ext2: modo, dono e datas sobrevivem ao umount e mount"
+    Expect $c "(?s)FIM-KEEP.*?fsck\.ext2: /dev/sdd: limpo.*?FIM-FSCK4" "ext2 limpo no fsck depois do fstest -a, do linktest e do attrtest"
+    Expect $c "-r--r--r--\s+1\s+root\s+root\s+0 \w{3} [ \d]\d \d\d:\d\d /mnt/t1" "FAT: chmod 444 liga o somente leitura"
+    Expect $c "chmod /mnt/t1: Operation not permitted" "FAT: chmod que o FAT nao guarda da EPERM"
     Test-MemDelta $c "memoria estavel na sequencia C" 24
 }
 

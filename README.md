@@ -54,7 +54,7 @@ use o `dash`.
     lua         Lua 5.4.9 (lua -e 'print(2^10)', os.execute, io.popen)
     tcc         TinyCC: tcc /lib/tcc/hello.c -o /oi && /oi
     doom        doom -iwad /doom/freedoom1.wad -nogui   (Ctrl atira, espaco usa, setas andam)
-    sbase-box   97 utilitarios do sbase; 29 deles tambem em /bin (find, xargs, seq, tr, cut,
+    sbase-box   97 utilitarios do sbase; 31 deles tambem em /bin (find, xargs, seq, tr, cut,
                 expr, od, printf, test, ...); os outros: sbase-box <nome> ...
 
 As fontes estao em `third_party/` como vieram. O que o `configure`/`make`
@@ -105,6 +105,15 @@ O ext2 (o driver e o piloto em Rust do kernel) monta com leitura e escrita;
 Links simbolicos funcionam no ext2 e no tmpfs (`ln -s alvo nome`,
 `readlink nome`); o FAT nao tem links e devolve `EPERM`.
 
+Modo, dono e datas ficam guardados no ext2 e no tmpfs: `chmod`, `chown`,
+`chgrp` e `touch` gravam, `ls -l` mostra (os nomes de dono e grupo vem do
+`/etc/passwd` e do `/etc/group`). Arquivo novo nasce com o modo pedido menos o
+`umask` (022). No FAT so as datas e o somente leitura (`chmod 444`/`644`) sao
+guardados; outros modos e donos dao `EPERM`, como no Linux.
+
+    ls -l /tmp
+    chmod 640 /tmp/x; chown 12:34 /tmp/x; touch /tmp/x
+
 Os dois recusam disco montado. O `fsck.ext2` sai com 0 (limpo), 1 (corrigiu
 tudo), 4 (sobrou problema) ou 8 (nao deu para conferir), como o `e2fsck`.
 Imagens prontas tambem saem do `tools\mkext2.py`, a partir de um diretorio ou
@@ -141,7 +150,7 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
     ifconfig ping nslookup dhcp mkfs mkfs.ext2 fsck.ext2 mount umount
-    testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest polltest forktest ptytest limtest stress sctest filetest
+    testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
 

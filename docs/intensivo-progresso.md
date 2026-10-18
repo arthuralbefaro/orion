@@ -27,19 +27,16 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-17, 22:05, sessao 2): 2.1 a 2.6, 8.7 e a parte 1 da 2.7
-(links simbolicos) commitadas. A 8.7 e a 2.7 parte 1 rodaram pela primeira
-vez no QEMU nesta sessao: regressao inteira verde (291 verificacoes) e
-estresse 5x verde, sem nenhuma correcao.
+Estado (2026-10-17, 22:40, sessao 2): 2.1 a 2.7 e 8.7 commitadas. A 2.7
+fechou em duas partes (links simbolicos; modo, dono e datas). Versao
+2.1.0-a7, regressao com 300 verificacoes.
 
-Proxima etapa: 2.7 parte 2 (`chmod`, `fchmod`, `chown`, `fchown`,
-`utimensat`/`utime` gravando no inode do ext2 e no tmpfs, `stat` com modo,
-dono, `nlink` e datas reais, `ls -l`), depois 2.8.
+Proxima etapa: 2.8 (GPT, `build.ps1 -Image` gerando `out\orion.img` com ESP
+em FAT e raiz em ext2, boot com raiz em ext2, regressao inteira nessa imagem e
+arquivos que sobrevivem a reboot), que fecha o M2 (tag `v2.1`, versao 2.1.0).
 
-Cuidado: a hora na linha de boot (`build Oct 17 2026 20:37:37`) e a do
-`__TIME__` do `main.c`, que so muda quando o `main.c` e recompilado. Ela
-sozinha nao prova que o kernel testado e o novo; confira que nenhuma fonte
-em `kernel/src` e mais nova que o objeto dela em `build/`.
+A hora na linha de boot agora muda a cada build que recompila algo do kernel
+(o `main.c` e recompilado junto); antes so mudava com o proprio `main.c`.
 
 ## Checklist
 
@@ -70,7 +67,7 @@ em `kernel/src` e mais nova que o objeto dela em `build/`.
 | 2.4 | Cache de paginas unificado | [x] | 12:53 | 14:55 | c485b85 |
 | 2.5 | ext2 leitura, piloto em Rust | [x] | 14:56 | 16:36 | ver `git log` |
 | 2.6 | ext2 escrita, mkfs.ext2, fsck | [x] | 16:36 | 19:00 | ver `git log` (3 partes) |
-| 2.7 | Links simbolicos, chmod, chown, utime | [~] | 20:20 | | parte 1: ver `git log` |
+| 2.7 | Links simbolicos, chmod, chown, utime | [x] | 20:20 | 22:40 | `921c465` e ver `git log` (parte 2) |
 | 2.8 | GPT e raiz em ext2 | [ ] | | | |
 | 3.1 | TCP parte 1 | [ ] | | | |
 | 3.2 | TCP parte 2 | [ ] | | | |
@@ -650,7 +647,7 @@ copias de ate 64 KiB), conferindo retorno e flag de direcao.
 Validada no QEMU na sessao 2 (regressao inteira verde com 291 verificacoes,
 estresse 5x verde) e commitada em `9ad91e7`.
 
-#### 2.7 links simbolicos, chmod, chown, utime - 20:20 - EM ANDAMENTO
+#### 2.7 links simbolicos, chmod, chown, utime - 20:20 a 22:40 - FEITO
 Parte 1 (links simbolicos): a VFS segue links na resolucao de caminho (40 no
 maximo, `ELOOP`), `symlink`/`symlinkat`, `lstat` e `readlink` sem seguir o
 ultimo link, `O_NOFOLLOW`, `O_CREAT` por link pendurado; links no tmpfs e no
@@ -661,8 +658,39 @@ inteira verde (291 verificacoes, 3 novas: `linktest` no tmpfs e no ext2 e
 `ln -s`/`readlink` do sbase; o `fsck.ext2` final passou a vir depois do
 `linktest`), estresse 5x
 verde; nada precisou de correcao. Commit "v2.1: 2.7 (parte 1) - links
-simbolicos". Falta a parte 2: `chmod`, `chown`, `utime`/`utimensat` gravando no inode, `stat` com
-os valores reais e `ls -l`.
+simbolicos" (`921c465`).
+
+Parte 2 (sessao 2, 22:07 a 22:40): `getattr`/`setattr` na VFS; `chmod`,
+`fchmod`, `fchmodat`, `fchmodat2`, `chown`, `fchown`, `lchown`, `fchownat`,
+`umask`, `utime`, `utimes`, `futimesat` e `utimensat`; `stat` com modo, dono,
+grupo, `st_nlink`, `st_blocks` e datas reais. O ext2 grava no inode (Rust:
+`ext2_setattr`, dono de 32 bits); o tmpfs guarda tudo em nanossegundos e conta
+paginas e subdiretorios; o FAT da as datas da entrada e grava datas e o bit de
+somente leitura (o resto da `EPERM`, como o `vfat`). `open`/`mkdir` respeitam
+o modo pedido e o `umask`; as opcoes `mode=`, `uid=` e `gid=` do tmpfs passaram
+a valer. Programas: `ls -l`, `touch` que atualiza as datas, `chown` e `chgrp`
+do sbase, `/etc/passwd` e `/etc/group` com o root, `attrtest` (novo). Teste
+novo no crate (atributos sobrevivem a remontagem em imagens do `mkext2.py` e do
+`mke2fs`) e `ext2_setattr` no fuzz de escrita. O `build.ps1` recompila o
+`main.c` sempre que algo do kernel e recompilado, para a hora na linha de boot
+valer como prova do kernel novo. Versao 2.1.0-a7.
+Regressao 291 -> 300 verificacoes: `attrtest` no tmpfs (e `-k`), `ls -l` com
+dono numerico, com nome do `/etc/passwd` e com data do FAT, `attrtest` no ext2
+com `umount`/`mount` no meio e `fsck.ext2` limpo depois, `chmod 444` e `EPERM`
+no FAT. Estresse 5x verde.
+Problemas: (1) o `filetest` conferia `st_blocks == (tamanho + 511) / 512`, que
+era o valor inventado de antes; agora o FAT informa os clusters alocados, como
+o Linux, e o teste confere que o valor cobre o tamanho com no maximo 64 KiB de
+sobra. (2) A sequencia A passou do limite de memoria (434 -> 452 paginas,
+limite 16). Medido a parte: 434 -> 436 depois da primeira rodada de
+`attrtest`/`ls -l`/`chown` e 436 de novo depois de mais 10 rodadas, entao e
+custo fixo dos comandos novos (slabs e cache), nao vazamento; o limite da A
+foi para 24, o mesmo da C. (3) O primeiro script de edicao do `syscall.c` foi
+cortado pelo Bash (heredoc com aspas e barras); nada foi aplicado pela metade,
+e os scripts passaram a ir para arquivo no scratchpad.
+Ficou de fora: conferir permissao (todo processo e root ate a 4.1), `atime`
+na leitura (comportamento de `noatime`), `chmod`/`chown` no devfs e no procfs
+(`EPERM`), links fisicos (`link`, nao estao no plano).
 
 ### Sessao 2 - 2026-10-17
 

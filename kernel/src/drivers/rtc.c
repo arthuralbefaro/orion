@@ -62,6 +62,27 @@ uint64_t rtc_to_epoch(const struct rtc_time *t)
     return (uint64_t)(days * 86400 + t->hour * 3600 + t->minute * 60 + t->second);
 }
 
+void rtc_from_epoch(uint64_t epoch, struct rtc_time *out)
+{
+    int64_t days = (int64_t)(epoch / 86400);
+    uint64_t rem = epoch % 86400;
+    out->hour = (uint8_t)(rem / 3600);
+    out->minute = (uint8_t)(rem / 60 % 60);
+    out->second = (uint8_t)(rem % 60);
+    days += 719468;
+    int64_t era = days / 146097;
+    int64_t doe = days - era * 146097;
+    int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    int64_t mp = (5 * doy + 2) / 153;
+    int64_t d = doy - (153 * mp + 2) / 5 + 1;
+    int64_t m = mp < 10 ? mp + 3 : mp - 9;
+    int64_t y = yoe + era * 400 + (m <= 2);
+    out->year = (uint16_t)y;
+    out->month = (uint8_t)m;
+    out->day = (uint8_t)d;
+}
+
 void rtc_init(void)
 {
     struct rtc_time t;

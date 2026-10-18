@@ -30,6 +30,21 @@ struct ext2_stat {
     uint32_t blocks;
 };
 
+struct ext2_attr {
+    uint32_t mask;
+    uint32_t mode;
+    uint32_t uid;
+    uint32_t gid;
+    uint32_t atime;
+    uint32_t mtime;
+};
+
+#define EXT2_ATTR_MODE  1u
+#define EXT2_ATTR_UID   2u
+#define EXT2_ATTR_GID   4u
+#define EXT2_ATTR_ATIME 8u
+#define EXT2_ATTR_MTIME 16u
+
 typedef int (*ext2_read_fn)(void *ctx, uint64_t off, uint8_t *buf, uint32_t len, bool meta);
 typedef int (*ext2_write_fn)(void *ctx, uint64_t off, const uint8_t *buf, uint32_t len);
 typedef bool (*ext2_dir_fn)(void *ctx, const uint8_t *name, uint32_t len, uint32_t ino, uint8_t dtype,
@@ -55,5 +70,6 @@ int ext2_rename(struct ext2_rs *fs, uint32_t odir, const uint8_t *oname, uint32_
 int ext2_evict(struct ext2_rs *fs, uint32_t ino, uint32_t now);
 int ext2_symlink(struct ext2_rs *fs, uint32_t dir, const uint8_t *name, uint32_t len, const uint8_t *target,
                  uint32_t tlen, uint32_t now, uint32_t *out);
+int ext2_setattr(struct ext2_rs *fs, uint32_t ino, const struct ext2_attr *attr, uint32_t now);
 
 extern const struct fs_type ext2_fs_type;

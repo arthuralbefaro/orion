@@ -85,6 +85,7 @@ struct process {
     uint8_t *fd_flags;
     int fd_cap;
     struct user_rlimit rlimits[RLIMIT_COUNT];
+    uint32_t umask;
     char *cmdline;
     uint32_t cmdline_len;
     char exe[PROCESS_EXE_MAX];

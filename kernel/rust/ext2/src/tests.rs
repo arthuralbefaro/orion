@@ -725,7 +725,7 @@ fn churn(data: StdVec<u8>, rng: &mut Rng) -> bool {
         let e = dirs[rng.below(dirs.len() as u64) as usize];
         let a = pick(rng, &pool);
         let b = pick(rng, &pool);
-        match rng.below(6) {
+        match rng.below(7) {
             0 => {
                 let _ = mk(&mut fs, d, &a, REG);
             }
@@ -747,6 +747,19 @@ fn churn(data: StdVec<u8>, rng: &mut Rng) -> bool {
             4 => {
                 let t = b"../alvo/de/um/link/que/pode/ser/longo/o/bastante/para/sair/do/inode/e/ganhar/bloco";
                 let _ = ln(&mut fs, d, &a, &t[..rng.below(t.len() as u64) as usize]);
+            }
+            5 => {
+                if let Ok(ino) = fs.lookup(d, &a) {
+                    let at = Ext2Attr {
+                        mask: rng.below(64) as u32,
+                        mode: rng.next() as u32,
+                        uid: rng.next() as u32,
+                        gid: rng.next() as u32,
+                        atime: rng.next() as u32,
+                        mtime: rng.next() as u32,
+                    };
+                    let _ = unsafe { ext2_setattr(&mut *fs, ino, &at, NOW) };
+                }
             }
             _ => {
                 if let Ok(ino) = fs.lookup(d, &a) {
@@ -864,4 +877,81 @@ fn symlinks_keep_the_image_valid() {
     let mut info = empty_info();
     let mut fs = mount(&disk as *const Disk as *mut c_void, disk_read, None, &mut info).expect("monta");
     assert_eq!(ln(&mut fs, ROOT_INO, b"x", b"y"), Err(EROFS));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn setattr(fs: &mut Fs, ino: u32, mask: u32, mode: u32, uid: u32, gid: u32, atime: u32, mtime: u32) -> Result<(), i32> {
+    let a = Ext2Attr { mask, mode, uid, gid, atime, mtime };
+    let r = unsafe { ext2_setattr(fs, ino, &a, NOW + 5) };
+    if r < 0 {
+        Err(-r)
+    } else {
+        Ok(())
+    }
+}
+
+fn stat_of(fs: &Fs, ino: u32) -> Ext2Stat {
+    let mut st = Ext2Stat { mode: 0, uid: 0, gid: 0, nlink: 0, size: 0, atime: 0, mtime: 0, ctime: 0, blocks: 0 };
+    assert_eq!(unsafe { ext2_stat(fs, ino, &mut st) }, 0);
+    st
+}
+
+#[test]
+fn attributes_survive_a_remount() {
+    let mut images: StdVec<(String, StdVec<u8>)> = StdVec::new();
+    images.push(("attr-1k".into(), image("attr-1k", &["--size", "8", "--block", "1024"])));
+    images.push(("attr-4k".into(), image("attr-4k", &["--size", "16", "--block", "4096"])));
+    if let Some(img) = mke2fs_image("attr-mke2fs", 16, &["-b", "1024", "-I", "256", "-N", "600"]) {
+        images.push(("attr-mke2fs".into(), img));
+    }
+    for (name, data) in images {
+        let disk = Disk { data: RefCell::new(data), reads: Cell::new(0) };
+        let mut info = empty_info();
+        let ctx = &disk as *const Disk as *mut c_void;
+        let mut fs = mount(ctx, disk_read, Some(disk_write), &mut info).expect("monta rw");
+        let f = mk(&mut fs, ROOT_INO, b"attr-arq", REG).expect("cria");
+        let d = mk(&mut fs, ROOT_INO, b"attr-dir", DIR).expect("mkdir");
+        let l = ln(&mut fs, ROOT_INO, b"attr-lnk", b"attr-arq").expect("symlink");
+        let st = stat_of(&fs, f);
+        assert_eq!(st.mode, REG, "{}: modo pedido na criacao", name);
+        assert_eq!((st.uid, st.gid, st.atime, st.mtime, st.ctime), (0, 0, NOW, NOW, NOW));
+        assert_eq!(stat_of(&fs, d).mode, DIR | 0o755);
+        assert_eq!(setattr(&mut fs, f, ATTR_MODE, 0o104_751, 0, 0, 0, 0), Ok(()));
+        assert_eq!(stat_of(&fs, f).mode, S_IFREG | 0o4751, "{}: chmod nao pode mudar o tipo", name);
+        assert_eq!(stat_of(&fs, f).ctime, NOW + 5);
+        assert_eq!(setattr(&mut fs, f, ATTR_UID | ATTR_GID, 0, 70_000, 123_456, 0, 0), Ok(()));
+        assert_eq!(setattr(&mut fs, d, ATTR_MODE | ATTR_UID, 0o700, 42, 999, 0, 0), Ok(()));
+        assert_eq!(setattr(&mut fs, l, ATTR_UID | ATTR_GID | ATTR_ATIME | ATTR_MTIME, 0, 7, 8, 100, 200), Ok(()));
+        assert_eq!(setattr(&mut fs, f, ATTR_ATIME | ATTR_MTIME, 0, 0, 0, 1_000_000_000, 1_234_567_890), Ok(()));
+        assert_eq!(setattr(&mut fs, f, 0x100, 0, 0, 0, 0, 0), Err(EINVAL));
+        assert_eq!(setattr(&mut fs, info.inodes + 1, ATTR_MODE, 0o600, 0, 0, 0, 0), Err(ENOENT));
+        let last = fs.inodes - 1;
+        assert_eq!(setattr(&mut fs, last, ATTR_MODE, 0o600, 0, 0, 0, 0), Err(ENOENT));
+        assert_eq!(unsafe { ext2_sync(&mut *fs, NOW, true) }, 0);
+        drop(fs);
+        fsck(&name, &disk.data.borrow());
+
+        let mut fs = mount(ctx, disk_read, Some(disk_write), &mut info).expect("monta de novo");
+        let st = stat_of(&fs, f);
+        assert_eq!(st.mode, S_IFREG | 0o4751, "{}: modo depois de remontar", name);
+        assert_eq!((st.uid, st.gid), (70_000, 123_456), "{}: dono de 32 bits", name);
+        assert_eq!((st.atime, st.mtime, st.ctime), (1_000_000_000, 1_234_567_890, NOW + 5));
+        assert_eq!(st.nlink, 1);
+        let sd = stat_of(&fs, d);
+        assert_eq!((sd.mode, sd.uid, sd.gid, sd.nlink), (S_IFDIR | 0o700, 42, 0, 2), "{}: diretorio", name);
+        let sl = stat_of(&fs, l);
+        assert_eq!((sl.mode, sl.uid, sl.gid, sl.atime, sl.mtime), (S_IFLNK | 0o777, 7, 8, 100, 200));
+        assert_eq!(readlink_of(&fs, l), b"attr-arq");
+        rm_now(&mut fs, ROOT_INO, b"attr-lnk", false);
+        rm_now(&mut fs, ROOT_INO, b"attr-arq", false);
+        rm_now(&mut fs, ROOT_INO, b"attr-dir", true);
+        assert_eq!(unsafe { ext2_sync(&mut *fs, NOW, true) }, 0);
+        drop(fs);
+        fsck(&format!("{}-fim", name), &disk.data.borrow());
+    }
+    let disk = Disk { data: RefCell::new(image("attr-ro", &["--size", "8", "--block", "1024"])), reads: Cell::new(0) };
+    let mut info = empty_info();
+    let mut fs = mount(&disk as *const Disk as *mut c_void, disk_read, None, &mut info).expect("monta");
+    let ino = fs.lookup(ROOT_INO, b"empty").expect("empty");
+    assert_eq!(setattr(&mut fs, ino, ATTR_MODE, 0o600, 0, 0, 0, 0), Err(EROFS));
 }

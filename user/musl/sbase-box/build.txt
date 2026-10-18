@@ -4,4 +4,4 @@ src ../../../third_party/sbase/libutil/*.c
 src ../../../third_party/sbase/libutf/*.c
 flag -w -D_DEFAULT_SOURCE -D_NETBSD_SOURCE -D_BSD_SOURCE -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -I../../../third_party/sbase
 dep ../../../third_party/sbase/*.h
-link basename chmod cmp comm cut dirname du expr find fold ln md5sum mktemp nl od paste printf pwd readlink seq sha256sum split strings tac test tr which xargs yes
+link basename chgrp chmod chown cmp comm cut dirname du expr find fold ln md5sum mktemp nl od paste printf pwd readlink seq sha256sum split strings tac test tr which xargs yes

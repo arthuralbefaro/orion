@@ -15,9 +15,9 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 |---|---|---|---|
 | 0 | read | completa | buffer intermediario no kernel; arquivos regulares em pedacos de ate 64 KiB |
 | 1 | write | completa | idem |
-| 2 | open | parcial | `O_CREAT`, `O_EXCL`, `O_TRUNC`, `O_APPEND`, `O_NONBLOCK`, `O_DIRECTORY`, `O_CLOEXEC`, `O_NOFOLLOW` (`ELOOP` no link); segue links simbolicos, e `O_CREAT` por um link pendurado cria o alvo (2.7); sem modo de permissao |
+| 2 | open | parcial | `O_CREAT`, `O_EXCL`, `O_TRUNC`, `O_APPEND`, `O_NONBLOCK`, `O_DIRECTORY`, `O_CLOEXEC`, `O_NOFOLLOW` (`ELOOP` no link); segue links simbolicos, e `O_CREAT` por um link pendurado cria o alvo (2.7); arquivo novo com o modo pedido menos o `umask` (tmpfs e ext2; o FAT ignora o modo) |
 | 3 | close | completa | |
-| 4 | stat | completa | `struct stat` do Linux (144 bytes); `st_dev` e o numero da montagem, `st_ino` e estavel enquanto o arquivo existe (2.1); datas sao a hora do boot ate a 2.7 |
+| 4 | stat | completa | `struct stat` do Linux (144 bytes); `st_dev` e o numero da montagem, `st_ino` e estavel enquanto o arquivo existe (2.1); modo, dono, grupo, `st_nlink`, `st_blocks` e datas vem do sistema de arquivos (2.7): ext2 e tmpfs guardam tudo, FAT da as datas da entrada e o bit de somente leitura, devfs e procfs dao dono 0 e a hora do boot; pipe e socket dao a hora do boot |
 | 5 | fstat | completa | idem |
 | 6 | lstat | completa | nao segue o ultimo link (2.7) |
 | 7 | poll | completa | ate 32 descritores; `EINTR` com sinal |
@@ -68,9 +68,15 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 80 | chdir | completa | o processo guarda o vnode do diretorio (2.1); o texto do `getcwd` acompanha |
 | 81 | fchdir | completa | |
 | 82 | rename | completa | entre diretorios do mesmo sistema de arquivos; `EXDEV` entre montagens; por cima de destino existente (no FAT apaga o destino e depois renomeia, sem ser atomico) |
-| 83 | mkdir | parcial | sem modo de permissao |
+| 83 | mkdir | completa | modo pedido menos o `umask` (2.7) |
 | 84 | rmdir | completa | |
 | 87 | unlink | completa | |
+| 90 | chmod | completa | grava no inode do ext2 e no tmpfs; no FAT so liga e desliga o somente leitura (`0644`/`0444`, `0755`/`0555`), o resto da `EPERM`, como o `vfat` do Linux; devfs e procfs dao `EPERM`; `EROFS` em montagem so de leitura; sem conferir dono ate a 4.1 (2.7) |
+| 91 | fchmod | completa | como o `chmod`, pelo descritor; descritor sem vnode (pipe, socket) da `EINVAL` |
+| 92 | chown | completa | `-1` mantem o campo; tira `S_ISUID` (e `S_ISGID` com execucao do grupo) de quem nao e diretorio, como o Linux; dono de 32 bits no ext2; no FAT so aceita dono 0; sem conferir permissao ate a 4.1 (2.7) |
+| 93 | fchown | completa | como o `chown`, pelo descritor |
+| 94 | lchown | completa | nao segue o ultimo link |
+| 95 | umask | completa | por processo, herdado no `fork`, 022 no boot (2.7) |
 | 88 | symlink | completa | ext2 (alvo de ate 59 bytes dentro do inode, maior num bloco) e tmpfs; `EPERM` no FAT; alvo vazio da `ENOENT` (2.7) |
 | 89 | readlink | completa | nao segue o ultimo link; `EINVAL` para o que nao e link (2.7) |
 | 96 | gettimeofday | completa | fuso sempre zero |
@@ -88,10 +94,11 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 128 | rt_sigtimedwait | completa | `siginfo` com a origem (`kill`, `tkill`, `SIGCHLD`, falta de pagina); `si_uid` sempre 0 |
 | 130 | rt_sigsuspend | completa | a mascara volta depois do handler |
 | 131 | sigaltstack | stub | aceita e informa `SS_DISABLE`; os sinais rodam sempre na pilha normal (o plano pede stub) |
+| 132 | utime | completa | segundos; `NULL` usa a hora atual (2.7) |
 | 158 | arch_prctl | parcial | `ARCH_SET_FS` e `ARCH_GET_FS` |
 | 160 | setrlimit | completa | subir o maximo da `EPERM` |
 | 162 | sync | completa | |
-| 165 | mount | parcial | tipos `vfat` (`fat`, `msdos`) e `ext2` (so leitura) com dispositivo de bloco, `devfs` (`devtmpfs`), `tmpfs` (opcoes `size=` e `nr_inodes=`) e `proc`; `MS_RDONLY`; `MS_NOSUID`, `MS_NODEV`, `MS_NOEXEC`, `MS_SYNCHRONOUS`, `MS_SILENT` e os de `atime` aceitos sem efeito; `MS_REMOUNT`, `MS_BIND` e `MS_MOVE` dao `EINVAL`; um ponto de montagem por diretorio |
+| 165 | mount | parcial | tipos `vfat` (`fat`, `msdos`) e `ext2` com dispositivo de bloco, `devfs` (`devtmpfs`), `tmpfs` (opcoes `size=`, `nr_inodes=`, `mode=`, `uid=` e `gid=`) e `proc`; `MS_RDONLY`; `MS_NOSUID`, `MS_NODEV`, `MS_NOEXEC`, `MS_SYNCHRONOUS`, `MS_SILENT` e os de `atime` aceitos sem efeito; `MS_REMOUNT`, `MS_BIND` e `MS_MOVE` dao `EINVAL`; um ponto de montagem por diretorio |
 | 166 | umount2 | parcial | `EBUSY` com arquivo aberto, cwd ou montagem dentro; so a flag `UMOUNT_NOFOLLOW` (`MNT_FORCE`, `MNT_DETACH`, `MNT_EXPIRE` dao `EINVAL`) |
 | 186 | gettid | completa | tid de cada thread; a principal tem o pid |
 | 200 | tkill | completa | |
@@ -106,18 +113,24 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 230 | clock_nanosleep | parcial | `REALTIME`, `MONOTONIC`, `BOOTTIME`, `TAI`, relativo ou `TIMER_ABSTIME`; relogios de CPU dao `EOPNOTSUPP` |
 | 231 | exit_group | completa | encerra todas as threads do processo |
 | 234 | tgkill | completa | |
+| 235 | utimes | completa | microssegundos; `tv_usec` fora de 0 a 999999 da `EINVAL` (2.7) |
 | 257 | openat | completa | `AT_FDCWD` ou descritor de diretorio; o caminho e resolvido componente a componente, `..` atravessa montagens (2.1) |
-| 258 | mkdirat | parcial | idem; sem modo de permissao |
+| 258 | mkdirat | completa | idem; modo pedido menos o `umask` |
+| 260 | fchownat | completa | `AT_SYMLINK_NOFOLLOW`, `AT_EMPTY_PATH` (2.7) |
+| 261 | futimesat | completa | como o `utimes`, relativo ao descritor (2.7) |
 | 262 | newfstatat | completa | `AT_EMPTY_PATH`; `AT_SYMLINK_NOFOLLOW` nao segue o ultimo link (2.7) |
 | 263 | unlinkat | completa | `AT_REMOVEDIR` |
 | 264 | renameat | completa | |
 | 266 | symlinkat | completa | como o `symlink` |
 | 267 | readlinkat | completa | como o `readlink` |
+| 268 | fchmodat | completa | como o `chmod`, relativo ao descritor |
 | 269 | faccessat | parcial | como o `access` |
+| 280 | utimensat | completa | nanossegundos no tmpfs, segundos no ext2 (ate 2038), 2 s no FAT (so `mtime` e o dia do `atime`); `UTIME_NOW`, `UTIME_OMIT`, `AT_SYMLINK_NOFOLLOW`, `AT_EMPTY_PATH`, caminho `NULL` com descritor (o `futimens` da musl); muda o `ctime` para agora (2.7) |
 | 292 | dup3 | completa | `O_CLOEXEC` |
 | 293 | pipe2 | completa | `O_CLOEXEC`, `O_NONBLOCK` |
 | 302 | prlimit64 | parcial | so para o proprio processo |
 | 439 | faccessat2 | parcial | `AT_EACCESS`, `AT_SYMLINK_NOFOLLOW`, `AT_EMPTY_PATH`; como o `faccessat`, so confere a existencia (permissoes na 4.1) |
+| 452 | fchmodat2 | completa | `AT_SYMLINK_NOFOLLOW` (num link da `EOPNOTSUPP`, como o Linux), `AT_EMPTY_PATH` (2.7) |
 | 1000 | readdir | propria | uma entrada por chamada; a libc usa o `getdents64` |
 | 1001 | openpty | propria | |
 

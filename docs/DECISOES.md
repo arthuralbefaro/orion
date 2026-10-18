@@ -1792,3 +1792,75 @@ Uma linha por decisao, na ordem em que foram tomadas.
   `getcwd`, laco, pendurado, `O_CREAT` por pendurado, `O_NOFOLLOW`, 40 saltos
   passam e 41 dao `ELOOP`, alvo longo, `rename` e `unlink` do link. A
   sequencia A tambem roda `ln -s` e `readlink` do sbase.
+
+## v2.1.0-a7 (etapa 2.7 parte 2: modo, dono e datas)
+
+- Duas operacoes novas no `struct fs_type`: `getattr` e `setattr`, com uma
+  `struct vattr` (modo, dono, grupo, `nlink`, blocos, `atime`, `mtime` e
+  `ctime` com nanossegundos). O `stat` passa a sair de `vfs_getattr`, que
+  preenche os valores de antes (dono 0, `nlink` 2 ou 1, hora do boot) e deixa
+  o sistema de arquivos sobrescrever o que ele sabe. Quem nao tem `setattr`
+  (devfs, procfs) da `EPERM`; montagem so de leitura da `EROFS` antes de
+  chegar nele.
+- O vnode continua guardando o modo (`v->mode`), porque a VFS consulta o tipo
+  a toda hora sem trava. O `setattr` grava os bits de permissao nele com
+  `__atomic_store_n` depois de gravar no disco; o tipo nunca muda, entao quem
+  le sem trava nunca ve um tipo errado.
+- `chown` tira `S_ISUID`, e `S_ISGID` quando o grupo tem execucao, de tudo
+  que nao e diretorio, mesmo com `-1 -1`, como o Linux faz (a flag
+  `VA_KILL_SUID` e aplicada pelo sistema de arquivos dentro da trava dele,
+  para nao haver corrida entre ler o modo e gravar). Ainda nao ha conferencia
+  de permissao: todo processo e root ate a 4.1, que vai ligar isso.
+- `umask` por processo, 022 no boot, herdado no `fork`. `open` com `O_CREAT`
+  e `mkdir` passam o modo pedido menos o `umask` ao `create` do sistema de
+  arquivos (antes era sempre 0644 ou 0755). O dono do arquivo novo e 0 ate a
+  4.1.
+- ext2: o Rust ganhou `ext2_setattr` (modo, dono, grupo, `atime`, `mtime`;
+  o `ctime` vira a hora da chamada) e o `write_inode` passou a gravar dono e
+  grupo, inclusive os 16 bits altos (`l_i_uid_high`/`l_i_gid_high`, como o
+  Linux). As datas do ext2 sao segundos de 32 bits com sinal: o C limita o
+  que chega a faixa de 1901 a 2038 em vez de truncar. O `create` passou a
+  usar so os bits de permissao do modo recebido. O C le os atributos sempre
+  do inode (`ext2_stat` dentro do `em->lock`), sem copia no vnode que possa
+  ficar velha.
+- Ordem de travas do ext2, registrada aqui por ser a primeira etapa depois
+  da 2.6 que mexe nele: o `ns_lock` da montagem vem antes do `em->lock`, e
+  nunca se chama `vnode_put` segurando o `em->lock`, porque o `release` do
+  vnode de um arquivo apagado pega essa trava para liberar o inode. O
+  `getattr` e o `setattr` pegam so o `em->lock` e nao soltam vnode.
+- tmpfs: cada no guarda dono, grupo e as tres datas em nanossegundos (hora
+  real do `timesys_realtime`), mais a contagem de paginas (para o
+  `st_blocks`) e de subdiretorios (para o `nlink` de diretorio, 2 + filhos
+  diretorios, como no Linux; arquivo apagado ainda aberto tem `nlink` 0).
+  `write` e `truncate` atualizam `mtime` e `ctime`; criar, apagar e renomear
+  atualizam os do diretorio. A leitura nao atualiza o `atime` (como montar com
+  `noatime`): gravar o inode a cada leitura nao vale o custo aqui. As opcoes
+  `mode=`, `uid=` e `gid=` da montagem, antes aceitas e ignoradas, agora
+  valem para a raiz (padrao `01777`, dono 0).
+- FAT: as datas saem da entrada de diretorio (`mtime` da modificacao, `atime`
+  do dia do ultimo acesso, `ctime` da criacao, como o `vfat` do Linux), lidas
+  como UTC, a mesma hora do RTC (o `vvfat` do QEMU grava a hora local do
+  hospedeiro, por isso os arquivos do `out\esp` aparecem deslocados pelo
+  fuso). O bit de somente leitura vira modo sem escrita. O `setattr` grava o
+  que o FAT consegue guardar: datas (2 s de resolucao, entre 1980 e 2107),
+  liga e desliga o somente leitura (`chmod 444`/`644`), e aceita dono 0; o
+  resto da `EPERM`, como o `vfat` sem a opcao `quiet`. A raiz e os
+  diretorios achados so pelo `..` nao tem entrada conhecida (`has_entry`) e
+  recusam mudar datas. O vnode de diretorio que nasceu pelo `..` ganha a
+  entrada na primeira busca pelo nome.
+- Programas: o `ls` aceita `-l` (modo, links, dono e grupo pelo nome do
+  `/etc/passwd` e `/etc/group` quando existe, tamanho, data, `-> alvo`) e
+  varios caminhos; sem `-l` a saida e a mesma de antes. O `touch` passou a
+  atualizar as datas de arquivo que ja existe (`utimensat`), em vez de so
+  abrir. `chown` e `chgrp` do sbase entraram no `sbase-box`. `etc/passwd` e
+  `etc/group` (so o root) vao para o `out\esp\etc`. `attrtest` (novo) confere
+  `umask`, `chmod`, `fchmod`, `chown`, `fchown`, `lchown`, `fchownat`,
+  `utimensat` (com `UTIME_NOW`, `UTIME_OMIT` e `AT_SYMLINK_NOFOLLOW`),
+  `futimens`, `utime`, `utimes`, `mtime` e `ctime` mudando no `write`, no
+  `truncate` e no diretorio, `st_nlink` e `st_blocks`; deixa um arquivo com
+  modo, dono e datas conhecidos que `attrtest -k` confere depois de
+  remontar.
+- `build.ps1`: quando qualquer fonte do kernel e recompilada, o `main.c`
+  tambem e, para a hora do build na linha de boot (`__TIME__`) dizer de fato
+  quando o kernel foi montado. Antes ela so mudava quando o proprio `main.c`
+  mudava e nao servia para confirmar que o kernel testado era o novo.

@@ -366,6 +366,7 @@ static struct process *process_alloc(const char *name)
     }
     p->fd_cap = PROCESS_FD_INITIAL;
     rlimits_default(p);
+    p->umask = 022;
     strlcpy(p->name, name, sizeof(p->name));
     p->pml4_phys = vmm_create_address_space();
     if (!p->pml4_phys) {
@@ -889,6 +890,7 @@ int process_fork_stack(struct interrupt_frame *frame, uint64_t newsp)
     signal_copy_handlers(child, parent);
     child->parent = parent;
     memcpy(child->rlimits, parent->rlimits, sizeof(child->rlimits));
+    child->umask = __atomic_load_n(&parent->umask, __ATOMIC_RELAXED);
     uint64_t tflags = spin_lock_irqsave(&parent->tlock);
     strlcpy(child->cwd, parent->cwd, sizeof(child->cwd));
     child->cwd_vn = parent->cwd_vn;

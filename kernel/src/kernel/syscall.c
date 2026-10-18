@@ -278,14 +278,24 @@ static long sys_write(int fd, const void *ubuf, size_t len)
     return r;
 }
 
-static long sys_openat(int dirfd, const char *upath, int flags)
+static uint32_t create_mode(uint32_t mode)
+{
+    return mode & ~__atomic_load_n(&process_current()->umask, __ATOMIC_RELAXED) & 07777;
+}
+
+static long sys_umask(uint32_t mask)
+{
+    return __atomic_exchange_n(&process_current()->umask, mask & 0777, __ATOMIC_RELAXED);
+}
+
+static long sys_openat(int dirfd, const char *upath, int flags, uint32_t mode)
 {
     struct upath up;
     long r = upath_get(dirfd, upath, &up);
     struct file *f = NULL;
     bool followed = false;
     if (r == 0)
-        r = vfs_open_ex(up.start, up.path, flags, &f, &followed);
+        r = vfs_open_ex(up.start, up.path, flags, create_mode(mode), &f, &followed);
     upath_put(&up);
     if (r < 0)
         return r;
@@ -298,24 +308,24 @@ static long sys_openat(int dirfd, const char *upath, int flags)
     return fd;
 }
 
-static long sys_open(const char *upath, int flags)
+static long sys_open(const char *upath, int flags, uint32_t mode)
 {
-    return sys_openat(AT_FDCWD, upath, flags);
+    return sys_openat(AT_FDCWD, upath, flags, mode);
 }
 
-static long sys_mkdirat(int dirfd, const char *upath)
+static long sys_mkdirat(int dirfd, const char *upath, uint32_t mode)
 {
     struct upath up;
     long r = upath_get(dirfd, upath, &up);
     if (r == 0)
-        r = vfs_mkdir(up.start, up.path);
+        r = vfs_mkdir(up.start, up.path, create_mode(mode));
     upath_put(&up);
     return r;
 }
 
-static long sys_mkdir(const char *upath)
+static long sys_mkdir(const char *upath, uint32_t mode)
 {
-    return sys_mkdirat(AT_FDCWD, upath);
+    return sys_mkdirat(AT_FDCWD, upath, mode);
 }
 
 static long sys_unlinkat(int dirfd, const char *upath, bool is_dir)
@@ -605,21 +615,31 @@ static long sys_rt_sigprocmask(int how, const uint64_t *uset, uint64_t *uold, ui
     return r;
 }
 
-static void fill_stat(const struct vnode *v, uint32_t mode, struct user_stat *st)
+static void fill_stat(struct vnode *v, uint32_t mode, struct user_stat *st)
 {
     memset(st, 0, sizeof(*st));
+    st->st_blksize = 4096;
     if (v) {
-        st->st_size = (int64_t)v->size;
-        st->st_mode = v->mode;
+        struct vattr va;
+        vfs_getattr(v, &va);
+        st->st_size = (int64_t)__atomic_load_n(&v->size, __ATOMIC_ACQUIRE);
+        st->st_mode = va.mode;
         st->st_ino = v->ino;
         st->st_dev = v->mnt->id;
-        st->st_nlink = vnode_is_dir(v) ? 2 : 1;
-    } else {
-        st->st_mode = mode ? mode : S_IFIFO | 0600;
-        st->st_nlink = 1;
+        st->st_nlink = va.nlink;
+        st->st_uid = va.uid;
+        st->st_gid = va.gid;
+        st->st_blocks = (int64_t)va.blocks;
+        st->st_atime = va.atime.sec;
+        st->st_atime_nsec = va.atime.nsec;
+        st->st_mtime = va.mtime.sec;
+        st->st_mtime_nsec = va.mtime.nsec;
+        st->st_ctime = va.ctime.sec;
+        st->st_ctime_nsec = va.ctime.nsec;
+        return;
     }
-    st->st_blksize = 4096;
-    st->st_blocks = (st->st_size + 511) / 512;
+    st->st_mode = mode ? mode : S_IFIFO | 0600;
+    st->st_nlink = 1;
     int64_t t = (int64_t)rtc_boot_epoch();
     st->st_atime = st->st_mtime = st->st_ctime = t;
 }
@@ -659,6 +679,177 @@ static long sys_newfstatat(int dirfd, const char *upath, struct user_stat *ust, 
     fill_stat(v, 0, &st);
     vnode_put(v);
     return copy_to_user(ust, &st, sizeof(st));
+}
+
+static long fd_vnode(int fd, struct vnode **out)
+{
+    if (fd == AT_FDCWD) {
+        *out = process_cwd_vnode(process_current());
+        return *out ? 0 : -ENOENT;
+    }
+    struct file *f = process_fd_pin(fd);
+    if (!f)
+        return -EBADF;
+    if (!f->vn)
+        return -EINVAL;
+    vnode_get(f->vn);
+    *out = f->vn;
+    return 0;
+}
+
+static long attr_target(int dirfd, const char *upath, int flags, struct vnode **out)
+{
+    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))
+        return -EINVAL;
+    if (flags & AT_EMPTY_PATH) {
+        char c;
+        if (copy_from_user(&c, upath, 1) < 0)
+            return -EFAULT;
+        if (c == 0)
+            return fd_vnode(dirfd, out);
+    }
+    struct upath up;
+    return walk_user_ex(dirfd, upath, !(flags & AT_SYMLINK_NOFOLLOW), out, &up);
+}
+
+static long chmod_vnode(struct vnode *v, uint32_t mode)
+{
+    long r = -EOPNOTSUPP;
+    if (!vnode_is_link(v)) {
+        struct vattr va = { .mask = VA_MODE, .mode = mode & 07777 };
+        r = vfs_setattr(v, &va);
+    }
+    vnode_put(v);
+    return r;
+}
+
+static long sys_fchmodat2(int dirfd, const char *upath, uint32_t mode, int flags)
+{
+    struct vnode *v;
+    long r = attr_target(dirfd, upath, flags, &v);
+    return r < 0 ? r : chmod_vnode(v, mode);
+}
+
+static long sys_fchmod(int fd, uint32_t mode)
+{
+    struct vnode *v;
+    long r = fd == AT_FDCWD ? -EBADF : fd_vnode(fd, &v);
+    return r < 0 ? r : chmod_vnode(v, mode);
+}
+
+static long chown_vnode(struct vnode *v, uint32_t uid, uint32_t gid)
+{
+    struct vattr va = { 0 };
+    if (uid != (uint32_t)-1) {
+        va.mask |= VA_UID;
+        va.uid = uid;
+    }
+    if (gid != (uint32_t)-1) {
+        va.mask |= VA_GID;
+        va.gid = gid;
+    }
+    if (!vnode_is_dir(v))
+        va.mask |= VA_KILL_SUID;
+    long r = vfs_setattr(v, &va);
+    vnode_put(v);
+    return r;
+}
+
+static long sys_fchownat(int dirfd, const char *upath, uint32_t uid, uint32_t gid, int flags)
+{
+    struct vnode *v;
+    long r = attr_target(dirfd, upath, flags, &v);
+    return r < 0 ? r : chown_vnode(v, uid, gid);
+}
+
+static long sys_fchown(int fd, uint32_t uid, uint32_t gid)
+{
+    struct vnode *v;
+    long r = fd == AT_FDCWD ? -EBADF : fd_vnode(fd, &v);
+    return r < 0 ? r : chown_vnode(v, uid, gid);
+}
+
+static long set_times(int dirfd, const char *upath, int flags, const struct user_timespec *ts)
+{
+    struct vattr va = { 0 };
+    struct vfs_time now;
+    vfs_now(&now);
+    for (int i = 0; i < 2; i++) {
+        struct vfs_time *dst = i == 0 ? &va.atime : &va.mtime;
+        if (ts && ts[i].tv_nsec == UTIME_OMIT)
+            continue;
+        if (!ts || ts[i].tv_nsec == UTIME_NOW) {
+            *dst = now;
+        } else {
+            if (ts[i].tv_nsec < 0 || ts[i].tv_nsec > 999999999)
+                return -EINVAL;
+            dst->sec = ts[i].tv_sec;
+            dst->nsec = (uint32_t)ts[i].tv_nsec;
+        }
+        va.mask |= i == 0 ? VA_ATIME : VA_MTIME;
+    }
+    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))
+        return -EINVAL;
+    struct vnode *v;
+    long r;
+    if (!upath) {
+        if (dirfd == AT_FDCWD)
+            return -EFAULT;
+        if (flags)
+            return -EINVAL;
+        r = fd_vnode(dirfd, &v);
+    } else {
+        r = attr_target(dirfd, upath, flags, &v);
+    }
+    if (r < 0)
+        return r;
+    if (va.mask)
+        r = vfs_setattr(v, &va);
+    vnode_put(v);
+    return r;
+}
+
+static long sys_utimensat(int dirfd, const char *upath, const struct user_timespec *utimes, int flags)
+{
+    struct user_timespec ts[2];
+    if (utimes && copy_from_user(ts, utimes, sizeof(ts)) < 0)
+        return -EFAULT;
+    return set_times(dirfd, upath, flags, utimes ? ts : NULL);
+}
+
+static long sys_futimesat(int dirfd, const char *upath, const struct user_timeval *utv)
+{
+    struct user_timeval tv[2];
+    struct user_timespec ts[2];
+    if (utv) {
+        if (copy_from_user(tv, utv, sizeof(tv)) < 0)
+            return -EFAULT;
+        for (int i = 0; i < 2; i++) {
+            if (tv[i].tv_usec < 0 || tv[i].tv_usec > 999999)
+                return -EINVAL;
+            ts[i].tv_sec = tv[i].tv_sec;
+            ts[i].tv_nsec = tv[i].tv_usec * 1000;
+        }
+    }
+    if (!upath)
+        return set_times(dirfd, NULL, 0, utv ? ts : NULL);
+    return set_times(dirfd, upath, 0, utv ? ts : NULL);
+}
+
+static long sys_utime(const char *upath, const int64_t *ubuf)
+{
+    int64_t b[2];
+    struct user_timespec ts[2];
+    if (ubuf) {
+        if (copy_from_user(b, ubuf, sizeof(b)) < 0)
+            return -EFAULT;
+        ts[0].tv_sec = b[0];
+        ts[1].tv_sec = b[1];
+        ts[0].tv_nsec = ts[1].tv_nsec = 0;
+    }
+    if (!upath)
+        return -EFAULT;
+    return set_times(AT_FDCWD, upath, 0, ubuf ? ts : NULL);
 }
 
 static long faccess(int dirfd, const char *upath, int mode, bool follow)
@@ -1610,7 +1801,7 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_WRITE:       ret = sys_write((int)f->rdi, (const void *)f->rsi, (size_t)f->rdx); break;
     case SYS_PREAD64:     ret = sys_pread64((int)f->rdi, (void *)f->rsi, (size_t)f->rdx, (int64_t)f->r10); break;
     case SYS_PWRITE64:    ret = sys_pwrite64((int)f->rdi, (const void *)f->rsi, (size_t)f->rdx, (int64_t)f->r10); break;
-    case SYS_OPEN:        ret = sys_open((const char *)f->rdi, (int)f->rsi); break;
+    case SYS_OPEN:        ret = sys_open((const char *)f->rdi, (int)f->rsi, (uint32_t)f->rdx); break;
     case SYS_CLOSE:       ret = sys_close((int)f->rdi); break;
     case SYS_STAT:        ret = sys_stat((const char *)f->rdi, (struct user_stat *)f->rsi); break;
     case SYS_FSTAT:       ret = sys_fstat((int)f->rdi, (struct user_stat *)f->rsi); break;
@@ -1672,8 +1863,25 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_ACCESS:      ret = sys_faccessat(AT_FDCWD, (const char *)f->rdi, (int)f->rsi); break;
     case SYS_READLINK:    ret = sys_readlinkat(AT_FDCWD, (const char *)f->rdi, (char *)f->rsi, f->rdx); break;
     case SYS_GETDENTS64:  ret = sys_getdents64((int)f->rdi, (void *)f->rsi, f->rdx); break;
-    case SYS_OPENAT:      ret = sys_openat((int)f->rdi, (const char *)f->rsi, (int)f->rdx); break;
-    case SYS_MKDIRAT:     ret = sys_mkdirat((int)f->rdi, (const char *)f->rsi); break;
+    case SYS_OPENAT:      ret = sys_openat((int)f->rdi, (const char *)f->rsi, (int)f->rdx, (uint32_t)f->r10); break;
+    case SYS_MKDIRAT:     ret = sys_mkdirat((int)f->rdi, (const char *)f->rsi, (uint32_t)f->rdx); break;
+    case SYS_CHMOD:       ret = sys_fchmodat2(AT_FDCWD, (const char *)f->rdi, (uint32_t)f->rsi, 0); break;
+    case SYS_FCHMOD:      ret = sys_fchmod((int)f->rdi, (uint32_t)f->rsi); break;
+    case SYS_FCHMODAT:    ret = sys_fchmodat2((int)f->rdi, (const char *)f->rsi, (uint32_t)f->rdx, 0); break;
+    case SYS_FCHMODAT2:   ret = sys_fchmodat2((int)f->rdi, (const char *)f->rsi, (uint32_t)f->rdx, (int)f->r10); break;
+    case SYS_CHOWN:       ret = sys_fchownat(AT_FDCWD, (const char *)f->rdi, (uint32_t)f->rsi, (uint32_t)f->rdx, 0); break;
+    case SYS_LCHOWN:      ret = sys_fchownat(AT_FDCWD, (const char *)f->rdi, (uint32_t)f->rsi, (uint32_t)f->rdx,
+                                             AT_SYMLINK_NOFOLLOW); break;
+    case SYS_FCHOWN:      ret = sys_fchown((int)f->rdi, (uint32_t)f->rsi, (uint32_t)f->rdx); break;
+    case SYS_FCHOWNAT:    ret = sys_fchownat((int)f->rdi, (const char *)f->rsi, (uint32_t)f->rdx, (uint32_t)f->r10,
+                                             (int)f->r8); break;
+    case SYS_UMASK:       ret = sys_umask((uint32_t)f->rdi); break;
+    case SYS_UTIME:       ret = sys_utime((const char *)f->rdi, (const int64_t *)f->rsi); break;
+    case SYS_UTIMES:      ret = sys_futimesat(AT_FDCWD, (const char *)f->rdi, (const struct user_timeval *)f->rsi); break;
+    case SYS_FUTIMESAT:   ret = sys_futimesat((int)f->rdi, (const char *)f->rsi, (const struct user_timeval *)f->rdx);
+                          break;
+    case SYS_UTIMENSAT:   ret = sys_utimensat((int)f->rdi, (const char *)f->rsi, (const struct user_timespec *)f->rdx,
+                                              (int)f->r10); break;
     case SYS_NEWFSTATAT:  ret = sys_newfstatat((int)f->rdi, (const char *)f->rsi, (struct user_stat *)f->rdx, (int)f->r10); break;
     case SYS_UNLINKAT:    ret = sys_unlinkat((int)f->rdi, (const char *)f->rsi, (f->rdx & AT_REMOVEDIR) != 0); break;
     case SYS_RENAMEAT:    ret = sys_renameat((int)f->rdi, (const char *)f->rsi, (int)f->rdx, (const char *)f->r10); break;
@@ -1703,7 +1911,7 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_RT_SIGRETURN: ret = signal_sigreturn(f); full_restore = true; break;
     case SYS_ALARM:       ret = process_alarm(f->rdi); break;
     case SYS_SETPGID:     ret = process_setpgid((int)f->rdi, (int)f->rsi); break;
-    case SYS_MKDIR:       ret = sys_mkdir((const char *)f->rdi); break;
+    case SYS_MKDIR:       ret = sys_mkdir((const char *)f->rdi, (uint32_t)f->rsi); break;
     case SYS_RMDIR:       ret = sys_unlink((const char *)f->rdi, true); break;
     case SYS_UNLINK:      ret = sys_unlink((const char *)f->rdi, false); break;
     case SYS_RENAME:      ret = sys_rename((const char *)f->rdi, (const char *)f->rsi); break;

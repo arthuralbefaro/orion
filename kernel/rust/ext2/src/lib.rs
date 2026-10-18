@@ -88,6 +88,24 @@ pub struct Ext2Stat {
     pub blocks: u32,
 }
 
+#[repr(C)]
+pub struct Ext2Attr {
+    pub mask: u32,
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
+    pub atime: u32,
+    pub mtime: u32,
+}
+
+pub const ATTR_MODE: u32 = 1;
+pub const ATTR_UID: u32 = 2;
+pub const ATTR_GID: u32 = 4;
+pub const ATTR_ATIME: u32 = 8;
+pub const ATTR_MTIME: u32 = 16;
+const ATTR_ALL: u32 = ATTR_MODE | ATTR_UID | ATTR_GID | ATTR_ATIME | ATTR_MTIME;
+const PERM_MASK: u32 = 0o7777;
+
 struct Group {
     block_bitmap: u32,
     inode_bitmap: u32,
@@ -284,6 +302,10 @@ impl Fs {
         let mut raw = [0u8; 128];
         self.read_at(off, &mut raw, true)?;
         put16(&mut raw, 0, i.mode as u16);
+        put16(&mut raw, 2, i.uid as u16);
+        put16(&mut raw, 24, i.gid as u16);
+        put16(&mut raw, 120, (i.uid >> 16) as u16);
+        put16(&mut raw, 122, (i.gid >> 16) as u16);
         put16(&mut raw, 26, i.nlink as u16);
         put32(&mut raw, 32, i.flags);
         put32(&mut raw, 4, i.size as u32);
@@ -770,6 +792,34 @@ impl Fs {
         self.write_inode(ino_n, &ino)
     }
 
+    fn setattr(&mut self, ino_n: u32, a: &Ext2Attr, now: u32) -> Result<(), i32> {
+        self.writable()?;
+        if a.mask & !ATTR_ALL != 0 {
+            return Err(EINVAL);
+        }
+        let mut i = self.inode(ino_n)?;
+        if (i.mode & S_IFMT) == 0 {
+            return Err(ENOENT);
+        }
+        if a.mask & ATTR_MODE != 0 {
+            i.mode = (i.mode & S_IFMT) | (a.mode & PERM_MASK);
+        }
+        if a.mask & ATTR_UID != 0 {
+            i.uid = a.uid;
+        }
+        if a.mask & ATTR_GID != 0 {
+            i.gid = a.gid;
+        }
+        if a.mask & ATTR_ATIME != 0 {
+            i.atime = a.atime;
+        }
+        if a.mask & ATTR_MTIME != 0 {
+            i.mtime = a.mtime;
+        }
+        i.ctime = now;
+        self.write_inode(ino_n, &i)
+    }
+
     fn writable(&self) -> Result<(), i32> {
         if self.write.is_none() {
             Err(EROFS)
@@ -1079,7 +1129,7 @@ impl Fs {
         }
         let ino = self.alloc_inode(is_dir, self.group_of(dir_n))?;
         let mut node = Inode {
-            mode,
+            mode: kind | (mode & PERM_MASK),
             uid: 0,
             gid: 0,
             nlink: if is_dir { 2 } else { 1 },
@@ -1782,6 +1832,18 @@ pub unsafe extern "C" fn ext2_symlink(
             *out = ino;
             0
         }
+        Err(e) => errno(e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ext2_setattr(fs: *mut Fs, ino: u32, attr: *const Ext2Attr, now: u32) -> i32 {
+    let fs = &mut *fs;
+    if attr.is_null() {
+        return errno(EINVAL);
+    }
+    match fs.setattr(ino, &*attr, now) {
+        Ok(()) => 0,
         Err(e) => errno(e),
     }
 }

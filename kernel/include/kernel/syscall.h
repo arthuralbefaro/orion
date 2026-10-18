@@ -68,6 +68,21 @@
 #define SYS_RENAMEAT      264
 #define SYS_SYMLINKAT     266
 #define SYS_READLINKAT    267
+#define SYS_CHMOD         90
+#define SYS_FCHMOD        91
+#define SYS_CHOWN         92
+#define SYS_FCHOWN        93
+#define SYS_LCHOWN        94
+#define SYS_UMASK         95
+#define SYS_UTIME         132
+#define SYS_UTIMES        235
+#define SYS_FCHOWNAT      260
+#define SYS_FUTIMESAT     261
+#define SYS_FCHMODAT      268
+#define SYS_UTIMENSAT     280
+#define SYS_FCHMODAT2     452
+#define UTIME_NOW  ((1l << 30) - 1l)
+#define UTIME_OMIT ((1l << 30) - 2l)
 #define SYS_FACCESSAT     269
 #define SYS_FACCESSAT2    439
 #define SYS_MREMAP        25
@@ -241,6 +256,10 @@ struct user_pollfd {
 #define S_IFIFO 0010000
 #define S_IFLNK 0120000
 #define S_IFSOCK 0140000
+#define S_ISUID 04000
+#define S_ISGID 02000
+#define S_ISVTX 01000
+#define S_IXGRP 00010
 
 struct user_dirent {
     uint64_t size;

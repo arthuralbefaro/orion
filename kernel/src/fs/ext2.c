@@ -19,7 +19,18 @@ struct ext2_mnt {
 
 static uint32_t now_epoch(void)
 {
-    return (uint32_t)(rtc_boot_epoch() + time_uptime_ms() / 1000);
+    struct vfs_time t;
+    vfs_now(&t);
+    return (uint32_t)t.sec;
+}
+
+static uint32_t to_disk_time(int64_t sec)
+{
+    if (sec < INT32_MIN)
+        sec = INT32_MIN;
+    if (sec > INT32_MAX)
+        sec = INT32_MAX;
+    return (uint32_t)(int32_t)sec;
 }
 
 static int dev_read(void *ctx, uint64_t off, uint8_t *buf, uint32_t len, bool meta)
@@ -254,6 +265,62 @@ static int ext2v_symlink(struct vnode *dir, const char *name, const char *target
     return ino_vnode(dir->mnt, ino, out);
 }
 
+static int ext2v_getattr(struct vnode *v, struct vattr *out)
+{
+    struct ext2_mnt *em = em_of(v);
+    struct ext2_stat st;
+    mutex_lock(&em->lock);
+    int r = ext2_stat(em->fs, (uint32_t)v->key, &st);
+    mutex_unlock(&em->lock);
+    if (r < 0)
+        return r;
+    out->mode = (v->mode & S_IFMT) | (st.mode & 07777);
+    out->uid = st.uid;
+    out->gid = st.gid;
+    out->nlink = st.nlink;
+    out->blocks = st.blocks;
+    out->atime.sec = (int32_t)st.atime;
+    out->mtime.sec = (int32_t)st.mtime;
+    out->ctime.sec = (int32_t)st.ctime;
+    return 0;
+}
+
+static int ext2v_setattr(struct vnode *v, const struct vattr *in)
+{
+    struct ext2_mnt *em = em_of(v);
+    struct ext2_attr a = { 0 };
+    if (in->mask & VA_UID) {
+        a.mask |= EXT2_ATTR_UID;
+        a.uid = in->uid;
+    }
+    if (in->mask & VA_GID) {
+        a.mask |= EXT2_ATTR_GID;
+        a.gid = in->gid;
+    }
+    if (in->mask & VA_ATIME) {
+        a.mask |= EXT2_ATTR_ATIME;
+        a.atime = to_disk_time(in->atime.sec);
+    }
+    if (in->mask & VA_MTIME) {
+        a.mask |= EXT2_ATTR_MTIME;
+        a.mtime = to_disk_time(in->mtime.sec);
+    }
+    mutex_lock(&em->lock);
+    int r = 0;
+    if (in->mask & (VA_MODE | VA_KILL_SUID)) {
+        struct ext2_stat st;
+        r = ext2_stat(em->fs, (uint32_t)v->key, &st);
+        a.mask |= EXT2_ATTR_MODE;
+        a.mode = vattr_apply_mode(st.mode, in);
+    }
+    if (r == 0)
+        r = ext2_setattr(em->fs, (uint32_t)v->key, &a, now_epoch());
+    if (r == 0 && (a.mask & EXT2_ATTR_MODE))
+        __atomic_store_n(&v->mode, (v->mode & S_IFMT) | (a.mode & 07777), __ATOMIC_RELEASE);
+    mutex_unlock(&em->lock);
+    return r;
+}
+
 static void forget(struct vnode *victim, uint32_t nlink)
 {
     if (nlink)
@@ -383,5 +450,7 @@ const struct fs_type ext2_fs_type = {
     .symlink = ext2v_symlink,
     .unlink = ext2v_unlink,
     .rename = ext2v_rename,
+    .getattr = ext2v_getattr,
+    .setattr = ext2v_setattr,
     .release = ext2v_release,
 };

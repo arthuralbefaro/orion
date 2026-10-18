@@ -9,6 +9,8 @@
 #include <kernel/log.h>
 #include <kernel/sched.h>
 #include <kernel/spinlock.h>
+#include <kernel/timesys.h>
+#include <drivers/rtc.h>
 #include <mm/heap.h>
 #include <lib/string.h>
 
@@ -393,6 +395,44 @@ bool vfs_is_rdonly(const struct vnode *v)
     return (v->mnt->flags & MNT_RDONLY) != 0;
 }
 
+void vfs_now(struct vfs_time *t)
+{
+    timesys_realtime(&t->sec, &t->nsec);
+}
+
+void vfs_getattr(struct vnode *v, struct vattr *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->mode = v->mode;
+    out->nlink = vnode_is_dir(v) ? 2 : 1;
+    out->blocks = (__atomic_load_n(&v->size, __ATOMIC_ACQUIRE) + 511) / 512;
+    out->atime.sec = out->mtime.sec = out->ctime.sec = (int64_t)rtc_boot_epoch();
+    if (v->mnt->type->getattr)
+        v->mnt->type->getattr(v, out);
+}
+
+uint32_t vattr_apply_mode(uint32_t old, const struct vattr *in)
+{
+    uint32_t m = old;
+    if (in->mask & VA_MODE)
+        m = (old & S_IFMT) | (in->mode & 07777);
+    if ((in->mask & VA_KILL_SUID) && (m & S_IFMT) != S_IFDIR) {
+        m &= ~(uint32_t)S_ISUID;
+        if (m & S_IXGRP)
+            m &= ~(uint32_t)S_ISGID;
+    }
+    return m;
+}
+
+int vfs_setattr(struct vnode *v, const struct vattr *in)
+{
+    if (vfs_is_rdonly(v))
+        return -EROFS;
+    if (!v->mnt->type->setattr)
+        return -EPERM;
+    return v->mnt->type->setattr(v, in);
+}
+
 static struct vnode *follow_mounts(struct vnode *v)
 {
     uint64_t fl = spin_lock_irqsave(&vfs_lock);
@@ -624,8 +664,8 @@ static int walk_parent(struct vnode *start, const char *path, struct nameidata *
     return walk_core(start, path, 0, nd, NULL, &nd->followed);
 }
 
-static int open_create(struct vnode *start, const char *path, int flags, struct vnode **out, bool *created,
-                       bool *followed)
+static int open_create(struct vnode *start, const char *path, int flags, uint32_t mode, struct vnode **out,
+                       bool *created, bool *followed)
 {
     char *buf = NULL;
     struct vnode *hold = NULL;
@@ -674,7 +714,7 @@ static int open_create(struct vnode *start, const char *path, int flags, struct 
             else if (!m->type->create)
                 r = -EPERM;
             else {
-                r = m->type->create(nd.dir, nd.last, S_IFREG | 0644, &v);
+                r = m->type->create(nd.dir, nd.last, S_IFREG | (mode & 07777), &v);
                 *created = r == 0;
             }
         }
@@ -708,7 +748,8 @@ static int open_create(struct vnode *start, const char *path, int flags, struct 
     return r;
 }
 
-static int open_path(struct vnode *start, const char *path, int flags, struct file **out, bool *followed)
+static int open_path(struct vnode *start, const char *path, int flags, uint32_t mode, struct file **out,
+                     bool *followed)
 {
     struct vnode *v = NULL;
     bool created = false;
@@ -717,7 +758,7 @@ static int open_path(struct vnode *start, const char *path, int flags, struct fi
     int r;
 
     if (flags & O_CREAT) {
-        r = open_create(start, path, flags, &v, &created, followed);
+        r = open_create(start, path, flags, mode, &v, &created, followed);
         if (r < 0)
             return r;
     } else {
@@ -765,10 +806,11 @@ static int open_path(struct vnode *start, const char *path, int flags, struct fi
     return 0;
 }
 
-int vfs_open_ex(struct vnode *start, const char *path, int flags, struct file **out, bool *followed)
+int vfs_open_ex(struct vnode *start, const char *path, int flags, uint32_t mode, struct file **out,
+                bool *followed)
 {
     bool f = false;
-    int r = open_path(start, path, flags, out, &f);
+    int r = open_path(start, path, flags, mode, out, &f);
     if (followed)
         *followed = f;
     return r;
@@ -776,10 +818,10 @@ int vfs_open_ex(struct vnode *start, const char *path, int flags, struct file **
 
 int vfs_open(struct vnode *start, const char *path, int flags, struct file **out)
 {
-    return vfs_open_ex(start, path, flags, out, NULL);
+    return vfs_open_ex(start, path, flags, 0644, out, NULL);
 }
 
-int vfs_mkdir(struct vnode *start, const char *path)
+int vfs_mkdir(struct vnode *start, const char *path, uint32_t mode)
 {
     struct nameidata nd;
     int r = walk_parent(start, path, &nd);
@@ -803,7 +845,7 @@ int vfs_mkdir(struct vnode *start, const char *path)
             r = -EPERM;
         else {
             v = NULL;
-            r = m->type->create(nd.dir, nd.last, S_IFDIR | 0755, &v);
+            r = m->type->create(nd.dir, nd.last, S_IFDIR | (mode & 07777), &v);
             if (r == 0)
                 vnode_put(v);
         }
@@ -1330,7 +1372,7 @@ int vfs_mount_kernel(const char *type, struct blockdev *dev, const char *source,
         return -ENODEV;
     struct vnode *target;
     int r = vfs_walk(NULL, point, &target);
-    if (r == -ENOENT && vfs_mkdir(NULL, point) == 0)
+    if (r == -ENOENT && vfs_mkdir(NULL, point, 0755) == 0)
         r = vfs_walk(NULL, point, &target);
     if (r < 0)
         return r;

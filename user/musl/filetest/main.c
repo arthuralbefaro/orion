@@ -69,7 +69,8 @@ int main(int argc, char **argv)
     memset(&st, 0, sizeof(st));
     check("stat de /bin/sh", stat("/bin/sh", &st) == 0);
     check("st_mode e regular e st_size > 0", S_ISREG(st.st_mode) && st.st_size > 1000);
-    check("st_blocks em setores de 512", st.st_blocks == (st.st_size + 511) / 512);
+    check("st_blocks em setores de 512 (o que o disco aloca)",
+          st.st_blocks * 512 >= st.st_size && st.st_blocks * 512 < st.st_size + 65536);
     check("st_nlink = 1", st.st_nlink == 1);
     long size_sh = (long)st.st_size;
 

@@ -61,18 +61,24 @@ $newestHeader = ($headers | Sort-Object LastWriteTime -Descending | Select-Objec
 
 $objects = @()
 $compiled = 0
+$staleSet = @{}
 foreach ($src in $sources) {
     $rel = $src.FullName.Substring($SrcDir.Length + 1)
     $obj = Join-Path $BuildDir ($rel + ".o")
-    $objDir = Split-Path $obj -Parent
-    if (-not (Test-Path $objDir)) { New-Item -ItemType Directory -Path $objDir -Force | Out-Null }
-
     $stale = -not (Test-Path $obj)
     if (-not $stale) {
         $objTime = (Get-Item $obj).LastWriteTime
         $stale = ($objTime -lt $src.LastWriteTime) -or ($objTime -lt $newestHeader)
     }
-    if ($stale) {
+    if ($stale) { $staleSet[$rel] = $true }
+}
+if ($staleSet.Count -gt 0) { $staleSet["kernel\main.c"] = $true }
+foreach ($src in $sources) {
+    $rel = $src.FullName.Substring($SrcDir.Length + 1)
+    $obj = Join-Path $BuildDir ($rel + ".o")
+    $objDir = Split-Path $obj -Parent
+    if (-not (Test-Path $objDir)) { New-Item -ItemType Directory -Path $objDir -Force | Out-Null }
+    if ($staleSet.ContainsKey($rel)) {
         Write-Host "  CC   $rel"
         & $Clang @CFlags -c $src.FullName -o $obj
         if ($LASTEXITCODE -ne 0) { throw "Erro compilando $rel" }
@@ -222,6 +228,7 @@ Copy-Item (Join-Path $Root "limine.conf") (Join-Path $EspDir "boot\limine\limine
 New-Item -ItemType Directory -Force -Path (Join-Path $EspDir "etc") | Out-Null
 $autostart = if ($Gui) { "/bin/dhcp`nshell /bin/wm" } else { (Get-Content (Join-Path $Root "etc\autostart") -Raw) }
 Set-Content -Path (Join-Path $EspDir "etc\autostart") -Value $autostart -Encoding ascii -NoNewline:$false
+foreach ($name in @("passwd", "group")) { Copy-Item (Join-Path $Root "etc\$name") (Join-Path $EspDir "etc\$name") -Force }
 Write-Host "OK: out\$Kernel.elf ($compiled arquivo(s) do kernel recompilado(s)), $($userBins.Count) programa(s) em esp\bin" -ForegroundColor Green
 
 if ($Run) {

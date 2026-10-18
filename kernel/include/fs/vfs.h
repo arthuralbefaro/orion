@@ -13,6 +13,13 @@
 
 #define MNT_RDONLY 1u
 
+#define VA_MODE      1u
+#define VA_UID       2u
+#define VA_GID       4u
+#define VA_ATIME     8u
+#define VA_MTIME     16u
+#define VA_KILL_SUID 32u
+
 struct vnode;
 struct mount;
 struct file;
@@ -24,6 +31,23 @@ struct vfs_dirent {
     uint64_t size;
     uint64_t next;
     uint32_t mode;
+};
+
+struct vfs_time {
+    int64_t sec;
+    uint32_t nsec;
+};
+
+struct vattr {
+    uint32_t mask;
+    uint32_t mode;
+    uint32_t uid;
+    uint32_t gid;
+    uint32_t nlink;
+    uint64_t blocks;
+    struct vfs_time atime;
+    struct vfs_time mtime;
+    struct vfs_time ctime;
 };
 
 typedef bool (*vfs_dir_cb)(const struct vfs_dirent *entry, void *ctx);
@@ -46,6 +70,8 @@ struct fs_type {
     int (*unlink)(struct vnode *dir, const char *name, struct vnode *victim);
     int (*rename)(struct vnode *odir, const char *oname, struct vnode *ndir, const char *nname,
                   struct vnode *v, struct vnode *victim);
+    int (*getattr)(struct vnode *v, struct vattr *out);
+    int (*setattr)(struct vnode *v, const struct vattr *in);
     int (*open)(struct vnode *v, int flags, struct file **out);
     void (*release)(struct vnode *v);
 };
@@ -127,8 +153,9 @@ struct vnode *vfs_root(void);
 int vfs_walk(struct vnode *start, const char *path, struct vnode **out);
 int vfs_walk_ex(struct vnode *start, const char *path, bool follow, struct vnode **out, bool *followed);
 int vfs_open(struct vnode *start, const char *path, int flags, struct file **out);
-int vfs_open_ex(struct vnode *start, const char *path, int flags, struct file **out, bool *followed);
-int vfs_mkdir(struct vnode *start, const char *path);
+int vfs_open_ex(struct vnode *start, const char *path, int flags, uint32_t mode, struct file **out,
+                bool *followed);
+int vfs_mkdir(struct vnode *start, const char *path, uint32_t mode);
 int vfs_symlink(struct vnode *start, const char *path, const char *target);
 int vfs_unlink(struct vnode *start, const char *path, bool is_dir);
 int vfs_rename(struct vnode *ostart, const char *opath, struct vnode *nstart, const char *npath);
@@ -136,6 +163,10 @@ int vfs_rename(struct vnode *ostart, const char *opath, struct vnode *nstart, co
 int64_t vfs_read(struct vnode *v, uint64_t offset, void *buf, uint64_t len);
 int64_t vfs_write(struct vnode *v, uint64_t *offset, const void *buf, uint64_t len, bool append);
 int vfs_truncate(struct vnode *v, uint64_t size);
+void vfs_getattr(struct vnode *v, struct vattr *out);
+int vfs_setattr(struct vnode *v, const struct vattr *in);
+void vfs_now(struct vfs_time *t);
+uint32_t vattr_apply_mode(uint32_t old, const struct vattr *in);
 int vfs_readdir_vnode(struct vnode *dir, uint64_t *pos, vfs_dir_cb cb, void *ctx);
 int vfs_getpath(struct vnode *v, char *buf, size_t size);
 bool vfs_readdir(const char *path, vfs_dir_cb cb, void *ctx);

@@ -61,3 +61,4 @@ long sys_getitimer(int which, struct user_itimerval *uit);
 long sys_setitimer(int which, const struct user_itimerval *unew, struct user_itimerval *uold);
 long rusage_to_user(const struct cpu_times *t, struct user_rusage *uru);
 long timesys_restart_sleep(void);
+void timesys_realtime(int64_t *sec, uint32_t *nsec);

@@ -14,7 +14,14 @@
 struct tnode {
     uint64_t ino;
     uint32_t mode;
+    uint32_t uid;
+    uint32_t gid;
+    uint32_t subdirs;
     uint64_t size;
+    uint64_t pages;
+    struct vfs_time atime;
+    struct vfs_time mtime;
+    struct vfs_time ctime;
     char *name;
     char *link;
     struct tnode *parent;
@@ -85,7 +92,7 @@ static uint64_t cover(uint8_t height)
     return 1ull << (RADIX_SHIFT * height);
 }
 
-static uint64_t *page_slot(struct tmpfs *t, struct tnode *n, uint64_t idx, bool create)
+static uint64_t *page_slot_raw(struct tmpfs *t, struct tnode *n, uint64_t idx, bool create)
 {
     if (!n->top) {
         if (!create)
@@ -118,6 +125,14 @@ static uint64_t *page_slot(struct tmpfs *t, struct tnode *n, uint64_t idx, bool 
     return slot;
 }
 
+static uint64_t *page_slot(struct tmpfs *t, struct tnode *n, uint64_t idx, bool create)
+{
+    uint64_t before = t->used_pages;
+    uint64_t *slot = page_slot_raw(t, n, idx, create);
+    n->pages += t->used_pages - before;
+    return slot;
+}
+
 static void free_level(struct tmpfs *t, uint64_t *slot, uint8_t lvl, uint64_t base, uint64_t first)
 {
     if (!*slot)
@@ -135,7 +150,9 @@ static void free_level(struct tmpfs *t, uint64_t *slot, uint8_t lvl, uint64_t ba
 
 static void free_from(struct tmpfs *t, struct tnode *n, uint64_t first)
 {
+    uint64_t before = t->used_pages;
     free_level(t, &n->top, n->height, 0, first);
+    n->pages -= before - t->used_pages;
     if (!n->top)
         n->height = 0;
 }
@@ -178,6 +195,8 @@ static struct tnode *new_node(struct tmpfs *t, const char *name, uint32_t mode)
     }
     n->ino = t->next_ino++;
     n->mode = mode;
+    vfs_now(&n->mtime);
+    n->atime = n->ctime = n->mtime;
     t->nr_inodes++;
     return n;
 }
@@ -187,6 +206,8 @@ static void link_child(struct tnode *dir, struct tnode *n)
     n->parent = dir;
     n->next = NULL;
     n->seq = dir->next_seq++;
+    if (is_dir(n))
+        dir->subdirs++;
     if (dir->last)
         dir->last->next = n;
     else
@@ -211,6 +232,15 @@ static void unlink_child(struct tnode *dir, struct tnode *n)
     }
     n->next = NULL;
     n->linked = false;
+    if (is_dir(n))
+        dir->subdirs--;
+}
+
+static void touch(struct tnode *n, bool modified)
+{
+    vfs_now(&n->ctime);
+    if (modified)
+        n->mtime = n->ctime;
 }
 
 static struct tnode *find_child(struct tnode *dir, const char *name)
@@ -326,8 +356,13 @@ static int64_t write_locked(struct tmpfs *t, struct tnode *n, uint64_t offset, c
         if (chunk > len - done)
             chunk = len - done;
         uint64_t *slot = page_slot(t, n, pos / PAGE_SIZE, true);
-        if (!slot || (!*slot && !take_page(t, slot)))
+        if (!slot)
             break;
+        if (!*slot) {
+            if (!take_page(t, slot))
+                break;
+            n->pages++;
+        }
         memcpy((uint8_t *)phys_to_virt(*slot) + within, in + done, chunk);
         done += chunk;
     }
@@ -349,6 +384,8 @@ static int64_t tmpfs_write(struct vnode *v, uint64_t *offp, const void *buf, uin
     int64_t r = len ? write_locked(t, n, offset, buf, len) : 0;
     if (r > 0 && offset + (uint64_t)r > n->size)
         set_size(v, n, offset + (uint64_t)r);
+    if (r > 0)
+        touch(n, true);
     if (r < (int64_t)len)
         free_from(t, n, (n->size + PAGE_SIZE - 1) / PAGE_SIZE);
     *offp = offset + (r > 0 ? (uint64_t)r : 0);
@@ -372,6 +409,7 @@ static int tmpfs_truncate(struct vnode *v, uint64_t size)
             memset((uint8_t *)phys_to_virt(*slot) + within, 0, PAGE_SIZE - within);
     }
     set_size(v, n, size);
+    touch(n, true);
     mutex_unlock(&t->lock);
     return 0;
 }
@@ -396,7 +434,7 @@ static int tmpfs_create(struct vnode *dir, const char *name, uint32_t mode, stru
         r = -EEXIST;
     struct tnode *n = NULL;
     if (r == 0) {
-        n = new_node(t, name, (mode & S_IFMT) == S_IFDIR ? (S_IFDIR | 0755) : (S_IFREG | 0644));
+        n = new_node(t, name, ((mode & S_IFMT) == S_IFDIR ? S_IFDIR : S_IFREG) | (mode & 07777));
         if (!n)
             r = -ENOSPC;
     }
@@ -406,6 +444,8 @@ static int tmpfs_create(struct vnode *dir, const char *name, uint32_t mode, stru
         if (r < 0) {
             unlink_child(d, n);
             maybe_free(t, n);
+        } else {
+            touch(d, true);
         }
     }
     mutex_unlock(&t->lock);
@@ -442,6 +482,8 @@ static int tmpfs_symlink(struct vnode *dir, const char *name, const char *target
         if (r < 0) {
             unlink_child(d, n);
             maybe_free(t, n);
+        } else {
+            touch(d, true);
         }
     }
     mutex_unlock(&t->lock);
@@ -479,6 +521,8 @@ static int tmpfs_unlink(struct vnode *dir, const char *name, struct vnode *victi
         r = -ENOTEMPTY;
     if (r == 0) {
         unlink_child(d, n);
+        touch(d, true);
+        touch(n, false);
         victim->unlinked = true;
         vcache_unhash(victim);
     }
@@ -509,6 +553,7 @@ static int tmpfs_rename(struct vnode *odir, const char *oname, struct vnode *ndi
     if (r == 0) {
         if (clash && clash != n) {
             unlink_child(nd, clash);
+            touch(clash, false);
             victim->unlinked = true;
             vcache_unhash(victim);
         }
@@ -518,9 +563,49 @@ static int tmpfs_rename(struct vnode *odir, const char *oname, struct vnode *ndi
             unlink_child(od, n);
             link_child(nd, n);
         }
+        touch(od, true);
+        touch(nd, true);
+        touch(n, false);
     }
     mutex_unlock(&t->lock);
     return r;
+}
+
+static int tmpfs_getattr(struct vnode *v, struct vattr *out)
+{
+    struct tmpfs *t = v->mnt->priv;
+    struct tnode *n = v->priv;
+    mutex_lock(&t->lock);
+    out->mode = n->mode;
+    out->uid = n->uid;
+    out->gid = n->gid;
+    out->nlink = is_dir(n) ? (n->linked ? 2 + n->subdirs : 0) : (n->linked ? 1 : 0);
+    out->blocks = n->pages * (PAGE_SIZE / 512);
+    out->atime = n->atime;
+    out->mtime = n->mtime;
+    out->ctime = n->ctime;
+    mutex_unlock(&t->lock);
+    return 0;
+}
+
+static int tmpfs_setattr(struct vnode *v, const struct vattr *in)
+{
+    struct tmpfs *t = v->mnt->priv;
+    struct tnode *n = v->priv;
+    mutex_lock(&t->lock);
+    n->mode = vattr_apply_mode(n->mode, in);
+    if (in->mask & VA_UID)
+        n->uid = in->uid;
+    if (in->mask & VA_GID)
+        n->gid = in->gid;
+    if (in->mask & VA_ATIME)
+        n->atime = in->atime;
+    if (in->mask & VA_MTIME)
+        n->mtime = in->mtime;
+    vfs_now(&n->ctime);
+    __atomic_store_n(&v->mode, n->mode, __ATOMIC_RELEASE);
+    mutex_unlock(&t->lock);
+    return 0;
 }
 
 static void tmpfs_release(struct vnode *v)
@@ -598,7 +683,40 @@ static int parse_number(const char **sp, uint64_t *out)
     return 0;
 }
 
-static int parse_opts(const char *data, uint64_t total_pages, uint64_t *max_pages, uint64_t *max_inodes)
+struct tmpfs_opts {
+    uint64_t max_pages;
+    uint64_t max_inodes;
+    uint32_t mode;
+    uint32_t uid;
+    uint32_t gid;
+};
+
+static int parse_octal(const char **sp, uint32_t *out)
+{
+    const char *s = *sp;
+    uint32_t v = 0;
+    if (*s < '0' || *s > '7')
+        return -EINVAL;
+    while (*s >= '0' && *s <= '7') {
+        v = v * 8 + (uint32_t)(*s++ - '0');
+        if (v > 07777)
+            return -EINVAL;
+    }
+    *sp = s;
+    *out = v;
+    return 0;
+}
+
+static int parse_id(const char **sp, uint32_t *out)
+{
+    uint64_t v;
+    if (parse_number(sp, &v) < 0 || v > 0xFFFFFFFEu)
+        return -EINVAL;
+    *out = (uint32_t)v;
+    return 0;
+}
+
+static int parse_opts(const char *data, uint64_t total_pages, struct tmpfs_opts *o)
 {
     const char *s = data ? data : "";
     while (*s) {
@@ -615,15 +733,24 @@ static int parse_opts(const char *data, uint64_t total_pages, uint64_t *max_page
             } else {
                 v = v / PAGE_SIZE + (v % PAGE_SIZE != 0);
             }
-            *max_pages = v ? v : total_pages;
+            o->max_pages = v ? v : total_pages;
         } else if (strncmp(s, "nr_inodes=", 10) == 0) {
             s += 10;
             if (parse_number(&s, &v) < 0)
                 return -EINVAL;
-            *max_inodes = v ? v : UINT64_MAX;
-        } else if (strncmp(s, "mode=", 5) == 0 || strncmp(s, "uid=", 4) == 0 || strncmp(s, "gid=", 4) == 0) {
-            while (*s && *s != ',')
-                s++;
+            o->max_inodes = v ? v : UINT64_MAX;
+        } else if (strncmp(s, "mode=", 5) == 0) {
+            s += 5;
+            if (parse_octal(&s, &o->mode) < 0)
+                return -EINVAL;
+        } else if (strncmp(s, "uid=", 4) == 0) {
+            s += 4;
+            if (parse_id(&s, &o->uid) < 0)
+                return -EINVAL;
+        } else if (strncmp(s, "gid=", 4) == 0) {
+            s += 4;
+            if (parse_id(&s, &o->gid) < 0)
+                return -EINVAL;
         } else {
             return -EINVAL;
         }
@@ -640,16 +767,20 @@ static int tmpfs_mount(struct mount *m, struct blockdev *dev, const char *data)
     (void)dev;
     struct pmm_stats st;
     pmm_get_stats(&st);
-    uint64_t max_pages = st.total_pages / 2, max_inodes = st.total_pages / 2;
-    if (parse_opts(data, st.total_pages, &max_pages, &max_inodes) < 0)
+    struct tmpfs_opts o = { .max_pages = st.total_pages / 2, .max_inodes = st.total_pages / 2, .mode = 01777 };
+    if (parse_opts(data, st.total_pages, &o) < 0)
         return -EINVAL;
     struct tmpfs *t = kzalloc(sizeof(*t));
     if (!t)
         return -ENOMEM;
-    t->max_pages = max_pages;
-    t->max_inodes = max_inodes;
+    t->max_pages = o.max_pages;
+    t->max_inodes = o.max_inodes;
     t->next_ino = 1;
-    t->root = new_node(t, "/", S_IFDIR | 01777);
+    t->root = new_node(t, "/", S_IFDIR | o.mode);
+    if (t->root) {
+        t->root->uid = o.uid;
+        t->root->gid = o.gid;
+    }
     struct vnode *root = t->root ? vnode_new(m, t->root->ino, t->root->mode) : NULL;
     if (!root) {
         if (t->root)
@@ -682,6 +813,8 @@ const struct fs_type tmpfs_type = {
     .symlink = tmpfs_symlink,
     .unlink = tmpfs_unlink,
     .rename = tmpfs_rename,
+    .getattr = tmpfs_getattr,
+    .setattr = tmpfs_setattr,
     .release = tmpfs_release,
 };
 

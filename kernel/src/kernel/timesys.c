@@ -19,6 +19,13 @@ static uint64_t realtime_us(void)
     return rtc_boot_epoch() * USEC_PER_SEC + time_now_us();
 }
 
+void timesys_realtime(int64_t *sec, uint32_t *nsec)
+{
+    uint64_t us = realtime_us();
+    *sec = (int64_t)(us / USEC_PER_SEC);
+    *nsec = (uint32_t)(us % USEC_PER_SEC) * 1000;
+}
+
 static void us_to_timespec(uint64_t us, struct user_timespec *ts)
 {
     ts->tv_sec = (int64_t)(us / USEC_PER_SEC);
