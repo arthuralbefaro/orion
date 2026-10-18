@@ -59,6 +59,15 @@ function Test-MemDelta([string]$log, [string]$what, [int]$max) {
     }
 }
 
+function Start-HostWeb([int]$port) {
+    $py = & (Join-Path $Root "tools\python.ps1")
+    $pyArgs = @($py | Select-Object -Skip 1) + @((Join-Path $Root "tools\hostweb.py"), "--port", "$port")
+    $p = Start-Process -FilePath $py[0] -ArgumentList $pyArgs -PassThru -WindowStyle Hidden `
+        -RedirectStandardError (Join-Path $Root "out\hostweb.log")
+    Start-Sleep -Seconds 2
+    return $p
+}
+
 function Test-ShotColors([string]$ppm, [string]$what, [int]$min) {
     $script:checks++
     $path = Join-Path $Root $ppm
@@ -156,6 +165,10 @@ if ($runAll -or $OnlyA) {
         "cmd:ifconfig", "wait:2",
         "cmd:ping 10.0.2.2 3", "wait:10",
         "tcpprobe:5555",
+        "cmd:httpget 10.0.2.2 8088 /index.html", "until:30:crc32",
+        "cmd:httpget -o /tmp/big.bin 10.0.2.2 8088 /big.bin", "until:90:crc32",
+        "cmd:wc /tmp/big.bin", "cmd:rm /tmp/big.bin", "wait:1",
+        "cmd:httpget example.com 80 /", "until:30:httpget:",
         "cmd:nslookup example.com", "wait:8",
         "cmd:nslookup example.com", "wait:8",
         "cmd:GREETING=ola-mundo", "wait:1",
@@ -185,8 +198,10 @@ if ($runAll -or $OnlyA) {
         "cmd:echo sobrevive-ao-reboot > /reboot.txt", "cmd:sync", "wait:3", "reboot:",
         "cmd:cat /reboot.txt", "cmd:rm /reboot.txt", "cmd:mount", "wait:1"
     )
+    $web = Start-HostWeb 8088
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image @buildFlag -HostFwd @("tcp:127.0.0.1:5555-:7") -LogPath "out\reg-a.log" `
         -Script $stepsA -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
+    Stop-Process -Id $web.Id -Force -ErrorAction SilentlyContinue
     $a = Get-Log "out\reg-a.log"
     if ($Verbose) { Write-Output $a }
 
@@ -326,6 +341,11 @@ if ($runAll -or $OnlyA) {
     Expect $a "/dev/sda2 / ext2 rw 0 0" "raiz ext2 montada com escrita"
     Expect $a "\[tcpprobe\] porta 5555: fechada pelo Orion" "TCP: o hospedeiro ve a porta 7 fechada (RST)"
     Expect $a "tcp: [1-9]\d* segmento\(s\), 0 com erro, \d+ descartado\(s\), [1-9]\d* RST enviado\(s\)" "TCP: segmento recebido sem erro de checksum e RST enviado"
+    Expect $a "ola do hospedeiro</body></html>\s*\nhttpget: HTTP/1\.0 200 OK" "TCP: httpget baixou a pagina do servidor do hospedeiro"
+    Expect $a "httpget: corpo de 1048576 bytes, crc32 a2dcf263" "TCP: 1 MiB do hospedeiro sem corromper (crc32)"
+    Expect $a "wc /tmp/big\.bin\s*\n[^\n]*\s1048576 /tmp/big\.bin" "TCP: arquivo baixado gravado inteiro"
+    Expect $a "(?s)httpget example\.com 80 /.*?Example Domain.*?httpget: HTTP/1\.[01] 200" "TCP: httpget baixou example.com (depende da internet do hospedeiro)"
+    Expect $a "RST enviado\(s\), 0 conexao\(oes\)" "TCP: conexoes encerradas saem da tabela"
     Expect $a "(?s)----- reboot -----.*?cat /reboot\.txt\s*\n\s*sobrevive-ao-reboot" "arquivo gravado na raiz sobrevive a reboot"
     Expect $a "(?s)cat /proc/self/maps\s*\n\s*[0-9a-f]{8,}-[0-9a-f]{8,} r--p [0-9a-f]{8} 00:00 \d+\s+/bin/cat" "cat /proc/self/maps mostra as VMAs do proprio cat"
     Expect $a "[0-9a-f]+-7ffffffff000 rw-p 00000000 00:00 0\s+\[stack\]" "maps mostra a pilha"

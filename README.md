@@ -6,7 +6,7 @@ copy-on-write, threads, futex, sinais no formato do Linux, cache de paginas
 unificado (read, exec e mmap de arquivo), VFS com vnodes e
 montagens (`mount`/`umount`; raiz em ext2 numa particao GPT, com a particao EFI
 em `/boot/efi`, FAT e ext2 em outros discos, devfs em `/dev`, tmpfs em `/tmp` e
-`/run`, procfs em `/proc`), rede IPv4 (UDP/ICMP, TCP comecando) e um compositor de janelas em
+`/run`, procfs em `/proc`), rede IPv4 (UDP, ICMP e cliente TCP) e um compositor de janelas em
 espaco de usuario.
 
 Desde a versao 2.0 o espaco de usuario e Linux: os programas sao binarios
@@ -170,7 +170,7 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
 ## Programas proprios em /bin
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
-    ifconfig ping nslookup dhcp mkfs mkfs.ext2 fsck.ext2 mount umount
+    ifconfig ping nslookup httpget dhcp mkfs mkfs.ext2 fsck.ext2 mount umount
     testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
@@ -188,10 +188,14 @@ O QEMU sobe uma e1000 com a rede de usuario (SLIRP): 10.0.2.15 para o Orion,
     ping 10.0.2.2 4           ICMP echo
     nslookup example.com      consulta A no DNS
 
-A pilha faz ARP, IPv4, ICMP e UDP; sockets `SOCK_DGRAM` e `SOCK_RAW`. O TCP
-(em Rust, `kernel/rust/tcp`) esta comecando: por enquanto confere o segmento e
-responde `RST` a toda porta, porque ainda nao ha `connect` nem `listen`; o
-comando `net` do shell do kernel mostra os contadores. O `test.ps1` grava o
+A pilha faz ARP, IPv4, ICMP, UDP e TCP (em Rust, `kernel/rust/tcp`); sockets
+`SOCK_STREAM`, `SOCK_DGRAM` e `SOCK_RAW`. O TCP ja conecta, manda e recebe
+(cliente); retransmissao e servidor (`listen`/`accept`) vem nas proximas
+etapas da fase 3. O comando `net` do shell do kernel mostra os contadores.
+
+    httpget example.com               baixa e mostra a pagina (HTTP/1.0)
+    httpget -o /tmp/x 10.0.2.2 8000 /arquivo   grava o corpo; 10.0.2.2 e o hospedeiro
+ O `test.ps1` grava o
 trafego em `out\net.pcap`.
 
 ## Dispositivos em /dev

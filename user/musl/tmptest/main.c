@@ -24,7 +24,7 @@ static void check(const char *what, int ok)
 
 static long free_pages(void)
 {
-    return orion_free_pages();
+    return orion_free_or_cached_pages();
 }
 
 static const char *P(const char *rel)

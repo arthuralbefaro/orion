@@ -1926,6 +1926,8 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_BIND:        ret = sys_bind((int)f->rdi, (const struct sockaddr_in *)f->rsi, (uint32_t)f->rdx); break;
     case SYS_CONNECT:     ret = sys_connect((int)f->rdi, (const struct sockaddr_in *)f->rsi, (uint32_t)f->rdx); break;
     case SYS_SENDTO:      ret = sys_sendto((int)f->rdi, (const void *)f->rsi, f->rdx, (int)f->r10, (const struct sockaddr_in *)f->r8, (uint32_t)f->r9); break;
+    case SYS_SENDMSG:     ret = sys_sendmsg((int)f->rdi, (const struct user_msghdr *)f->rsi, (int)f->rdx); break;
+    case SYS_RECVMSG:     ret = sys_recvmsg((int)f->rdi, (struct user_msghdr *)f->rsi, (int)f->rdx); break;
     case SYS_RECVFROM:    ret = sys_recvfrom((int)f->rdi, (void *)f->rsi, f->rdx, (int)f->r10, (struct sockaddr_in *)f->r8, (uint32_t *)f->r9); break;
     default:
         log_warn("syscall", "pid %u: syscall %lu desconhecida", process_current()->pid, f->rax);

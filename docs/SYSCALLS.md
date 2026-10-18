@@ -13,8 +13,8 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 
 | Num | Nome | Estado | Notas |
 |---|---|---|---|
-| 0 | read | completa | buffer intermediario no kernel; arquivos regulares em pedacos de ate 64 KiB |
-| 1 | write | completa | idem |
+| 0 | read | completa | buffer intermediario no kernel; arquivos regulares em pedacos de ate 64 KiB; em socket TCP le o que chegou, bloqueia ate chegar algo e devolve 0 no FIN do outro lado (3.2) |
+| 1 | write | completa | idem; em socket TCP bloqueia enquanto o buffer de envio (32 KiB) esta cheio (3.2) |
 | 2 | open | parcial | `O_CREAT`, `O_EXCL`, `O_TRUNC`, `O_APPEND`, `O_NONBLOCK`, `O_DIRECTORY`, `O_CLOEXEC`, `O_NOFOLLOW` (`ELOOP` no link); segue links simbolicos, e `O_CREAT` por um link pendurado cria o alvo (2.7); arquivo novo com o modo pedido menos o `umask` (tmpfs e ext2; o FAT ignora o modo) |
 | 3 | close | completa | |
 | 4 | stat | completa | `struct stat` do Linux (144 bytes); `st_dev` e o numero da montagem, `st_ino` e estavel enquanto o arquivo existe (2.1); modo, dono, grupo, `st_nlink`, `st_blocks` e datas vem do sistema de arquivos (2.7): ext2 e tmpfs guardam tudo, FAT da as datas da entrada e o bit de somente leitura, devfs e procfs dao dono 0 e a hora do boot; pipe e socket dao a hora do boot |
@@ -47,11 +47,13 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 37 | alarm | completa | em cima do `ITIMER_REAL` |
 | 38 | setitimer | parcial | so `ITIMER_REAL`, com intervalo; resolucao de 5 ms |
 | 39 | getpid | completa | |
-| 41 | socket | parcial | `AF_INET` com `SOCK_DGRAM` e `SOCK_RAW` (TCP na fase 3) |
-| 42 | connect | parcial | so UDP |
-| 44 | sendto | parcial | so UDP e ICMP |
-| 45 | recvfrom | parcial | idem |
-| 49 | bind | parcial | idem |
+| 41 | socket | parcial | `AF_INET` com `SOCK_STREAM` (TCP, 3.2), `SOCK_DGRAM` e `SOCK_RAW`; `SOCK_NONBLOCK` e `SOCK_CLOEXEC` |
+| 42 | connect | parcial | UDP fixa o destino; TCP faz o handshake e espera ate 20 s (`ETIMEDOUT`), `ECONNREFUSED` com `RST`, `EINPROGRESS` com `O_NONBLOCK`; sem retransmissao do `SYN` ate a 3.3 |
+| 44 | sendto | parcial | UDP e ICMP; em TCP e um `write` (o endereco e ignorado); sem `SIGPIPE` com a conexao fechada, so `EPIPE` |
+| 45 | recvfrom | parcial | UDP e ICMP; em TCP e um `read` (sem endereco de volta); `flags` ignoradas |
+| 46 | sendmsg | parcial | como o `sendto`, juntando ate 1024 `iovec`; sem dados de controle (3.2) |
+| 47 | recvmsg | parcial | como o `recvfrom`, espalhando nos `iovec`; `msg_controllen` volta 0, `MSG_TRUNC` em `msg_flags` (3.2) |
+| 49 | bind | parcial | so UDP e ICMP (TCP na 3.4) |
 | 56 | clone | parcial | `CLONE_THREAD` (com `CLONE_VM` e `CLONE_SIGHAND`), `CLONE_SETTLS`, `CLONE_PARENT_SETTID`, `CLONE_CHILD_SETTID`, `CLONE_CHILD_CLEARTID`; sem `CLONE_THREAD` e um fork com pilha opcional (sem `CLONE_VM` de verdade) |
 | 57 | fork | completa | copy-on-write; respeita `RLIMIT_NPROC` |
 | 58 | vfork | parcial | igual ao `fork` (copy-on-write) |

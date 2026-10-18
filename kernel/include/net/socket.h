@@ -3,8 +3,12 @@
 #include <kernel/compiler.h>
 
 #define AF_INET     2
+#define SOCK_STREAM 1
 #define SOCK_DGRAM  2
 #define SOCK_RAW    3
+#define SOCK_TYPE_MASK 0xF
+#define SOCK_NONBLOCK  0x800
+#define SOCK_CLOEXEC   0x80000
 
 struct sockaddr_in {
     uint16_t sin_family;
@@ -38,3 +42,7 @@ long sys_sendto(int fd, const void *buf, uint64_t len, int flags, const struct s
                 uint32_t addrlen);
 long sys_recvfrom(int fd, void *buf, uint64_t len, int flags, struct sockaddr_in *addr,
                   uint32_t *addrlen);
+
+struct user_msghdr;
+long sys_sendmsg(int fd, const struct user_msghdr *msg, int flags);
+long sys_recvmsg(int fd, struct user_msghdr *msg, int flags);

@@ -27,17 +27,14 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-17, 23:52, sessao 2): Fase 2 inteira (tag `v2.1`), 8.7 e
-3.1 commitadas. Versao 2.2.0-a1. A regressao inteira roda no `out\orion.img`
-(GPT, raiz em ext2), com 309 verificacoes.
+Estado (2026-10-18, 01:00, sessao 2): Fase 2 inteira (tag `v2.1`), 8.7,
+3.1 e 3.2 commitadas. Versao 2.2.0-a2. A regressao inteira roda no
+`out\orion.img` (GPT, raiz em ext2), com 314 verificacoes; a sequencia A sobe
+o `tools/hostweb.py` no hospedeiro para os testes de TCP.
 
-Proxima etapa: 3.2 (TCP parte 2: `connect`, handshake, envio e recebimento
-com janela fixa; criterio: cliente HTTP simples baixa uma pagina). O TCP mora
-em `kernel/rust/tcp` (rlib do workspace `kernel/rust`, ligado pelo
-`staticlib` `orion`); o C (`net.c`) chama `tcp_input` e envia o que o Rust
-devolver. Para testar sem depender da internet, o convidado pode falar com um
-servidor no hospedeiro pelo 10.0.2.2 (o SLIRP leva ao 127.0.0.1 do
-hospedeiro).
+Proxima etapa: 3.3 (TCP parte 3: retransmissao, temporizadores, janela
+deslizante, `FIN` e `TIME_WAIT`; criterio: baixar 10 MiB pelo SLIRP sem
+corromper). O plano detalhado esta no fim da entrada da 3.2, no diario.
 
 ## Checklist
 
@@ -71,7 +68,7 @@ hospedeiro).
 | 2.7 | Links simbolicos, chmod, chown, utime | [x] | 20:20 | 22:40 | `921c465` e ver `git log` (parte 2) |
 | 2.8 | GPT e raiz em ext2 | [x] | 22:42 | 23:25 | ver `git log` (tag `v2.1`) |
 | 3.1 | TCP parte 1 | [x] | 23:27 | 23:52 | ver `git log` |
-| 3.2 | TCP parte 2 | [ ] | | | |
+| 3.2 | TCP parte 2 | [x] | 23:53 | 01:00 | ver `git log` |
 | 3.3 | TCP parte 3 | [ ] | | | |
 | 3.4 | TCP parte 4 | [ ] | | | |
 | 3.5 | Loopback e AF_UNIX | [ ] | | | |
@@ -742,6 +739,44 @@ porta 7 e contadores do TCP), estresse 5x verde. Versao 2.2.0-a1.
 Problemas: o clippy novo recusou `chunks_exact(2)` (quer `as_chunks`), e
 `Box::try_new` ainda e instavel (a pilha TCP e alocada com
 `alloc::alloc::alloc` e conferida contra nulo).
+
+#### 3.2 TCP parte 2 - 23:53 a 01:00 - FEITO
+O crate `tcp` ganhou conexoes ativas (do `SYN_SENT` ao `TIME_WAIT`), buffers
+de 32 KiB nos dois sentidos, opcao MSS, recepcao em ordem com ACK de tudo,
+janela do outro lado pela regra `SND.WL1/WL2` e ACK de atualizacao quando a
+leitura reabre a janela. O C ganhou sockets `SOCK_STREAM` (`connect`,
+`read`/`write`, `send`/`recv`, `poll`, `close`), uma espera por contador de
+eventos que nao perde acordar, e o `net.c` chama o `tcp_output` da conexao
+depois de cada segmento recebido. Programa novo `httpget`; `tools/hostweb.py`
+serve uma pagina e 1 MiB fixo no hospedeiro (o convidado chega pelo
+10.0.2.2), e a regressao tambem baixa `example.com` (o criterio do plano).
+`sendmsg`/`recvmsg` e `/etc/resolv.conf` entraram para o DNS da musl.
+Testes no crate: handshake, envio dentro da janela e do MSS com o seq dando a
+volta no 2^32, janela zero, recepcao com fora de ordem e retransmissao
+sobreposta, janela de recepcao cheia e reaberta, fechamento ativo e passivo,
+`RST` e recusa, portas efemeras, e 200 conexoes recebendo segmentos
+aleatorios sem `panic`. Regressao 309 -> 314, estresse 5x verde. Versao
+2.2.0-a2.
+Problemas: (1) um estouro (0 - 1) no calculo dos bytes em voo depois de o
+`FIN` ser reconhecido, que os testes nao pegavam: achado lendo o codigo,
+corrigido e com teste novo. (2) A primeira regressao achou o `recvmsg` (47)
+faltando: o `getaddrinfo` da musl usa e o `example.com` nao resolvia. (3) O
+`tmptest` falhou por ruido: ele media o tmpfs pelo `MemFree`, que muda quando
+o cache de binarios da raiz ext2 e despejado e relido; a medida virou
+`MemFree + Cached` (ver `DECISOES.md`). (4) O `wc` proprio nao tem `-c`; o
+teste usa `wc` sem opcao. (5) O clippy novo pediu `is_multiple_of`.
+Ficou de fora: retransmissao (o `connect` para porta fechada do hospedeiro
+espera 20 s, porque o SLIRP do Windows nao responde), `SIGPIPE`,
+`bind`/`listen`/`accept` em TCP (3.4).
+Plano da 3.3: `now` em milissegundos passado pelo C ao `input`, `output` e
+`connect`, e um `tcp_tick` chamado por uma thread do kernel a cada 50 ms; RTO
+com RTT de Jacobson/Karels e Karn, backoff, desistencia com `ETIMEDOUT`;
+retransmissao do `SYN`, dos dados a partir de `SND.UNA` e do `FIN`;
+retransmissao rapida com 3 ACKs repetidos e Reno (`cwnd`, `ssthresh`); fila
+de reordenacao na recepcao; sonda de janela zero; `TIME_WAIT` com 2*MSL. Para
+ter perda de verdade pelo SLIRP, um comando `tcploss N` no shell do kernel
+que descarta 1 em N segmentos TCP nos dois sentidos; a regressao baixa 10 MiB
+com e sem perda e confere o CRC32.
 
 ### Sessao 2 - 2026-10-17
 

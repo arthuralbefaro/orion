@@ -332,7 +332,7 @@ def make_image():
 def write_autostart(gui):
     target = OUT / "esp" / "etc" / "autostart"
     target.parent.mkdir(parents=True, exist_ok=True)
-    for name in ("passwd", "group"):
+    for name in ("passwd", "group", "resolv.conf"):
         shutil.copyfile(ROOT / "etc" / name, target.parent / name)
     if gui:
         target.write_text("/bin/dhcp\nshell /bin/wm\n")

@@ -16,6 +16,8 @@
 #define SYS_SENDTO        44
 #define SYS_RECVFROM      45
 #define SYS_BIND          49
+#define SYS_SENDMSG       46
+#define SYS_RECVMSG       47
 #define SYS_GETPGID       121
 #define SYS_RENAME        82
 #define SYS_MKDIR         83
@@ -175,6 +177,13 @@
 #define EADDRINUSE 98
 #define ENETUNREACH 101
 #define ECONNREFUSED 111
+#define ECONNRESET 104
+#define ENOBUFS 105
+#define EISCONN 106
+#define ENOTCONN 107
+#define EADDRNOTAVAIL 99
+#define EALREADY 114
+#define EINPROGRESS 115
 #define EHOSTUNREACH 113
 #define ETIMEDOUT 110
 #define EOPNOTSUPP 95

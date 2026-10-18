@@ -160,6 +160,14 @@ static inline long orion_free_pages(void)
     return (long)(orion_field(buf, "MemFree") / 4);
 }
 
+static inline long orion_free_or_cached_pages(void)
+{
+    char buf[1024];
+    if (orion_read_text("/proc/meminfo", buf, sizeof(buf)) < 0)
+        return -1;
+    return (long)((orion_field(buf, "MemFree") + orion_field(buf, "Cached")) / 4);
+}
+
 static inline int orion_sysinfo(struct sysinfo_orion *out)
 {
     char buf[1024];

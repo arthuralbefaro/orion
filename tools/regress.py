@@ -3,6 +3,7 @@ import argparse
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -34,7 +35,7 @@ def parse_sequences():
         seq = {"name": name, "steps": [], "expect": [], "memdelta": None, "shots": [], "disk": False, "gui": False, "image": False, "hostfwd": [],
                "extra": [], "prep": [],
                "delay": 1.0, "boot": 60.0, "remove_disk": False, "log": f"out/reg-{name.lower()}.log",
-               "stress": None}
+               "stress": None, "hostweb": None}
         m = re.search(r"\$steps" + name + r"\s*=\s*@\((.*?)^\s*\)\s*$", body, flags=re.S | re.M)
         if m:
             seq["steps"] = [ps_string(s) for s in STRING.finditer(m.group(1))]
@@ -73,6 +74,9 @@ def parse_sequences():
         md = re.search(r'^\s*Test-MemDelta \$\w+ "([^"]+)" (\d+)\s*$', body, flags=re.M)
         if md:
             seq["memdelta"] = (md.group(1), int(md.group(2)))
+        hw = re.search(r"Start-HostWeb (\d+)", body)
+        if hw:
+            seq["hostweb"] = int(hw.group(1))
         st = re.search(r"\$stressCmd\s*=\s*\"([^\"]+)\"", body)
         if st:
             seq["stress"] = st.group(1)
@@ -185,9 +189,18 @@ def main():
         no_build = built and not seq["gui"]
         if seq["gui"] and a.no_build:
             no_build = True
-        _, log = qrun.run(seq["steps"], smp=a.smp, disk=seq["disk"], extra_disks=seq["extra"], gui=seq["gui"],
-                          no_build=no_build, image=seq["image"], hostfwd=seq["hostfwd"],
-                          boot_timeout=seq["boot"], command_delay=seq["delay"], log_path=seq["log"])
+        web = None
+        if seq["hostweb"]:
+            web = subprocess.Popen([sys.executable, str(ROOT / "tools" / "hostweb.py"), "--port", str(seq["hostweb"])],
+                                   cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(2)
+        try:
+            _, log = qrun.run(seq["steps"], smp=a.smp, disk=seq["disk"], extra_disks=seq["extra"], gui=seq["gui"],
+                              no_build=no_build, image=seq["image"], hostfwd=seq["hostfwd"],
+                              boot_timeout=seq["boot"], command_delay=seq["delay"], log_path=seq["log"])
+        finally:
+            if web:
+                web.kill()
         built = built or not seq["gui"]
         if seq["gui"]:
             qrun.write_autostart(False)

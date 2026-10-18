@@ -1957,3 +1957,62 @@ Uma linha por decisao, na ordem em que foram tomadas.
   `seq 0`, `ack` = SEQ do SYN + 1 e checksum valido. A regressao confere
   tambem os contadores do `net` (segmentos sem erro de checksum e `RST`
   enviados).
+
+## v2.2.0-a2 (etapa 3.2: TCP parte 2)
+
+- O crate `tcp` ganhou conexoes ativas: `SYN_SENT`, `ESTABLISHED`,
+  `FIN_WAIT_1/2`, `CLOSE_WAIT`, `CLOSING`, `LAST_ACK`, `TIME_WAIT` e
+  `CLOSED`. Cada conexao tem um buffer de recepcao de 32 KiB (a janela que
+  anunciamos e o espaco livre nele, sem escala) e um de envio de 32 KiB, que
+  guarda os bytes desde `SND.UNA` (o que ja foi mandado e ainda nao foi
+  reconhecido fica la para a retransmissao da 3.3). O `SYN` leva a opcao MSS
+  (1460) e o MSS do outro lado vem do `SYN|ACK` (536 sem a opcao).
+- Recepcao so em ordem: segmento fora de ordem recebe um ACK repetido e e
+  descartado, e o pedaco ja recebido de uma retransmissao com sobreposicao e
+  cortado. A aceitacao segue a tabela da RFC 793 (segmento dentro da janela),
+  e a janela do outro lado so e atualizada pela regra de `SND.WL1`/`SND.WL2`.
+  Envio respeita a janela do outro lado e o MSS; com janela zero nada sai ate
+  chegar uma atualizacao (a sonda de janela zero e da 3.3). Quando a leitura
+  reabre a janela que estava abaixo de um MSS, sai um ACK de atualizacao.
+- `TIME_WAIT` ainda sem temporizador: a conexao sai da tabela assim que o
+  socket foi fechado e ela chegou a `TIME_WAIT` ou `CLOSED`. Conexao com erro
+  (`RST` recebido) fica `CLOSED` ate o `close`, devolvendo o erro no `read`.
+- O C nao sabe nada de sequencia: `tcp_write` enfileira, `tcp_output` devolve
+  um segmento por vez (dados, `FIN` ou ACK pendente) e o `net.c` envia; depois
+  de cada segmento recebido para uma conexao o `net.c` chama o `tcp_output`
+  dela de novo (assim o `FIN` e os dados que esperavam janela saem sem
+  ninguem estar escrevendo) e avisa o socket. Os envios de uma conexao sao
+  serializados por um mutex proprio (`tcp-tx`) para os segmentos nao trocarem
+  de ordem entre a montagem e o envio; ordem de travas: `tcp-tx` antes de
+  `tcp`. O envio pode dormir no ARP; o gateway do SLIRP ja esta no cache
+  depois do `connect`.
+- Sockets: `SOCK_STREAM` com `connect`, `read`/`write` (e `send`/`recv` pelo
+  `sendto`/`recvfrom`), `poll` e `close` (manda `FIN` e solta a conexao).
+  A espera usa um contador de eventos por socket, lido antes de conferir o
+  estado e comparado dentro da trava antes de dormir, para nao perder um
+  evento que chegue entre a conferencia e o sono. `SOCK_NONBLOCK` e
+  `SOCK_CLOEXEC` no tipo do `socket` passaram a valer para todos os tipos.
+  Sem `SIGPIPE` na escrita em conexao fechada (so `EPIPE`); `bind`, `listen`
+  e `accept` em TCP sao da 3.4.
+- `/etc/resolv.conf` (com o DNS do SLIRP) entrou ja aqui, porque o
+  `getaddrinfo` da musl le dele; a 3.6 cuida do resto da configuracao.
+- Teste: `httpget` (novo, HTTP/1.0, imprime o status, o tamanho e o CRC32 do
+  corpo). A regressao sobe `tools/hostweb.py` no hospedeiro (pagina pequena e
+  1 MiB de conteudo fixo) e o Orion baixa pelo 10.0.2.2, que o SLIRP leva ao
+  127.0.0.1 do hospedeiro: nao depende da internet. O criterio do plano
+  (`example.com`) tambem esta na regressao, e depende da internet do
+  hospedeiro como o `nslookup`. No Windows o SLIRP nao responde nada quando a
+  porta do hospedeiro esta fechada (so o nosso `SYN` aparece no pcap), entao
+  esse `connect` termina em `ETIMEDOUT` depois de 20 s.
+- `sendmsg` e `recvmsg` (46 e 47) entraram porque o resolvedor de DNS da musl
+  usa o `recvmsg`: `sendto`, `recvfrom`, `sendmsg` e `recvmsg` passaram a ser
+  feitos em cima de duas funcoes com buffer do kernel (`send_kernel` e
+  `recv_kernel`), e as duas novas juntam e espalham os `iovec` (ate 1024,
+  2 GiB no total). Sem dados de controle: `msg_controllen` volta 0, e
+  `MSG_TRUNC` sai em `msg_flags` quando o datagrama nao coube.
+- O `tmptest` conferia vazamento do tmpfs pelo `MemFree`, que tambem muda
+  quando o cache de arquivos e despejado ou relido. Com a raiz em ext2, criar
+  1000 arquivos empurra para fora da LRU vnodes com paginas de binarios da
+  raiz, que voltam depois, e o `MemFree` variou de -262 a +74 paginas entre
+  rodadas iguais. A medida passou a ser `MemFree + Cached` (pagina do tmpfs
+  nao entra no `Cached`, e despejar ou reler cache nao muda a soma).

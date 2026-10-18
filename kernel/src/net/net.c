@@ -9,6 +9,7 @@
 #include <kernel/time.h>
 #include <kernel/wait.h>
 #include <lib/string.h>
+#include <lib/random.h>
 #include <mm/heap.h>
 
 #define ARP_ENTRIES   16
@@ -78,6 +79,7 @@ static uint16_t ip_id;
 static bool running;
 static struct tcp_rs *tcp;
 static struct mutex tcp_lock = MUTEX_INIT("tcp");
+static struct mutex tcp_tx_lock = MUTEX_INIT("tcp-tx");
 
 uint16_t net_checksum(const void *data, int len)
 {
@@ -303,17 +305,101 @@ static void handle_icmp(uint32_t src, const uint8_t *data, int len)
     net_deliver_icmp(src, data, len);
 }
 
+static void tcp_flush(uint32_t id)
+{
+    uint8_t *seg = kmalloc(TCP_SEG_MAX);
+    if (!seg)
+        return;
+    mutex_lock(&tcp_tx_lock);
+    for (;;) {
+        uint32_t dst = 0;
+        mutex_lock(&tcp_lock);
+        int64_t n = tcp_output(tcp, id, seg, TCP_SEG_MAX, &dst);
+        mutex_unlock(&tcp_lock);
+        if (n <= 0)
+            break;
+        net_send_ip(dst, IPPROTO_TCP, seg, (int)n);
+    }
+    mutex_unlock(&tcp_tx_lock);
+    kfree(seg);
+}
+
 static void handle_tcp(uint32_t src, uint32_t dst, const uint8_t *seg, int len)
 {
     stats.rx_tcp++;
     if (!tcp || !netif.configured || dst != netif.ip)
         return;
     uint8_t reply[64];
+    struct tcp_event ev;
     mutex_lock(&tcp_lock);
-    int64_t n = tcp_input(tcp, src, dst, seg, (size_t)len, reply, sizeof(reply));
+    int64_t n = tcp_input(tcp, src, dst, seg, (size_t)len, reply, sizeof(reply), &ev);
     mutex_unlock(&tcp_lock);
     if (n > 0)
         net_send_ip(src, IPPROTO_TCP, reply, (int)n);
+    if (n >= 0 && ev.conn) {
+        tcp_flush(ev.conn);
+        if (ev.events)
+            socket_tcp_event(ev.conn, ev.events);
+    }
+}
+
+long net_tcp_connect(uint32_t ip, uint16_t port, uint32_t *id)
+{
+    if (!tcp)
+        return -ENODEV;
+    if (!netif.configured)
+        return -ENETUNREACH;
+    uint8_t syn[64];
+    mutex_lock(&tcp_lock);
+    int64_t n = tcp_connect(tcp, netif.ip, ip, port, (uint32_t)random_u64(), syn, sizeof(syn), id);
+    mutex_unlock(&tcp_lock);
+    if (n < 0)
+        return n;
+    int r = net_send_ip(ip, IPPROTO_TCP, syn, (int)n);
+    if (r < 0) {
+        net_tcp_close(*id);
+        return r;
+    }
+    return 0;
+}
+
+long net_tcp_write(uint32_t id, const void *buf, size_t len)
+{
+    mutex_lock(&tcp_lock);
+    int64_t n = tcp_write(tcp, id, buf, len);
+    mutex_unlock(&tcp_lock);
+    if (n > 0)
+        tcp_flush(id);
+    return n;
+}
+
+long net_tcp_read(uint32_t id, void *buf, size_t len)
+{
+    mutex_lock(&tcp_lock);
+    int64_t n = tcp_read(tcp, id, buf, len);
+    mutex_unlock(&tcp_lock);
+    if (n > 0)
+        tcp_flush(id);
+    return n;
+}
+
+int net_tcp_info(uint32_t id, struct tcp_conn_info *out)
+{
+    mutex_lock(&tcp_lock);
+    int r = tcp_info(tcp, id, out);
+    mutex_unlock(&tcp_lock);
+    return r;
+}
+
+void net_tcp_close(uint32_t id)
+{
+    mutex_lock(&tcp_lock);
+    tcp_close(tcp, id);
+    mutex_unlock(&tcp_lock);
+    tcp_flush(id);
+    mutex_lock(&tcp_lock);
+    tcp_detach(tcp, id);
+    mutex_unlock(&tcp_lock);
 }
 
 void net_tcp_stats(struct tcp_stats *out)
