@@ -585,6 +585,11 @@ if ($runAll -or $OnlyB) {
         "type:sleep 100 &", "mon:sendkey ret", "wait:1", "type:monitor &", "mon:sendkey ret", "wait:4",
         "shot:out\shots\reg-app-monitor.ppm", "mon:sendkey pgdn", "mon:sendkey pgdn", "mon:sendkey pgdn", "mon:sendkey pgdn",
         "mon:sendkey up", "wait:0.5", "mon:sendkey tab", "mon:sendkey ret", "wait:2.5", "mon:sendkey q", "wait:2",
+        "type:arquivos /usr/share &", "mon:sendkey ret", "wait:4", "mon:sendkey down", "mon:sendkey down", "mon:sendkey down",
+        "mon:sendkey ret", "wait:1.5", "shot:out\shots\reg-app-arquivos.ppm", "mon:sendkey down", "mon:sendkey down", "mon:sendkey ret",
+        "wait:4", "mon:sendkey q", "wait:2", "mon:sendkey tab", "type:pasta-nova", "mon:sendkey ret", "wait:1",
+        "mon:sendkey tab", "mon:sendkey tab", "mon:sendkey tab", "mon:sendkey tab", "mon:sendkey ret", "wait:0.5", "mon:sendkey ret", "wait:1",
+        "mon:sendkey q", "wait:2",
         "mon:sendkey ctrl-alt-x", "wait:5",
         "cmd:echo TTY-DE-VOLTA", "wait:1", "shot:out\shots\reg-wm-6-tty.ppm",
         "key:0B", "cmd:mem", "cmd:pty", "cmd:procs",
@@ -623,6 +628,14 @@ if ($runAll -or $OnlyB) {
     Expect $b "(?s)monitor: TERM \d+ sleep.*?wm: app da janela \d+ saiu \(pediu para fechar\) depois de \d+ quadro\(s\), [1-9]\d* parcial" "monitor fecha com q e redesenha por areas sujas"
     Test-ShotPixel "out\shots\reg-app-monitor.ppm" 883 289 0xe0a040 30 "captura do monitor: grafico de memoria desenhado"
     Test-ShotPixel "out\shots\reg-app-monitor.ppm" 276 245 0x141a26 12 "captura do monitor: fundo do grafico de CPU"
+    Expect $b "wm: app abriu a janela \d+ \(640x440, 'arquivos'\)" "arquivos abre a janela"
+    Expect $b "(?s)agora se chama 'arquivos: /usr/share'.*?agora se chama 'arquivos: /usr/share/imagens'" "arquivos entra numa pasta pelo teclado"
+    Expect $b "(?s)agora se chama 'arquivos: /usr/share/imagens'.*?wm: app abriu a janela \d+ \(660x490, 'imgview'\).*?agora se chama 'imgview: teste\.jpg 96x64'" "arquivos abre a imagem escolhida no imgview"
+    Expect $b "agora se chama 'arquivos: criou pasta-nova'" "arquivos cria uma pasta"
+    Expect $b "(?s)'arquivos: criou pasta-nova'.*?agora se chama 'arquivos: apagou pasta-nova'" "arquivos apaga a pasta depois da confirmacao"
+    Expect $b "(?s)'arquivos: apagou pasta-nova'.*?wm: app da janela \d+ saiu \(pediu para fechar\)" "arquivos fecha com q"
+    Test-ShotPixel "out\shots\reg-app-arquivos.ppm" 900 192 0xf4f6fa 12 "captura do arquivos: campo do caminho"
+    Test-ShotPixel "out\shots\reg-app-arquivos.ppm" 306 241 0xe8ecf4 24 "captura do arquivos: texto da lista (teste.jpg)"
     Expect $b 'crash: pedindo ao kernel para executar codigo de usuario \(SMEP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?busca de instrucao[\s\S]*?SMEP: o kernel tentou executar codigo de usuario \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMEP: kernel executando pagina de usuario vira panico controlado"
     Expect $b 'crash: pedindo ao kernel para ler memoria de usuario sem copy_from_user \(SMAP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?SMAP: o kernel acessou memoria de usuario fora das copias de uaccess \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMAP: kernel lendo memoria de usuario fora do uaccess vira panico controlado"
     ExpectNot $b 'crash: o kernel voltou' "o kernel nunca volta de um acesso proibido a memoria de usuario"

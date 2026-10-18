@@ -46,6 +46,7 @@ struct gui_widget {
     int selected;
     int top;
     gui_action action;
+    gui_action open;
     void *user;
     uint32_t drawn_sig;
     void (*paint)(struct gui *g, struct gui_widget *w);

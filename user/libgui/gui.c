@@ -569,6 +569,11 @@ static void key(struct gui *g, int ascii, int scancode, int mods)
         }
         return;
     }
+    if (w->kind == GUI_LIST && ascii == GUI_KEY_ENTER && w->open) {
+        if (w->selected >= 0)
+            w->open(g, w);
+        return;
+    }
     if (ascii == GUI_KEY_ENTER || ascii == ' ')
         activate(g, w);
 }
@@ -637,9 +642,12 @@ static void click(struct gui *g, int x, int y)
             }
             int item = w->top + (y - w->y - 2) / ROW_H;
             if (item >= 0 && item < w->count) {
+                bool again = item == w->selected;
                 w->selected = item;
                 if (w->action)
                     w->action(g, w);
+                if (again && w->open)
+                    w->open(g, w);
             }
             return;
         }

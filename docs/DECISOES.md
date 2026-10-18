@@ -2721,3 +2721,24 @@ Uma linha por decisao, na ordem em que foram tomadas.
   recebeu as teclas do `guidemo`, e 13 verificacoes cairam juntas. Os dois
   passos agora esperam o que aconteceu de fato (`until:` pela linha do `wm`
   pronto e pela linha do `cpuuso`).
+
+## v2.4.0-a9 (etapa 6.6 parte 3: gerenciador de arquivos)
+
+- `libgui`: lista ganhou a acao `open`, separada da `action` de selecao.
+  Enter na lista ou clique no item que ja estava escolhido chamam `open`; sem
+  `open`, o Enter continua chamando a `action`, como no `guidemo`. Nao ha
+  clique duplo: o protocolo do `wm` nao manda o tempo do clique.
+- `arquivos` (novo): campo do caminho (Enter navega), lista com as pastas
+  primeiro e o tamanho dos arquivos, `..` para subir (tambem Backspace e o
+  botao "Subir"), "Nova pasta" com o nome do campo e "Apagar" que so apaga no
+  segundo aperto sobre o mesmo item (`rmdir` ou `unlink`); mudar a escolha
+  cancela. Imagens abrem no `imgview` por `fork` e `execl`; os filhos sao
+  colhidos no tique de 1 s com `waitpid(WNOHANG)`. Outros arquivos so mostram
+  o tamanho, ate o editor da proxima parte. As teclas `q` e Backspace valem
+  quando o foco nao esta num campo de texto.
+- O painel de arquivos do proprio `wm` (Ctrl+F) fica, porque a sequencia D o
+  testa; trocar os atalhos do `wm` pelos apps e assunto do lancador da 6.7.
+- Regressao B: abre `arquivos /usr/share`, entra em `imagens` pelo teclado,
+  abre o `teste.jpg` (sobe o `imgview`), fecha, cria e apaga `pasta-nova`
+  com a confirmacao e fecha com `q`; a captura confere o campo do caminho e
+  o texto da lista.

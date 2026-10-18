@@ -28,20 +28,20 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 19:55, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
-`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.5 e as partes 1 e 2 da 6.6
-(`imgview` e `monitor`). Versao 2.4.0-a8. O
+Estado (2026-10-18, 20:30, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.5 e as partes 1 a 3 da 6.6
+(`imgview`, `monitor` e `arquivos`). Versao 2.4.0-a9. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e
-na ISO na F, com 439 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+na ISO na F, com 447 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 6.6 parte 3, gerenciador de arquivos, com captura na
-sequencia B; depois editor, configuracoes e terminal, um app por parte, e a
-6.7. Versao 2.4.0-a9 em diante.
+Proxima etapa: 6.6 parte 4, editor de texto, com captura na sequencia B;
+depois configuracoes e terminal, um app por parte, e a 6.7. Versao
+2.4.0-a10 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -1194,6 +1194,20 @@ esperar o `wm` pronto e o fim do `cpuuso` pelo log (`until:`). (5) A espera
 depois do `history` na A, de 1 s para 3 s, foi registrada no `DECISOES.md`.
 Ficou de fora: ordenar a lista por CPU ou memoria, sinais alem do `SIGTERM`,
 CPU por nucleo no grafico, rede e disco.
+
+#### 6.6 parte 3 Gerenciador de arquivos - 19:55 a 20:30 - FEITO
+`libgui`: acao `open` nas listas (Enter ou clique no item ja escolhido),
+separada da selecao. `arquivos` (novo): campo do caminho, lista com pastas
+primeiro e tamanhos, subir por `..`, Backspace ou botao, nova pasta, apagar
+com confirmacao (segundo aperto) e imagens abertas no `imgview` por
+`fork`/`execl`, com os filhos colhidos no tique. Criterio: na sequencia B o
+`arquivos /usr/share` entra em `imagens` pelo teclado, abre o `teste.jpg` no
+`imgview`, cria e apaga `pasta-nova` e fecha com `q`; a captura confere o
+campo do caminho e o texto da lista. Regressao 439 -> 447 (verde na primeira rodada completa, 26 minutos).
+Versao 2.4.0-a9. RAM livre antes da regressao completa: 6,3 GB.
+Problemas: nenhum; a sequencia B passou na primeira rodada com o app novo.
+Ficou de fora: copiar, mover e renomear, arquivos ocultos, abrir texto (vem
+com o editor), icones (6.7).
 
 ### Sessao 2 - 2026-10-17
 
