@@ -90,6 +90,8 @@ socket (protocolo em `docs/DECISOES.md`, v2.4.0-a2). `hello-gui &` num
 terminal grafico abre o exemplo. A `libgui` (`user/libgui`) da botoes, campos
 de texto, caixas de opcao, listas com rolagem e menus, todos usaveis pelo
 teclado (Tab, Enter, setas, F10); `guidemo &` mostra todos.
+O terminal grafico, a barra e os titulos usam fonte vetorial (DejaVu, pelo
+`stb_truetype`) com antialias; as fontes ficam em `/usr/share/fonts`.
 O terminal grafico entende as sequencias ANSI de cursor, apagamento e cores.
 
 ### Boot direto na interface grafica

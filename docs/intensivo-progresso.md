@@ -27,18 +27,19 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 12:27, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
-`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 e 6.2. Versao 2.4.0-a3. O boot
-pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
+Estado (2026-10-18, 13:05, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1 e 6.1 a 6.3. Versao 2.4.0-a4. O
+boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
-`libgui` (`user/libgui`). A regressao roda no `out\orion.img` (GPT, raiz em
-ext2) nas sequencias A a E e na ISO na F, com 415 verificacoes; a sequencia A
-sobe o `tools/hostweb.py` no hospedeiro e usa `hostfwd` (5555 e 8081).
+`libgui`; o `wm` usa fontes TrueType. A regressao roda no `out\orion.img`
+(GPT, raiz em ext2) nas sequencias A a E e na ISO na F, com 420
+verificacoes; a sequencia A sobe o `tools/hostweb.py` no hospedeiro e usa
+`hostfwd` (5555 e 8081).
 
-Proxima etapa: 6.3 (fontes TrueType com o `stb_truetype` 1.26, commit
-`6e9f34d`, e a DejaVu 2.37: terminal e barra com fonte vetorial), versao
-2.4.0-a4.
+Proxima etapa: 6.4 (PNG e JPEG pelo `stb_image` 2.30, commit `013ac3b`;
+papel de parede PNG gerado no build por `tools/mkwallpaper.py`), versao
+2.4.0-a5.
 
 ## Checklist
 
@@ -93,7 +94,7 @@ Proxima etapa: 6.3 (fontes TrueType com o `stb_truetype` 1.26, commit
 | 5.9 | Video BGA e virtio-gpu | [ ] | | | |
 | 6.1 | Protocolo de janelas | [x] | 11:06 | 11:47 | ver `git log` |
 | 6.2 | libgui | [x] | 11:48 | 12:27 | ver `git log` |
-| 6.3 | Fontes TrueType | [ ] | | | |
+| 6.3 | Fontes TrueType | [x] | 12:27 | 13:05 | ver `git log` |
 | 6.4 | Imagens PNG/JPEG | [ ] | | | |
 | 6.5 | Compositor com areas sujas | [ ] | | | |
 | 6.6 | Apps | [ ] | | | |
@@ -1080,6 +1081,24 @@ quem usa, e o teste do mouse passou a sair da posicao conhecida do clique
 anterior com um movimento curto.
 Ficou de fora: arrastar (o protocolo nao manda movimento nem soltar o
 botao), selecao de texto, areas sujas dentro do app.
+
+#### 6.3 Fontes TrueType - 12:27 a 13:05 - FEITO
+`stb_truetype` 1.26 (`third_party/stb`) e as DejaVu Sans Mono e Sans 2.37
+(`third_party/dejavu`, instaladas em `/usr/share/fonts`). `wm/font.c`
+rasteriza cada caractere ASCII uma vez e guarda o mapa de alfa; o desenho
+mistura o alfa com o fundo (`gfx_blend_alpha`). O terminal usa a mono de
+20 px (a celula, 10x21, sai da metrica da fonte), a barra e os titulos usam a
+sans de 15 px; sem os `.ttf`, volta a fonte 8x8. Criterio: na sequencia D o
+`wm` carrega as duas fontes, o glifo `A` tem dezenas de niveis de alfa
+(antialias) e o cache termina com dezenas de glifos; a sequencia B confere a
+fonte no `wm` aberto pelo shell. Regressao 415 -> 420. Versao 2.4.0-a4.
+Problemas: (1) com 16 px a celula ficou 8x17 e a letra pequena; foi para
+20 px. (2) Ficavam restos do cursor no comeco das linhas: a area suja das
+linhas do terminal ainda usava a altura da celula 8x8. (3) A amostra de cores
+da captura (um pixel a cada 997) nao separa texto com e sem antialias; a
+prova virou o numero de niveis de alfa que o proprio `wm` relata.
+Ficou de fora: paineis do `wm` (processos, arquivos, menu) ainda na 8x8 (vao
+virar apps na 6.6), Unicode fora do ASCII, `libgui` com fonte vetorial.
 
 ### Sessao 2 - 2026-10-17
 

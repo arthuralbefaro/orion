@@ -125,6 +125,12 @@ def build_all(quiet=False):
             wad = freedoom.fetch()
         except (OSError, SystemExit) as e:
             print(f"aviso: sem o freedoom1.wad ({e}); o doom fica sem IWAD")
+    fonts = out / "esp" / "usr" / "share" / "fonts"
+    fonts.mkdir(parents=True, exist_ok=True)
+    for ttf in sorted((ROOT / "third_party" / "dejavu").glob("*.ttf")):
+        dest = fonts / ttf.name
+        if not dest.exists() or dest.stat().st_size != ttf.stat().st_size:
+            shutil.copyfile(ttf, dest)
     if wad and wad.exists():
         (out / "esp" / "doom").mkdir(parents=True, exist_ok=True)
         dest = out / "esp" / "doom" / "freedoom1.wad"

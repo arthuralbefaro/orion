@@ -33,9 +33,13 @@
 #define KEY_CTRL_X     0x18
 #define CTL_PATH       "/run/wm.sock"
 #define CTL_MAX        8
+#define FONT_DIR       "/usr/share/fonts"
+#define FONT_MONO      FONT_DIR "/DejaVuSansMono.ttf"
+#define FONT_SANS      FONT_DIR "/DejaVuSans.ttf"
 
 static struct gfx gfx;
 static struct desktop desk;
+static struct font mono_font, sans_font;
 static int ctl_fd = -1;
 static int ctl_clients[CTL_MAX];
 static int ctl_count;
@@ -56,7 +60,7 @@ static void compose_cb(struct rect area)
 
 static struct rect term_frame(int cols, int rows)
 {
-    return rect_make(0, 0, cols * GFX_CELL_W + WIN_CHROME_X, rows * GFX_CELL_H + WIN_CHROME_Y);
+    return rect_make(0, 0, cols * gfx.cell_w + WIN_CHROME_X, rows * gfx.cell_h + WIN_CHROME_Y);
 }
 
 static void close_extra_fds(int keep)
@@ -537,9 +541,29 @@ static void handle_event(const struct input_event *ev)
     }
 }
 
+static void load_fonts(void)
+{
+    if (font_load(&mono_font, FONT_MONO, 20)) {
+        gfx.cell_w = mono_font.advance;
+        gfx.cell_h = mono_font.line_h + 1;
+    }
+    font_load(&sans_font, FONT_SANS, 15);
+    if (mono_font.ok && sans_font.ok) {
+        int gw, gh;
+        int levels = font_alpha_levels(&mono_font, 'A', &gw, &gh);
+        fprintf(stderr, "wm: fontes vetoriais: %s %d px no terminal, %s %d px na barra e nos titulos\n",
+                mono_font.name, mono_font.px, sans_font.name, sans_font.px);
+        fprintf(stderr, "wm: glifo 'A' do terminal: %dx%d pixels, %d niveis de alfa (antialias)\n", gw, gh,
+                levels);
+    } else
+        fprintf(stderr, "wm: sem fonte vetorial em %s; usando a 8x8\n", FONT_DIR);
+}
+
 static void build_desktop(void)
 {
     desk_init(&desk, &gfx);
+    desk.mono = mono_font.ok ? &mono_font : NULL;
+    desk.sans = sans_font.ok ? &sans_font : NULL;
     new_terminal();
 
     struct rect clock_frame = rect_make(40, 486, 8 * GFX_FONT_W * 4 + 24 + WIN_CHROME_X,
@@ -674,6 +698,8 @@ static void shutdown_desktop(void)
     }
     fprintf(stderr, "wm: %lu quadro(s), %lu pixel(s) copiado(s) para o framebuffer\n",
             gfx.frames, gfx.flushed_pixels);
+    if (mono_font.ok || sans_font.ok)
+        fprintf(stderr, "wm: %d glifo(s) vetoriais no cache\n", mono_font.cached + sans_font.cached);
     gfx_close(&gfx);
     ioctl(fb_fd, FBIOREDRAW, NULL);
     close(fb_fd);
@@ -700,7 +726,8 @@ int main(int argc, char **argv)
     }
     if (!gfx_open(&gfx, fb_fd))
         return 1;
-    fprintf(stderr, "wm: %dx%d, celula %dx%d\n", gfx.width, gfx.height, GFX_CELL_W, GFX_CELL_H);
+    load_fonts();
+    fprintf(stderr, "wm: %dx%d, celula %dx%d\n", gfx.width, gfx.height, gfx.cell_w, gfx.cell_h);
 
     mouse_x = gfx.width / 2;
     mouse_y = gfx.height / 2;

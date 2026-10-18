@@ -68,7 +68,7 @@ void panel_set(struct window *w, int row, const char *text)
 }
 
 static const char *const about_lines[] = {
-    "Orion 1.0 - compositor em espaco de usuario",
+    "Orion - compositor em espaco de usuario",
     "",
     "Ctrl+T       novo terminal      Ctrl+P   processos",
     "Ctrl+F       arquivos           Ctrl+Q   fecha a janela",
@@ -211,8 +211,10 @@ void desk_damage_window(struct desktop *d, const struct window *w)
 void desk_damage_term_rows(struct desktop *d, struct window *w)
 {
     for (int r = 0; r < w->term.rows; r++)
-        if (term_take_row(&w->term, r))
-            gfx_damage(d->gfx, win_row_rect(w, r));
+        if (term_take_row(&w->term, r)) {
+            struct rect c = win_content(w);
+            gfx_damage(d->gfx, rect_make(c.x, c.y + r * d->gfx->cell_h, c.w, d->gfx->cell_h));
+        }
 }
 
 void desk_damage_topbar(struct desktop *d)
@@ -242,12 +244,22 @@ static void draw_topbar(struct desktop *d)
     struct rect b = desk_menu_button(d);
     if (d->menu_open)
         gfx_fill(g, b, gfx_rgb(g, COL_MENU_HOVER));
-    gfx_text(g, 12, 6, "Orion 1.0", gfx_rgb(g, d->menu_open ? COL_TITLE_TXT : COL_ACCENT),
-             GFX_ZOOM);
-
     char stamp[80];
     snprintf(stamp, sizeof(stamp), "%s  %s  %s %s", d->ip, d->mem, d->date, d->clock);
     int len = (int)strlen(stamp);
+    if (d->sans) {
+        struct font *f = d->sans;
+        int ty = (TOPBAR_H - f->line_h) / 2;
+        font_text(g, f, 14, ty, "Orion", 5, d->menu_open ? COL_TITLE_TXT : COL_ACCENT);
+        int sw = font_width(f, stamp, len);
+        int sx = g->width - 14 - sw;
+        font_text(g, f, sx, ty, stamp, len, COL_TITLE_TXT);
+        int hx = b.x + b.w + 16;
+        int n = font_fit(f, d->hint, sx - 24 - hx);
+        font_text(g, f, hx, ty, d->hint, n, 0x7C8AA5);
+        return;
+    }
+    gfx_text(g, 12, 6, "Orion", gfx_rgb(g, d->menu_open ? COL_TITLE_TXT : COL_ACCENT), GFX_ZOOM);
     int stamp_x = g->width - 12 - len * GFX_CELL_W;
     gfx_text(g, stamp_x, 6, stamp, gfx_rgb(g, COL_TITLE_TXT), GFX_ZOOM);
 
@@ -293,6 +305,16 @@ static void draw_panel(struct desktop *d, struct window *w)
     }
 }
 
+static void draw_cell_char(struct desktop *d, int x, int y, char c, uint32_t rgb)
+{
+    if (c == ' ' || c == 0)
+        return;
+    if (d->mono)
+        font_text(d->gfx, d->mono, x, y + 1, &c, 1, rgb);
+    else
+        gfx_char(d->gfx, x, y, c, gfx_rgb(d->gfx, rgb), GFX_ZOOM);
+}
+
 static void draw_terminal(struct desktop *d, struct window *w, bool focused)
 {
     struct gfx *g = d->gfx;
@@ -300,28 +322,27 @@ static void draw_terminal(struct desktop *d, struct window *w, bool focused)
     gfx_fill(g, rect_make(c.x - WIN_PAD, c.y - WIN_PAD, c.w + 2 * WIN_PAD, c.h + 2 * WIN_PAD),
              gfx_rgb(g, COL_TERM_BG));
 
+    int cw = g->cell_w, ch = g->cell_h;
     for (int r = 0; r < w->term.rows; r++) {
-        int y = c.y + r * GFX_CELL_H;
-        if (y + GFX_CELL_H <= g->clip.y || y >= g->clip.y + g->clip.h)
+        int y = c.y + r * ch;
+        if (y + ch <= g->clip.y || y >= g->clip.y + g->clip.h)
             continue;
         for (int col = 0; col < w->term.cols; col++) {
             const struct term_cell *cell = &w->term.cells[r][col];
-            int x = c.x + col * GFX_CELL_W;
+            int x = c.x + col * cw;
             if (cell->bg != TERM_DEFAULT_BG)
-                gfx_fill(g, rect_make(x, y, GFX_CELL_W, GFX_CELL_H),
-                         gfx_rgb(g, term_color(cell->bg)));
-            gfx_char(g, x, y, cell->ch, gfx_rgb(g, term_color(cell->fg)), GFX_ZOOM);
+                gfx_fill(g, rect_make(x, y, cw, ch), gfx_rgb(g, term_color(cell->bg)));
+            draw_cell_char(d, x, y, cell->ch, term_color(cell->fg));
         }
     }
 
     if (!focused || !w->term.cursor_on)
         return;
-    int cx = c.x + w->term.cur_col * GFX_CELL_W;
-    int cy = c.y + w->term.cur_row * GFX_CELL_H;
+    int cx = c.x + w->term.cur_col * cw;
+    int cy = c.y + w->term.cur_row * ch;
     const struct term_cell *under = &w->term.cells[w->term.cur_row][w->term.cur_col];
-    gfx_fill(g, rect_make(cx, cy, GFX_CELL_W, GFX_FONT_H * GFX_ZOOM),
-             gfx_rgb(g, term_color(under->fg)));
-    gfx_char(g, cx, cy, under->ch, gfx_rgb(g, term_color(under->bg)), GFX_ZOOM);
+    gfx_fill(g, rect_make(cx, cy, cw, ch), gfx_rgb(g, term_color(under->fg)));
+    draw_cell_char(d, cx, cy, under->ch, term_color(under->bg));
 }
 
 static void draw_clock_window(struct desktop *d, struct window *w)
@@ -363,10 +384,15 @@ static void draw_window(struct desktop *d, struct window *w, bool focused)
     struct rect t = win_titlebar(w);
     gfx_fill(g, t, gfx_rgb(g, focused ? COL_TITLE_ON : COL_TITLE_OFF));
     struct rect b = win_close_button(w);
-    int room = (b.x - t.x - 12) / GFX_CELL_W;
-    int len = (int)strlen(w->title);
-    gfx_text_n(g, t.x + 8, t.y + 3, w->title, len < room ? len : (room > 0 ? room : 0),
-               gfx_rgb(g, COL_TITLE_TXT), GFX_ZOOM);
+    if (d->sans) {
+        int n = font_fit(d->sans, w->title, b.x - t.x - 14);
+        font_text(g, d->sans, t.x + 8, t.y + (t.h - d->sans->line_h) / 2, w->title, n, COL_TITLE_TXT);
+    } else {
+        int room = (b.x - t.x - 12) / GFX_CELL_W;
+        int len = (int)strlen(w->title);
+        gfx_text_n(g, t.x + 8, t.y + 3, w->title, len < room ? len : (room > 0 ? room : 0),
+                   gfx_rgb(g, COL_TITLE_TXT), GFX_ZOOM);
+    }
 
     gfx_fill(g, rect_make(b.x + 4, b.y + 4, b.w - 8, b.h - 8),
              gfx_rgb(g, focused ? COL_CLOSE : COL_CLOSE_OFF));

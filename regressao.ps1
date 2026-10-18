@@ -560,6 +560,7 @@ if ($runAll -or $OnlyB) {
     Expect $b "doom: \d{3,} quadros em \d+ ms" "doom rodou a demo (centenas de quadros)"
     Test-ShotColors "out\shots\reg-doom.ppm" "captura do doom tem a cena do jogo" 40
     Expect $b "wm: \d+x\d+, celula" "wm abriu o framebuffer"
+    Expect $b "wm: fontes vetoriais: DejaVuSansMono\.ttf" "wm aberto pelo shell tambem carrega a fonte vetorial"
     Expect $b "wm: terminal 0 -> sh pid \d+" "wm abriu o primeiro terminal"
     Expect $b "wm: terminal 3 -> sh pid \d+" "Ctrl\+T abriu um segundo terminal"
     Expect $b "morto por sinal 2" "Ctrl\+C no terminal grafico matou o sleep"
@@ -754,6 +755,10 @@ if ($runAll -or $OnlyD) {
     Expect $d "wm: wmctl: term\s*\nwm: terminal \d+ -> sh pid \d+" "wmctl term: o wm abriu um terminal a pedido de outro programa"
     Expect $d "wm: wmctl: list" "wmctl list pelo socket Unix"
     Expect $d "wm: apps em /run/wmapp\.sock" "wm escuta apps num socket Unix proprio"
+    Expect $d "wm: fontes vetoriais: DejaVuSansMono\.ttf 20 px no terminal, DejaVuSans\.ttf 15 px na barra e nos titulos" "terminal e barra com fonte vetorial (stb_truetype e DejaVu)"
+    Expect $d "wm: 1280x800, celula 10x21" "celula do terminal vem da metrica da fonte"
+    Expect $d "wm: glifo 'A' do terminal: \d+x\d+ pixels, ([1-9]\d|\d{3}) niveis de alfa \(antialias\)" "glifos com antialias (10 ou mais niveis de alfa)"
+    Expect $d "wm: ([5-9]\d|\d{3}) glifo\(s\) vetoriais no cache" "cache de glifos usado pelo terminal e pela barra"
     Expect $d "wm: app abriu a janela (\d+) \(360x200, 'Ola do hello-gui'\) com o buffer em /run/wm/app-\d+\.buf\s*\nwm: janela \1 mostrou o primeiro quadro" "hello-gui abre uma janela propria e desenha no buffer compartilhado"
     Expect $d "wm: janela \d+ agora se chama 'hello-gui: tecla o'\s*\nwm: janela \d+ agora se chama 'hello-gui: tecla i'" "teclas vao do wm ao hello-gui e a resposta volta pelo protocolo"
     Expect $d "wm: janela \d+ agora se chama 'hello-gui: clique \d+,\d+'" "clique na janela chega ao hello-gui em coordenadas da janela"

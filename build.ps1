@@ -246,6 +246,12 @@ if ($userBins.ContainsKey("doom")) {
         if (-not (Test-Path $wadOut) -or (Get-Item $wadOut).Length -ne (Get-Item $wad).Length) { Copy-Item $wad $wadOut -Force }
     }
 }
+$FontDir = Join-Path $EspDir "usr\share\fonts"
+New-Item -ItemType Directory -Force -Path $FontDir | Out-Null
+foreach ($ttf in Get-ChildItem (Join-Path $Root "third_party\dejavu") -Filter *.ttf -File) {
+    $dst = Join-Path $FontDir $ttf.Name
+    if (-not (Test-Path $dst) -or (Get-Item $dst).Length -ne $ttf.Length) { Copy-Item $ttf.FullName $dst -Force }
+}
 Copy-Item (Join-Path $Root "limine.conf") (Join-Path $EspDir "boot\limine\limine.conf") -Force
 
 New-Item -ItemType Directory -Force -Path (Join-Path $EspDir "etc") | Out-Null

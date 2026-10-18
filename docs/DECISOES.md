@@ -2568,3 +2568,33 @@ Uma linha por decisao, na ordem em que foram tomadas.
   que e o que o log do `wm` mostra e a sequencia D confere: texto, botao pelo
   Tab e Enter, caixa de opcao, lista com setas e Page Down, botao que
   acrescenta item, menu Ajuda pelo mouse e menu Arquivo pelo teclado.
+
+## v2.4.0-a4 (etapa 6.3: fontes TrueType)
+
+- `stb_truetype.h` 1.26 (commit `6e9f34d` do `nothings/stb`, MIT ou dominio
+  publico) em `third_party/stb`, sem mudanca; entra so no `wm` (`wm/font.c`
+  define a implementacao, com `STBTT_STATIC`, e desliga tres avisos do
+  cabecalho com `#pragma clang diagnostic` em volta do `#include`, para o
+  `check.ps1` continuar limpo sem mexer no arquivo de terceiros).
+- Fontes: DejaVu Sans Mono (terminal) e DejaVu Sans (barra e titulos) da
+  DejaVu 2.37 (licenca Bitstream Vera com as alteracoes da DejaVu em dominio
+  publico), so os dois `.ttf` usados mais licenca, autores e README, em
+  `third_party/dejavu` (1,1 MB, versionados como o resto de terceiros). O
+  `build.ps1` e o `tools/musl_build.py` copiam para `/usr/share/fonts`.
+- Cache de glifos: os 95 caracteres ASCII de cada fonte sao rasterizados uma
+  vez, na primeira vez que aparecem, e guardados como mapa de alfa; desenhar
+  e misturar o alfa com o fundo (`gfx_blend_alpha`, que desfaz o formato do
+  framebuffer, mistura em 8 bits por canal e refaz). Fora do ASCII vira `?`,
+  como na fonte 8x8.
+- A celula do terminal sai da metrica da fonte (avanco do `M` e altura da
+  linha): com 20 px fica 10x21. A area suja das linhas do terminal passou a
+  usar essa altura; com a altura antiga ficavam restos do cursor. Paineis
+  (processos, arquivos, menu, "Sobre") continuam na fonte 8x8: as janelas
+  deles vao ser refeitas como apps na 6.6.
+- Sem os `.ttf` (por exemplo, um `esp` antigo), o `wm` avisa e volta para a
+  fonte 8x8 inteira.
+- Prova do antialias na regressao: o `wm` relata, ao carregar, quantos
+  niveis de alfa o glifo `A` tem (dezenas; uma fonte de bitmap teria um so),
+  e no fim quantos glifos foram para o cache. A amostra de cores da captura
+  nao serve aqui: ela pega um pixel a cada 997 e quase nunca cai numa borda
+  de letra.

@@ -2,6 +2,7 @@
 
 #include "gfx.h"
 #include "term.h"
+#include "font.h"
 
 #define WIN_MAX       8
 #define WIN_TITLE_H   22
@@ -45,6 +46,8 @@ struct window {
 
 struct desktop {
     struct gfx *gfx;
+    struct font *mono;
+    struct font *sans;
     struct window windows[WIN_MAX];
     int order[WIN_MAX];
     int count;

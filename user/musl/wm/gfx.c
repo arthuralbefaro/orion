@@ -91,6 +91,8 @@ bool gfx_open(struct gfx *g, int fb_fd)
 
     g->width = (int)g->info.width;
     g->height = (int)g->info.height;
+    g->cell_w = GFX_CELL_W;
+    g->cell_h = GFX_CELL_H;
     g->clip = rect_make(0, 0, g->width, g->height);
 
     g->fb = mmap(NULL, g->info.size, PROT_READ | PROT_WRITE, MAP_SHARED, fb_fd, 0);
@@ -146,6 +148,40 @@ void gfx_blit_rgb(struct gfx *g, int x, int y, const uint32_t *src, int w, int h
         uint32_t *d = g->back + (size_t)(c.y + row) * (size_t)g->width + (size_t)c.x;
         for (int col = 0; col < c.w; col++)
             d[col] = fb_pack(&g->info, s[col] & 0xFFFFFF);
+    }
+}
+
+static uint32_t channel(uint32_t v, uint32_t shift, uint32_t size)
+{
+    uint32_t c = (v >> shift) & ((1u << size) - 1);
+    return size >= 8 ? c >> (size - 8) : c << (8 - size);
+}
+
+void gfx_blend_alpha(struct gfx *g, int x, int y, const uint8_t *alpha, int w, int h, uint32_t rgb)
+{
+    struct rect c = rect_clip(rect_make(x, y, w, h), g->clip);
+    uint32_t sr = (rgb >> 16) & 0xFF, sg = (rgb >> 8) & 0xFF, sb = rgb & 0xFF;
+    const struct fb_info *fi = &g->info;
+    for (int row = 0; row < c.h; row++) {
+        const uint8_t *a = alpha + (size_t)(c.y - y + row) * (size_t)w + (size_t)(c.x - x);
+        uint32_t *d = g->back + (size_t)(c.y + row) * (size_t)g->width + (size_t)c.x;
+        for (int col = 0; col < c.w; col++) {
+            uint32_t k = a[col];
+            if (!k)
+                continue;
+            if (k == 255) {
+                d[col] = fb_pack(fi, rgb);
+                continue;
+            }
+            uint32_t v = d[col];
+            uint32_t dr = channel(v, fi->red_mask_shift, fi->red_mask_size);
+            uint32_t dg = channel(v, fi->green_mask_shift, fi->green_mask_size);
+            uint32_t db = channel(v, fi->blue_mask_shift, fi->blue_mask_size);
+            uint32_t r = (sr * k + dr * (255 - k)) / 255;
+            uint32_t gg = (sg * k + dg * (255 - k)) / 255;
+            uint32_t b = (sb * k + db * (255 - k)) / 255;
+            d[col] = fb_pack(fi, (r << 16) | (gg << 8) | b);
+        }
     }
 }
 
