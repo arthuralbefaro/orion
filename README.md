@@ -173,7 +173,7 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
 ## Programas proprios em /bin
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
-    ifconfig ping nslookup httpget httpd wmctl dhcp mkfs mkfs.ext2 fsck.ext2 mount umount
+    ifconfig ping nslookup wget nc telnet httpget httpd wmctl dhcp mkfs mkfs.ext2 fsck.ext2 mount umount
     testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest unixtest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
@@ -198,6 +198,9 @@ reordenacao e `TIME_WAIT`. O comando `net` do shell
 do kernel mostra os contadores, e `tcploss N` descarta 1 em N segmentos TCP
 para testar a retransmissao (o SLIRP do QEMU nao perde nada).
 
+    wget http://example.com           salva index.html (-O arquivo, -q; so http://)
+    nc 10.0.2.2 8000 / nc -l 7000     liga a entrada e a saida a uma conexao TCP (-z testa a porta)
+    telnet host [porta]               cliente telnet simples
     httpget example.com               baixa e mostra a pagina (HTTP/1.0)
     httpget -o /tmp/x 10.0.2.2 8000 /arquivo   grava o corpo; 10.0.2.2 e o hospedeiro
     httpget -u /tmp/x 10.0.2.2 8000 /destino   envia o arquivo com PUT

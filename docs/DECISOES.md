@@ -2162,3 +2162,31 @@ Uma linha por decisao, na ordem em que foram tomadas.
   um comando e mostra a resposta. A regressao D digita `wmctl ...` no terminal
   do `wm` pelo passo novo `type:` dos harness (teclas pelo monitor do QEMU) e
   confere no log do `wm` que o terminal novo foi aberto a pedido.
+
+## v2.2.0-a6 (etapa 3.6: wget, nc, httpd e telnet)
+
+- Programas proprios em C, na musl, em vez de portar o `wget` do GNU, o `nc`
+  do OpenBSD ou o `telnet` do inetutils: os de verdade puxam TLS, autoconf e
+  bibliotecas que a fase 3 nao precisa, e o que o criterio pede (baixar uma
+  pagina, ligar dois pontos, falar com um servidor de texto) cabe em poucas
+  centenas de linhas. O `httpd` e o da 3.4.
+- `wget`: so `http://`, HTTP/1.0 (para nao precisar de `chunked`), segue ate
+  5 redirecionamentos (`Location` absoluto ou so caminho; `https://` da erro
+  claro), salva com o nome do fim do caminho (`index.html` quando nao ha),
+  `-O arquivo` ou `-O -` para a saida, `-q`. Erro HTTP sai com 1 e a mensagem
+  do codigo.
+- `nc`: cliente (`nc host porta`) e servidor de uma conexao (`nc -l porta` ou
+  `-l -p porta`), `-z` so testa a porta, `-w segundos` de espera sem dados. O
+  fim da entrada vira `shutdown(SHUT_WR)`, e o programa sai quando o outro lado
+  fecha, entao `echo ... | nc` funciona como no Linux.
+- `telnet`: liga, recusa toda opcao que o outro lado oferece (`WILL` ->
+  `DONT`, `DO` -> `WONT`), pula subnegociacao, dobra o byte 255 e manda
+  `\r\n` no fim de linha (NVT). Sem modo de caractere: a linha vai inteira.
+- O `getaddrinfo` da musl le o `/etc/resolv.conf`, que existe desde a 3.2.
+- Testes na sequencia A (o `sh` daqui nao trata aspas, entao os comandos foram
+  escritos sem elas): `wget http://example.com` salva a pagina (o criterio;
+  depende da internet do hospedeiro), `wget -O` traz 1 MiB do `hostweb` com o
+  SHA-256 certo e trata o 404; `nc -l` e `nc` pelo loopback; `nc -z` em porta
+  fechada; `nc` falando HTTP com o hospedeiro; `telnet` contra um `nc -l` que
+  manda `IAC WILL ECHO`, conferindo que a tela mostra so o texto e que do outro
+  lado chega `IAC DONT ECHO` seguido de `oi\r\n`.

@@ -180,6 +180,14 @@ if ($runAll -or $OnlyA) {
         "cmd:unixtest /run", "until:60:falha(s))", "cmd:unixtest /", "until:60:falha(s))",
         "cmd:ping 127.0.0.1 2", "wait:4",
         "cmd:httpd -p 8080 -n 1 &", "wait:2", "cmd:httpget 127.0.0.1 8080 /etc/group", "until:30:crc32", "wait:2",
+        "cmd:cd /tmp", "cmd:wget http://example.com", "until:30:salvo", "cmd:grep Example index.html", "wait:1",
+        "cmd:rm index.html", "cmd:wget -O /tmp/w.bin http://10.0.2.2:8088/big.bin", "until:30:salvo",
+        "cmd:sha256sum /tmp/w.bin", "wait:3", "cmd:rm /tmp/w.bin", "cmd:wget http://10.0.2.2:8088/nada", "wait:3", "cmd:cd /",
+        "cmd:nc -l 7777 > /tmp/nc.out &", "wait:1", "cmd:echo transferido-pelo-nc | nc 127.0.0.1 7777", "wait:2",
+        "cmd:cat /tmp/nc.out", "cmd:nc -z 127.0.0.1 7778", "wait:2",
+        "cmd:echo GET /index.html HTTP/1.0 | nc 10.0.2.2 8088", "wait:3",
+        "cmd:printf \377\373\001ola\n | nc -l 7779 > /tmp/tn.out &", "wait:1", "cmd:echo oi | telnet 127.0.0.1 7779", "wait:3",
+        "cmd:od -b /tmp/tn.out", "wait:2", "cmd:rm /tmp/nc.out /tmp/tn.out",
         "cmd:nslookup example.com", "wait:8",
         "cmd:nslookup example.com", "wait:8",
         "cmd:GREETING=ola-mundo", "wait:1",
@@ -372,6 +380,15 @@ if ($runAll -or $OnlyA) {
     Expect $a "64 bytes de 127\.0\.0\.1: seq=2" "loopback: ping 127.0.0.1"
     Expect $a "httpd: 127\.0\.0\.1:\d+ GET /etc/group -> 200" "loopback: httpd atende o httpget em 127.0.0.1"
     Expect $a "(?s)httpget 127\.0\.0\.1 8080 /etc/group.*?root:x:0:.*?httpget: HTTP/1\.0 200 OK" "loopback: httpget recebe a resposta"
+    Expect $a "wget: index\.html salvo \(\d+ bytes" "wget http://example.com salvou o arquivo (depende da internet do hospedeiro)"
+    Expect $a "grep Example index\.html\s*\n[^\n]*Example Domain" "o arquivo salvo e a pagina do example.com"
+    Expect $a "1f8647d4cd2f7594c35c413e582e01089c00929dd4239eddd5ded3d40f325d53  /tmp/w\.bin" "wget -O: 1 MiB do hospedeiro com o sha256 certo"
+    Expect $a "wget: o servidor respondeu 404" "wget avisa o 404 e sai com erro"
+    Expect $a "cat /tmp/nc\.out\s*\n\s*transferido-pelo-nc" "nc -l e nc cliente pelo loopback"
+    Expect $a "nc: 127\.0\.0\.1 7778 fechada" "nc -z ve a porta fechada"
+    Expect $a "(?s)echo GET /index\.html HTTP/1\.0 \| nc 10\.0\.2\.2 8088.*?HTTP/1\.0 200 OK.*?ola do hospedeiro" "nc conversa HTTP com o hospedeiro"
+    Expect $a "telnet: conectado a 127\.0\.0\.1 7779\s*\nola\s*\n" "telnet tira a negociacao do que mostra"
+    Expect $a "0000000 377 376\s+1 157 151\s+15\s+12" "telnet recusa a opcao (IAC DONT) e manda CR LF"
     Expect $a "(?s)----- reboot -----.*?cat /reboot\.txt\s*\n\s*sobrevive-ao-reboot" "arquivo gravado na raiz sobrevive a reboot"
     Expect $a "(?s)cat /proc/self/maps\s*\n\s*[0-9a-f]{8,}-[0-9a-f]{8,} r--p [0-9a-f]{8} 00:00 \d+\s+/bin/cat" "cat /proc/self/maps mostra as VMAs do proprio cat"
     Expect $a "[0-9a-f]+-7ffffffff000 rw-p 00000000 00:00 0\s+\[stack\]" "maps mostra a pilha"

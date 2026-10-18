@@ -27,15 +27,19 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 03:10, sessao 2): Fase 2 inteira (tag `v2.1`), 8.7 e
-3.1 a 3.5 commitadas. Versao 2.2.0-a5. A regressao inteira roda no
-`out\orion.img` (GPT, raiz em ext2), com 333 verificacoes; a sequencia A sobe
+Estado (2026-10-18, 03:35, sessao 2): Fase 2 inteira (tag `v2.1`), 8.7 e
+3.1 a 3.6 commitadas. Versao 2.2.0-a6. A regressao inteira roda no
+`out\orion.img` (GPT, raiz em ext2), com 342 verificacoes; a sequencia A sobe
 o `tools/hostweb.py` no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 3.6 (`wget`, `nc`, `httpd` (ja existe), `telnet`;
-`getaddrinfo` com `/etc/resolv.conf` (ja entrou na 3.2); criterio:
-`wget http://example.com` salva o arquivo). Depois 3.7 (DHCP fora do kernel),
-que fecha a Fase 3 (marco M3, tag `v2.2`, versao 2.2.0).
+Proxima etapa: 3.7 (DHCP fora do kernel e configuracao em `/etc/network`;
+criterio: o boot pega IP sem codigo de DHCP no kernel). Plano: tirar o
+`net/dhcp.c`, o `ioctl` `SIOCDHCP_ORION`, o gancho da porta 68 no `net.c` e o
+comando `dhcp` do shell do kernel; exigir `SO_BROADCAST` para mandar a
+broadcast, como o Linux; o programa `dhcp` faz DISCOVER/OFFER/REQUEST/ACK por
+UDP e configura a interface pelo `SIOCSIFCONF_ORION`; um `netup` novo le o
+`/etc/network` (`eth0 dhcp`, `eth0 static ...` ou `eth0 off`) e o autostart o
+chama no boot. Fecha a Fase 3 (marco M3, tag `v2.2`, versao 2.2.0).
 
 ## Checklist
 
@@ -73,7 +77,7 @@ que fecha a Fase 3 (marco M3, tag `v2.2`, versao 2.2.0).
 | 3.3 | TCP parte 3 | [x] | 01:02 | 01:45 | ver `git log` |
 | 3.4 | TCP parte 4 | [x] | 01:48 | 02:25 | ver `git log` |
 | 3.5 | Loopback e AF_UNIX | [x] | 02:26 | 03:10 | ver `git log` |
-| 3.6 | wget, nc, httpd, telnet | [ ] | | | |
+| 3.6 | wget, nc, httpd, telnet | [x] | 03:11 | 03:35 | ver `git log` |
 | 3.7 | DHCP fora do kernel | [ ] | | | |
 | 4.1 | uid/gid e permissoes | [ ] | | | |
 | 4.2 | passwd, shadow, login | [ ] | | | |
@@ -843,6 +847,24 @@ passando de um processo filho). Regressao 324 -> 333, verde de primeira;
 estresse 5x verde. Versao 2.2.0-a5.
 Ficou de fora: `SOCK_DGRAM` Unix, caminho abstrato, passagem de descritores
 (`SCM_RIGHTS`), credenciais (`SO_PEERCRED`).
+
+#### 3.6 wget, nc, httpd, telnet - 03:11 a 03:35 - FEITO
+Programas proprios: `wget` (so `http://`, HTTP/1.0, segue redirecionamentos,
+`-O`, `-q`), `nc` (cliente, `-l`, `-z`, `-w`; fim da entrada vira
+`shutdown(SHUT_WR)`) e `telnet` (recusa as opcoes, dobra o 255, `\r\n` no fim
+da linha); o `httpd` e o da 3.4 e o `getaddrinfo` ja le o `/etc/resolv.conf`
+desde a 3.2. Criterio: `wget http://example.com` salva o `index.html` com a
+pagina. Tambem na regressao: 1 MiB do `hostweb` com o SHA-256 certo, 404,
+`nc` pelo loopback e com o hospedeiro, `nc -z`, e `telnet` contra um `nc -l`
+que oferece `ECHO`, conferindo a tela e os bytes que voltam (`IAC DONT ECHO`,
+`oi\r\n`). Regressao 333 -> 342, verde de primeira. Versao 2.2.0-a6. Sem
+estresse (a etapa nao mexe em trava, memoria nem processos).
+Problema: o primeiro roteiro de teste usava aspas, `grep -c` e `od -An`; o
+`sh` daqui nao trata aspas, o `grep` proprio nao tem `-c` e o `od` do sbase
+nao aceita `-An`. Os testes foram escritos sem esses recursos (`echo` em vez
+de `printf` com aspas, `od -b`).
+Ficou de fora: HTTPS (sem TLS no sistema), `chunked` (o `wget` pede HTTP/1.0),
+modo caractere e eco local no `telnet`, UDP no `nc`.
 
 ### Sessao 2 - 2026-10-17
 
