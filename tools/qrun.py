@@ -357,7 +357,8 @@ class Machine:
         elif kind == "type":
             print(f"  type > {arg}")
             names = {' ': 'spc', '-': 'minus', '/': 'slash', '.': 'dot', ',': 'comma', '=': 'equal',
-                     ';': 'semicolon', '_': 'shift-minus', ':': 'shift-semicolon'}
+                     ';': 'semicolon', '_': 'shift-minus', ':': 'shift-semicolon', '>': 'shift-dot',
+                     '<': 'shift-comma', '|': 'shift-backslash', '&': 'shift-7'}
             for ch in arg:
                 if ch.isascii() and (ch.islower() or ch.isdigit()):
                     name = ch

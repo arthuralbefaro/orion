@@ -718,6 +718,7 @@ if ($runAll -or $OnlyD) {
     Write-Host "== Sequencia D (boot direto na GUI) ==" -ForegroundColor Cyan
     $stepsD = @(
         "wait:16", "shot:out\shots\reg-gui-1-boot.ppm",
+        "type:cpuuso wm 10 > /dev/tty", "mon:sendkey ret", "wait:13",
         "type:wmctl ping", "mon:sendkey ret", "wait:2", "type:wmctl term", "mon:sendkey ret", "wait:3",
         "type:wmctl list", "mon:sendkey ret", "wait:2", "shot:out\shots\reg-gui-5-wmctl.ppm",
         "type:hello-gui &", "mon:sendkey ret", "wait:4", "mon:sendkey o", "wait:1", "mon:sendkey i", "wait:1",
@@ -778,6 +779,8 @@ if ($runAll -or $OnlyD) {
     Expect $d "agora se chama 'guidemo: lista com 41'" "libgui: botao acrescenta item na lista"
     Expect $d "agora se chama 'guidemo: sobre'" "libgui: menu Ajuda/Sobre pelo mouse"
     Expect $d "'guidemo: saindo'\s*\nwm: app da janela \d+ saiu \(pediu para fechar\)" "libgui: menu Arquivo/Sair pelo teclado (F10, setas, Enter) fecha o app"
+    Expect $d "'guidemo: saindo'\s*\nwm: app da janela \d+ saiu \(pediu para fechar\) depois de \d+ quadro\(s\), [1-9]\d* parcial\(is\)" "libgui manda so a area que mudou (quadros parciais)"
+    Expect $d "cpuuso: wm \(pid \d+\) usou [0-4]\.\d% de CPU em 10 s" "wm parado gasta menos de 5% de CPU"
 }
 
 # ---------------- Sequencia F: ISO hibrida ----------------

@@ -94,8 +94,8 @@ int main(int argc, char **argv)
     check("realloc grande preserva o conteudo (mremap)", kept);
 
     size_t pg = 4096;
-    unsigned char *m = mmap(NULL, 4 * pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    unsigned char *blocker = mmap(m + 4 * pg, pg, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    unsigned char *m = mmap(NULL, 5 * pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *blocker = mmap(m + 4 * pg, pg, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
     for (int i = 0; i < 4; i++)
         m[i * pg] = (unsigned char)(0x40 + i);
     unsigned char *moved = mremap(m, 4 * pg, 16 * pg, MREMAP_MAYMOVE);
@@ -106,10 +106,12 @@ int main(int argc, char **argv)
     if (ok_move)
         moved[15 * pg] = 9;
     check("mremap move a area e leva as paginas", ok_move);
+    if (!ok_move)
+        printf("    m=%p blocker=%p moved=%p errno=%d\n", (void *)m, (void *)blocker, (void *)moved, errno);
     unsigned char *shrunk = ok_move ? mremap(moved, 16 * pg, 2 * pg, 0) : MAP_FAILED;
-    check("mremap encolhe no lugar", shrunk == moved && shrunk[pg] == 0x41);
+    check("mremap encolhe no lugar", shrunk != MAP_FAILED && shrunk == moved && shrunk[pg] == 0x41);
     unsigned char *grown = shrunk != MAP_FAILED ? mremap(shrunk, 2 * pg, 3 * pg, 0) : MAP_FAILED;
-    check("mremap cresce no lugar sem MAYMOVE", grown == shrunk && grown[2 * pg] == 0);
+    check("mremap cresce no lugar sem MAYMOVE", grown != MAP_FAILED && grown == shrunk && grown[2 * pg] == 0);
     errno = 0;
     void *bad = mremap(m == moved ? NULL : m, pg, 2 * pg, MREMAP_MAYMOVE);
     check("mremap de area desfeita da EFAULT", bad == MAP_FAILED && errno == EFAULT);

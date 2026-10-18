@@ -396,13 +396,56 @@ static void draw_menus(struct gui *g)
     }
 }
 
+static uint32_t widget_sig(const struct gui *g, const struct gui_widget *w, int index)
+{
+    uint32_t h = 2166136261u;
+    for (const char *c = w->text; *c; c++)
+        h = (h ^ (uint8_t)*c) * 16777619u;
+    int vals[] = { w->checked, w->selected, w->top, w->count, index == g->focus };
+    for (size_t i = 0; i < sizeof(vals) / sizeof(vals[0]); i++)
+        h = (h ^ (uint32_t)vals[i]) * 16777619u;
+    return h | 1;
+}
+
 void gui_redraw(struct gui *g)
 {
-    gui_fill(g, 0, 0, g->width, g->height, COL_BG);
-    for (int i = 0; i < g->count; i++)
-        draw_widget(g, &g->widgets[i], i == g->focus);
-    draw_menus(g);
-    send_line(g, "mostra\n");
+    int menu_sig = g->open_menu * 64 + g->menu_item;
+    if (!g->drawn || menu_sig != g->drawn_menu) {
+        gui_fill(g, 0, 0, g->width, g->height, COL_BG);
+        for (int i = 0; i < g->count; i++) {
+            draw_widget(g, &g->widgets[i], i == g->focus);
+            g->widgets[i].drawn_sig = widget_sig(g, &g->widgets[i], i);
+        }
+        draw_menus(g);
+        g->drawn = true;
+        g->drawn_menu = menu_sig;
+        g->frames++;
+        send_line(g, "mostra\n");
+        return;
+    }
+    int x0 = g->width, y0 = g->height, x1 = 0, y1 = 0;
+    for (int i = 0; i < g->count; i++) {
+        struct gui_widget *w = &g->widgets[i];
+        uint32_t sig = widget_sig(g, w, i);
+        if (sig == w->drawn_sig)
+            continue;
+        gui_fill(g, w->x, w->y, w->w, w->h, COL_BG);
+        draw_widget(g, w, i == g->focus);
+        w->drawn_sig = sig;
+        if (w->x < x0)
+            x0 = w->x;
+        if (w->y < y0)
+            y0 = w->y;
+        if (w->x + w->w > x1)
+            x1 = w->x + w->w;
+        if (w->y + w->h > y1)
+            y1 = w->y + w->h;
+    }
+    if (x1 <= x0 || y1 <= y0)
+        return;
+    g->frames++;
+    g->partial_frames++;
+    send_line(g, "mostra %d %d %d %d\n", x0, y0, x1 - x0, y1 - y0);
 }
 
 static void activate(struct gui *g, struct gui_widget *w)

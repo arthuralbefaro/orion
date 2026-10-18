@@ -2624,3 +2624,39 @@ Uma linha por decisao, na ordem em que foram tomadas.
   `hello-gui` continua provado pelas linhas do log do `wm`. A captura do boot
   grafico passou a conferir o papel de parede (250 cores ou mais; sem ele
   eram 75).
+
+## v2.4.0-a6 (etapa 6.5: compositor com areas sujas)
+
+- O que a etapa pede ja existia em boa parte desde o `wm` da Fase 1: o `wm`
+  desenha num back buffer e so copia para o framebuffer os retangulos sujos
+  (ate 24 por quadro, juntados quando passam disso), e o cursor e desenhado
+  por ele por cima, sujando so os dois retangulos do cursor ao mover. A
+  medida veio primeiro: parado, o `wm` gasta 0,2 a 0,3% de CPU (2 ou 3 tiques
+  de 10 ms em 10 s), porque so o relogio e a barra mudam, uma vez por
+  segundo, e o `poll` dorme 250 ms entre as voltas.
+- O que faltava eram areas sujas dentro dos apps: o `mostra` da 6.1 sempre
+  fazia o `wm` copiar a janela inteira. O protocolo ganhou `mostra <x> <y>
+  <l> <a>` (so aquela area, em coordenadas da janela; `mostra` sozinho
+  continua valendo a janela toda). A `libgui` guarda uma assinatura do estado
+  visual de cada componente (texto, selecao, rolagem, caixa marcada, foco) e,
+  a cada evento, redesenha so os que mudaram e manda a area que os cobre; um
+  menu abrindo ou fechando ainda redesenha tudo, porque cobre os outros. No
+  roteiro da sequencia D, o `guidemo` mandou 16 dos 24 quadros como parciais
+  e o `wm` copiou 2,6 milhoes de pixels, contra 5,8 milhoes com quadros
+  inteiros.
+- O `wm` conta, por app, quadros, quadros parciais e pixels copiados, e
+  escreve no log quando o app sai.
+- `cpuuso <nome> [segundos]` (novo) le `utime` e `stime` do
+  `/proc/<pid>/stat` antes e depois e da a porcentagem. Na sequencia D roda no
+  terminal grafico com a saida em `/dev/tty` (o terminal fisico, que e a
+  serial): o passo `type:` do harness aprendeu `>`, `<`, `|` e `&`.
+- Achado da regressao desta etapa: o teste de `mremap` do `mhello` falhava
+  em cerca de 1 de cada 8 execucoes desde o ASLR da 4.4 (as tres regressoes
+  seguintes passaram por sorte). Ele mapeava 4 paginas e contava com a pagina
+  seguinte livre para pendurar ali um "bloqueador" com `MAP_FIXED_NOREPLACE`;
+  com a base do `mmap` sorteada, as 4 paginas as vezes caiam num buraco do
+  tamanho exato e o bloqueador dava `EEXIST`. Nada no `mmap` garante a pagina
+  seguinte livre, entao o erro era do teste: agora ele mapeia 5 paginas e troca
+  a quinta por um mapeamento separado com `MAP_FIXED`, e 40 execucoes seguidas
+  passaram. O teste tambem deixou de ler `MAP_FAILED + 8192` quando uma
+  verificacao anterior falha, e mostra os enderecos quando o `mremap` falha.

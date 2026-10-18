@@ -27,19 +27,20 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 13:38, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
-`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1 e 6.1 a 6.4. Versao 2.4.0-a5. O
+Estado (2026-10-18, 15:47, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1 e 6.1 a 6.5. Versao 2.4.0-a6. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
-`libgui`; o `wm` usa fontes TrueType e papel de parede PNG. A regressao roda
-no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e na ISO na F,
-com 425 verificacoes; a sequencia A sobe o `tools/hostweb.py` no hospedeiro
-e usa `hostfwd` (5555 e 8081).
+`libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
+regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e
+na ISO na F, com 427 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 6.5 (compositor com areas sujas e cursor proprio; criterio:
-o `wm` parado gasta menos de 5% de CPU; `cpuuso` mede pelo `/proc`), versao
-2.4.0-a6.
+Proxima etapa: 6.6, um app por parte, cada um com captura na sequencia B.
+Parte 1: visualizador de imagens (`imgview`, com o componente tela da
+`libgui`); depois monitor do sistema, arquivos, editor, configuracoes e
+terminal. Versao 2.4.0-a7 em diante.
 
 ## Checklist
 
@@ -96,7 +97,7 @@ o `wm` parado gasta menos de 5% de CPU; `cpuuso` mede pelo `/proc`), versao
 | 6.2 | libgui | [x] | 11:48 | 12:27 | ver `git log` |
 | 6.3 | Fontes TrueType | [x] | 12:27 | 13:05 | ver `git log` |
 | 6.4 | Imagens PNG/JPEG | [x] | 13:05 | 13:38 | ver `git log` |
-| 6.5 | Compositor com areas sujas | [ ] | | | |
+| 6.5 | Compositor com areas sujas | [x] | 13:38 | 15:47 | ver `git log` |
 | 6.6 | Apps | [ ] | | | |
 | 6.7 | Area de trabalho | [ ] | | | |
 | 7.1 | ISO hibrida | [x] | 06:26 | 09:44 | ver `git log` |
@@ -1115,6 +1116,31 @@ registrado: a verificacao de cores da captura do `hello-gui` perdeu forca com
 o papel de parede, e o `hello-gui` segue provado pelo log do `wm`.
 Ficou de fora: icones (vao com o lancador da 6.7), GIF e BMP, escolher o
 papel de parede.
+
+#### 6.5 Compositor com areas sujas - 13:38 a 15:47 - FEITO
+Medido primeiro: o `wm` parado ja gastava 0,2 a 0,3% de CPU (back buffer,
+retangulos sujos e cursor proprio vinham da Fase 1). O que faltava eram areas
+sujas dos apps: o protocolo ganhou `mostra <x> <y> <l> <a>` e a `libgui`
+compara uma assinatura do estado visual de cada componente com a do ultimo
+desenho, redesenha so os que mudaram e manda so a area deles; o `wm` conta
+quadros, quadros parciais e pixels por app. `cpuuso` (novo) mede o CPU de um
+processo pelo `/proc`; o passo `type:` do harness aprendeu `>`, `<`, `|` e
+`&`. Criterio: na sequencia D, `cpuuso wm 10` (com a saida na serial) mostra
+o `wm` parado abaixo de 5% (deu 0,3%), e o `guidemo` manda 16 de 24 quadros
+como parciais (2,6 milhoes de pixels copiados contra 5,8 milhoes). Regressao
+425 -> 427. Versao 2.4.0-a6.
+Problemas: a primeira regressao completa desta etapa falhou no `mremap` do
+`mhello`, que nada tinha a ver com ela: o teste contava com a pagina seguinte
+a um `mmap` novo livre, o que o ASLR da 4.4 passou a quebrar em cerca de 1 de
+cada 8 execucoes (40 execucoes num laco do `dash` mostraram o `EEXIST`). O
+teste passou a montar a situacao com `MAP_FIXED` e deixou de ler
+`MAP_FAILED + 8192` em cascata; 40 de 40 passaram. Depois a sessao caiu duas vezes
+no meio da regressao e a rodada seguinte deu 365 falhas com logs vazios: o
+Windows estava sem memoria para alocar (o OneDrive do dono tinha vazado 33 GB
+e sobravam 0,2 GB), e o QEMU nao conseguia reservar o buffer do JIT. Com o
+OneDrive encerrado pelo dono, a regressao passou inteira.
+Ficou de fora: compositor com transparencia e sombras, sincronizar com o
+retraco vertical (o framebuffer da UEFI nao tem).
 
 ### Sessao 2 - 2026-10-17
 

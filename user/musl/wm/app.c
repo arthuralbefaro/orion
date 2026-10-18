@@ -28,6 +28,8 @@ struct app {
     size_t len;
     char path[64];
     unsigned long frames;
+    unsigned long partial;
+    unsigned long shown;
 };
 
 static struct app apps[APP_MAX];
@@ -96,7 +98,8 @@ static void release_buffer(struct app *a)
 static void drop(struct app *a, const char *why)
 {
     if (a->win) {
-        fprintf(stderr, "wm: app da janela %d saiu (%s) depois de %lu quadro(s)\n", a->win->id, why, a->frames);
+        fprintf(stderr, "wm: app da janela %d saiu (%s) depois de %lu quadro(s), %lu parcial(is), %lu pixel(s)\n",
+                a->win->id, why, a->frames, a->partial, a->shown);
         desk_damage_window(desk, a->win);
         desk_remove(desk, a->win);
         struct window *top = desk_focused(desk);
@@ -173,12 +176,22 @@ static void command(struct app *a, char *line)
             return;
         }
         open_window(a, w, h, line + 7 + used);
-    } else if (strcmp(line, "mostra") == 0) {
+    } else if (strncmp(line, "mostra", 6) == 0 && (line[6] == 0 || line[6] == ' ')) {
         if (!a->win)
+            return;
+        struct rect c = win_content(a->win);
+        struct rect area = rect_make(0, 0, a->win->pix_w, a->win->pix_h);
+        int x, y, w, h;
+        if (sscanf(line + 6, "%d %d %d %d", &x, &y, &w, &h) == 4) {
+            area = rect_clip(rect_make(x, y, w, h), area);
+            a->partial++;
+        }
+        if (area.w <= 0 || area.h <= 0)
             return;
         if (a->frames++ == 0)
             fprintf(stderr, "wm: janela %d mostrou o primeiro quadro\n", a->win->id);
-        gfx_damage(gfx, win_content(a->win));
+        a->shown += (unsigned long)area.w * (unsigned long)area.h;
+        gfx_damage(gfx, rect_make(c.x + area.x, c.y + area.y, area.w, area.h));
     } else if (strncmp(line, "titulo ", 7) == 0) {
         if (!a->win)
             return;

@@ -379,6 +379,10 @@ try {
                             ';' { $name = 'semicolon' }
                             '_' { $name = 'shift-minus' }
                             ':' { $name = 'shift-semicolon' }
+                            '>' { $name = 'shift-dot' }
+                            '<' { $name = 'shift-comma' }
+                            '|' { $name = 'shift-backslash' }
+                            '&' { $name = 'shift-7' }
                         }
                     }
                     if ($name) { [void](Send-Monitor "sendkey $name") }

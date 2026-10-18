@@ -46,6 +46,7 @@ struct gui_widget {
     int top;
     gui_action action;
     void *user;
+    uint32_t drawn_sig;
 };
 
 struct gui_menu {
@@ -69,6 +70,10 @@ struct gui {
     int menu_count;
     int open_menu;
     int menu_item;
+    bool drawn;
+    int drawn_menu;
+    unsigned long frames;
+    unsigned long partial_frames;
     bool running;
     char in[512];
     int inlen;
