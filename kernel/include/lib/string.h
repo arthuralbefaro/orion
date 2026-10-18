@@ -1,10 +1,3 @@
-/*
- * string.h - funções de memória/strings para ambiente freestanding.
- *
- * IMPORTANTE: memcpy/memset/memmove/memcmp precisam existir com esses nomes
- * exatos, porque o compilador pode emitir chamadas a elas por conta própria
- * (ex.: cópia de struct, inicialização de array).
- */
 #pragma once
 
 #include <stddef.h>
