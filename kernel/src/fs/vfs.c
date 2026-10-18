@@ -15,10 +15,22 @@
 #define VCACHE_BUCKETS 256
 #define VFS_MAX_INACTIVE 512
 
+#define WALK_NOFOLLOW 1u
+
 struct nameidata {
     struct vnode *dir;
     char last[VFS_NAME_MAX];
     bool slash;
+    bool followed;
+};
+
+struct walk {
+    struct vnode *cur;
+    const char *p;
+    char *buf;
+    char *tgt;
+    int links;
+    bool followed;
 };
 
 static spinlock_t vfs_lock;
@@ -476,99 +488,179 @@ static bool only_slashes(const char *p)
     return *p == '\0';
 }
 
-int vfs_walk(struct vnode *start, const char *path, struct vnode **out)
+static int strlcat_slash(char *buf, size_t size)
 {
-    struct vnode *cur = start_of(start, path);
-    if (!cur)
+    size_t n = strlen(buf);
+    if (n + 2 > size)
+        return -1;
+    buf[n] = '/';
+    buf[n + 1] = '\0';
+    return 0;
+}
+
+static int read_target(struct vnode *link, char *buf)
+{
+    if (!link->mnt->type->readlink)
+        return -EIO;
+    int64_t n = link->mnt->type->readlink(link, buf, VFS_PATH_MAX);
+    if (n < 0)
+        return (int)n;
+    if (n >= VFS_PATH_MAX)
+        return -ENAMETOOLONG;
+    buf[n] = '\0';
+    if (!buf[0])
         return -ENOENT;
-    const char *p = path;
+    return 0;
+}
+
+static int follow_link(struct walk *w, struct vnode *dir)
+{
+    if (++w->links > VFS_FOLLOW_MAX)
+        return -ELOOP;
+    if (!w->buf) {
+        w->buf = kmalloc(VFS_PATH_MAX);
+        w->tgt = kmalloc(VFS_PATH_MAX);
+        if (!w->buf || !w->tgt)
+            return -ENOMEM;
+    }
+    int r = read_target(w->cur, w->tgt);
+    if (r < 0)
+        return r;
+    size_t n = strlen(w->tgt), rest = strlen(w->p);
+    if (n + rest >= VFS_PATH_MAX)
+        return -ENAMETOOLONG;
+    memmove(w->buf + n, w->p, rest + 1);
+    memcpy(w->buf, w->tgt, n);
+    w->p = w->buf;
+    w->followed = true;
+    if (w->buf[0] == '/') {
+        struct vnode *root = vfs_root();
+        if (!root)
+            return -ENOENT;
+        vnode_put(w->cur);
+        vnode_put(dir);
+        w->cur = root;
+    } else {
+        vnode_put(w->cur);
+        w->cur = dir;
+    }
+    return 0;
+}
+
+static int walk_core(struct vnode *start, const char *path, unsigned flags, struct nameidata *nd,
+                     struct vnode **out, bool *followed)
+{
+    struct walk w = { .cur = start_of(start, path), .p = path };
+    if (!w.cur)
+        return -ENOENT;
     char name[VFS_NAME_MAX];
     bool slash = false;
+    int r = 0;
+    if (nd) {
+        nd->last[0] = '\0';
+        nd->slash = false;
+    }
     for (;;) {
-        int n = next_component(&p, name);
-        if (n < 0) {
-            vnode_put(cur);
-            return n;
-        }
-        if (n == 0)
+        int n = next_component(&w.p, name);
+        if (n <= 0) {
+            r = n < 0 ? n : 0;
             break;
-        slash = *p == '/';
-        int r = step(&cur, name);
-        if (r < 0) {
-            vnode_put(cur);
-            return r;
+        }
+        bool last = only_slashes(w.p);
+        slash = *w.p == '/';
+        if (nd && last) {
+            strlcpy(nd->last, name, sizeof(nd->last));
+            nd->slash = slash;
+            break;
+        }
+        struct vnode *dir = w.cur;
+        vnode_get(dir);
+        r = step(&w.cur, name);
+        if (r == 0 && vnode_is_link(w.cur) && (!last || slash || !(flags & WALK_NOFOLLOW))) {
+            r = follow_link(&w, dir);
+            if (r == 0)
+                continue;
+        }
+        vnode_put(dir);
+        if (r < 0)
+            break;
+    }
+    if (r == 0 && nd) {
+        if (!vnode_is_dir(w.cur)) {
+            r = -ENOTDIR;
+        } else {
+            nd->dir = w.cur;
+            w.cur = NULL;
+        }
+    } else if (r == 0) {
+        if (slash && !vnode_is_dir(w.cur)) {
+            r = -ENOTDIR;
+        } else {
+            *out = w.cur;
+            w.cur = NULL;
         }
     }
-    if (slash && !vnode_is_dir(cur)) {
-        vnode_put(cur);
-        return -ENOTDIR;
-    }
-    *out = cur;
-    return 0;
+    vnode_put(w.cur);
+    kfree(w.buf);
+    kfree(w.tgt);
+    if (followed)
+        *followed = w.followed;
+    return r;
+}
+
+int vfs_walk(struct vnode *start, const char *path, struct vnode **out)
+{
+    return walk_core(start, path, 0, NULL, out, NULL);
+}
+
+int vfs_walk_ex(struct vnode *start, const char *path, bool follow, struct vnode **out, bool *followed)
+{
+    return walk_core(start, path, follow ? 0 : WALK_NOFOLLOW, NULL, out, followed);
 }
 
 static int walk_parent(struct vnode *start, const char *path, struct nameidata *nd)
 {
-    struct vnode *cur = start_of(start, path);
-    if (!cur)
-        return -ENOENT;
-    const char *p = path;
-    char name[VFS_NAME_MAX];
-    nd->last[0] = '\0';
-    nd->slash = false;
-    for (;;) {
-        int n = next_component(&p, name);
-        if (n < 0) {
-            vnode_put(cur);
-            return n;
-        }
-        if (n == 0)
-            break;
-        if (only_slashes(p)) {
-            strlcpy(nd->last, name, sizeof(nd->last));
-            nd->slash = *p == '/';
-            break;
-        }
-        int r = step(&cur, name);
-        if (r < 0) {
-            vnode_put(cur);
-            return r;
-        }
-    }
-    if (!vnode_is_dir(cur)) {
-        vnode_put(cur);
-        return -ENOTDIR;
-    }
-    nd->dir = cur;
-    return 0;
+    nd->followed = false;
+    return walk_core(start, path, 0, nd, NULL, &nd->followed);
 }
 
-int vfs_open(struct vnode *start, const char *path, int flags, struct file **out)
+static int open_create(struct vnode *start, const char *path, int flags, struct vnode **out, bool *created,
+                       bool *followed)
 {
-    struct vnode *v = NULL;
-    bool created = false;
-    int acc = flags & O_ACCMODE;
-    bool writing = acc == O_WRONLY || acc == O_RDWR;
-    int r;
-
-    if (flags & O_CREAT) {
+    char *buf = NULL;
+    struct vnode *hold = NULL;
+    int r = 0;
+    for (int depth = 0;; depth++) {
         struct nameidata nd;
         r = walk_parent(start, path, &nd);
         if (r < 0)
-            return r;
+            break;
+        if (nd.followed)
+            *followed = true;
         if (!nd.last[0] || is_dot(nd.last)) {
             vnode_put(nd.dir);
-            r = vfs_walk(start, path, &v);
-            if (r < 0)
-                return r;
+            struct vnode *v = NULL;
+            r = walk_core(start, path, 0, NULL, &v, followed);
             vnode_put(v);
-            return -EISDIR;
+            if (r == 0)
+                r = -EISDIR;
+            break;
         }
         struct mount *m = nd.dir->mnt;
+        struct vnode *link = NULL, *v = NULL;
         mutex_lock(&m->ns_lock);
         struct vnode *found = NULL;
         r = nd.dir->unlinked ? -ENOENT : m->type->lookup(nd.dir, nd.last, &found);
-        if (r == 0) {
+        if (r == 0 && vnode_is_link(found)) {
+            if (flags & O_EXCL)
+                r = -EEXIST;
+            else if (flags & O_NOFOLLOW)
+                r = -ELOOP;
+            else
+                link = found;
+            if (r < 0)
+                vnode_put(found);
+        } else if (r == 0) {
             v = follow_mounts(found);
             if (flags & O_EXCL)
                 r = -EEXIST;
@@ -583,19 +675,59 @@ int vfs_open(struct vnode *start, const char *path, int flags, struct file **out
                 r = -EPERM;
             else {
                 r = m->type->create(nd.dir, nd.last, S_IFREG | 0644, &v);
-                created = r == 0;
+                *created = r == 0;
             }
         }
         mutex_unlock(&m->ns_lock);
-        vnode_put(nd.dir);
-        if (r < 0) {
-            vnode_put(v);
-            return r;
+        if (!link) {
+            vnode_put(nd.dir);
+            if (r < 0)
+                vnode_put(v);
+            else
+                *out = v;
+            break;
         }
-    } else {
-        r = vfs_walk(start, path, &v);
+        if (!buf)
+            buf = kmalloc(VFS_PATH_MAX + 1);
+        r = buf ? read_target(link, buf) : -ENOMEM;
+        if (r == 0 && depth >= VFS_FOLLOW_MAX)
+            r = -ELOOP;
+        if (r == 0 && nd.slash && strlcat_slash(buf, VFS_PATH_MAX + 1) < 0)
+            r = -ENAMETOOLONG;
+        vnode_put(link);
+        vnode_put(hold);
+        hold = nd.dir;
+        if (r < 0)
+            break;
+        *followed = true;
+        start = buf[0] == '/' ? NULL : hold;
+        path = buf;
+    }
+    vnode_put(hold);
+    kfree(buf);
+    return r;
+}
+
+static int open_path(struct vnode *start, const char *path, int flags, struct file **out, bool *followed)
+{
+    struct vnode *v = NULL;
+    bool created = false;
+    int acc = flags & O_ACCMODE;
+    bool writing = acc == O_WRONLY || acc == O_RDWR;
+    int r;
+
+    if (flags & O_CREAT) {
+        r = open_create(start, path, flags, &v, &created, followed);
         if (r < 0)
             return r;
+    } else {
+        r = walk_core(start, path, (flags & O_NOFOLLOW) ? WALK_NOFOLLOW : 0, NULL, &v, followed);
+        if (r < 0)
+            return r;
+        if (vnode_is_link(v)) {
+            vnode_put(v);
+            return -ELOOP;
+        }
     }
 
     if (vnode_is_dir(v)) {
@@ -633,6 +765,20 @@ int vfs_open(struct vnode *start, const char *path, int flags, struct file **out
     return 0;
 }
 
+int vfs_open_ex(struct vnode *start, const char *path, int flags, struct file **out, bool *followed)
+{
+    bool f = false;
+    int r = open_path(start, path, flags, out, &f);
+    if (followed)
+        *followed = f;
+    return r;
+}
+
+int vfs_open(struct vnode *start, const char *path, int flags, struct file **out)
+{
+    return vfs_open_ex(start, path, flags, out, NULL);
+}
+
 int vfs_mkdir(struct vnode *start, const char *path)
 {
     struct nameidata nd;
@@ -658,6 +804,47 @@ int vfs_mkdir(struct vnode *start, const char *path)
         else {
             v = NULL;
             r = m->type->create(nd.dir, nd.last, S_IFDIR | 0755, &v);
+            if (r == 0)
+                vnode_put(v);
+        }
+    }
+    mutex_unlock(&m->ns_lock);
+    vnode_put(nd.dir);
+    return r;
+}
+
+int vfs_symlink(struct vnode *start, const char *path, const char *target)
+{
+    size_t tlen = strlen(target);
+    if (!tlen)
+        return -ENOENT;
+    if (tlen >= VFS_PATH_MAX)
+        return -ENAMETOOLONG;
+    struct nameidata nd;
+    int r = walk_parent(start, path, &nd);
+    if (r < 0)
+        return r;
+    if (!nd.last[0] || is_dot(nd.last)) {
+        vnode_put(nd.dir);
+        return -EEXIST;
+    }
+    struct mount *m = nd.dir->mnt;
+    mutex_lock(&m->ns_lock);
+    struct vnode *v = NULL;
+    r = nd.dir->unlinked ? -ENOENT : m->type->lookup(nd.dir, nd.last, &v);
+    if (r == 0) {
+        vnode_put(v);
+        r = -EEXIST;
+    } else if (r == -ENOENT && !nd.dir->unlinked) {
+        if (nd.slash)
+            r = -ENOENT;
+        else if (m->flags & MNT_RDONLY)
+            r = -EROFS;
+        else if (!m->type->symlink)
+            r = -EPERM;
+        else {
+            v = NULL;
+            r = m->type->symlink(nd.dir, nd.last, target, &v);
             if (r == 0)
                 vnode_put(v);
         }

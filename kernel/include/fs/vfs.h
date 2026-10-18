@@ -9,6 +9,7 @@
 #define VFS_PATH_MAX   512
 #define VFS_SOURCE_MAX 32
 #define VFS_READ_ALL_MAX (64ull * 1024 * 1024)
+#define VFS_FOLLOW_MAX 40
 
 #define MNT_RDONLY 1u
 
@@ -41,6 +42,7 @@ struct fs_type {
     int64_t (*write)(struct vnode *v, uint64_t *offset, const void *buf, uint64_t len, bool append);
     int (*truncate)(struct vnode *v, uint64_t size);
     int (*create)(struct vnode *dir, const char *name, uint32_t mode, struct vnode **out);
+    int (*symlink)(struct vnode *dir, const char *name, const char *target, struct vnode **out);
     int (*unlink)(struct vnode *dir, const char *name, struct vnode *victim);
     int (*rename)(struct vnode *odir, const char *oname, struct vnode *ndir, const char *nname,
                   struct vnode *v, struct vnode *victim);
@@ -99,6 +101,11 @@ static inline bool vnode_is_reg(const struct vnode *v)
     return (v->mode & S_IFMT) == S_IFREG;
 }
 
+static inline bool vnode_is_link(const struct vnode *v)
+{
+    return (v->mode & S_IFMT) == S_IFLNK;
+}
+
 void vfs_init(void);
 bool vfs_mounted(void);
 const char *vfs_root_type(void);
@@ -118,8 +125,11 @@ uint64_t vfs_cache_reclaimable(void);
 struct vnode *vfs_root(void);
 
 int vfs_walk(struct vnode *start, const char *path, struct vnode **out);
+int vfs_walk_ex(struct vnode *start, const char *path, bool follow, struct vnode **out, bool *followed);
 int vfs_open(struct vnode *start, const char *path, int flags, struct file **out);
+int vfs_open_ex(struct vnode *start, const char *path, int flags, struct file **out, bool *followed);
 int vfs_mkdir(struct vnode *start, const char *path);
+int vfs_symlink(struct vnode *start, const char *path, const char *target);
 int vfs_unlink(struct vnode *start, const char *path, bool is_dir);
 int vfs_rename(struct vnode *ostart, const char *opath, struct vnode *nstart, const char *npath);
 

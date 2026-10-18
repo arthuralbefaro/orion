@@ -15,11 +15,11 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 |---|---|---|---|
 | 0 | read | completa | buffer intermediario no kernel; arquivos regulares em pedacos de ate 64 KiB |
 | 1 | write | completa | idem |
-| 2 | open | parcial | `O_CREAT`, `O_EXCL`, `O_TRUNC`, `O_APPEND`, `O_NONBLOCK`, `O_DIRECTORY`, `O_CLOEXEC`; sem modo de permissao |
+| 2 | open | parcial | `O_CREAT`, `O_EXCL`, `O_TRUNC`, `O_APPEND`, `O_NONBLOCK`, `O_DIRECTORY`, `O_CLOEXEC`, `O_NOFOLLOW` (`ELOOP` no link); segue links simbolicos, e `O_CREAT` por um link pendurado cria o alvo (2.7); sem modo de permissao |
 | 3 | close | completa | |
 | 4 | stat | completa | `struct stat` do Linux (144 bytes); `st_dev` e o numero da montagem, `st_ino` e estavel enquanto o arquivo existe (2.1); datas sao a hora do boot ate a 2.7 |
 | 5 | fstat | completa | idem |
-| 6 | lstat | completa | igual ao `stat` (ainda nao ha links simbolicos) |
+| 6 | lstat | completa | nao segue o ultimo link (2.7) |
 | 7 | poll | completa | ate 32 descritores; `EINTR` com sinal |
 | 8 | lseek | completa | `SEEK_SET`, `SEEK_CUR`, `SEEK_END` |
 | 9 | mmap | parcial | anonimo, `MAP_FIXED`, arquivo `MAP_PRIVATE`, `MAP_SHARED` anonimo e de arquivo so leitura, dispositivo (`/dev/fb0`); `MAP_SHARED` de arquivo com escrita da `ENODEV` (2.4) |
@@ -71,7 +71,8 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 83 | mkdir | parcial | sem modo de permissao |
 | 84 | rmdir | completa | |
 | 87 | unlink | completa | |
-| 89 | readlink | parcial | le links do ext2 (2.5); `EINVAL` para o que nao e link; o caminho ainda nao segue links (2.7) |
+| 88 | symlink | completa | ext2 (alvo de ate 59 bytes dentro do inode, maior num bloco) e tmpfs; `EPERM` no FAT; alvo vazio da `ENOENT` (2.7) |
+| 89 | readlink | completa | nao segue o ultimo link; `EINVAL` para o que nao e link (2.7) |
 | 96 | gettimeofday | completa | fuso sempre zero |
 | 97 | getrlimit | completa | `RLIMIT_NOFILE`, `RLIMIT_NPROC`, `RLIMIT_STACK`; os outros sao infinitos |
 | 98 | getrusage | parcial | `RUSAGE_SELF`, `RUSAGE_CHILDREN`, `RUSAGE_THREAD`; so `ru_utime` e `ru_stime` |
@@ -107,10 +108,11 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 234 | tgkill | completa | |
 | 257 | openat | completa | `AT_FDCWD` ou descritor de diretorio; o caminho e resolvido componente a componente, `..` atravessa montagens (2.1) |
 | 258 | mkdirat | parcial | idem; sem modo de permissao |
-| 262 | newfstatat | completa | `AT_EMPTY_PATH` e `AT_SYMLINK_NOFOLLOW` aceitos |
+| 262 | newfstatat | completa | `AT_EMPTY_PATH`; `AT_SYMLINK_NOFOLLOW` nao segue o ultimo link (2.7) |
 | 263 | unlinkat | completa | `AT_REMOVEDIR` |
 | 264 | renameat | completa | |
-| 267 | readlinkat | parcial | como o `readlink` |
+| 266 | symlinkat | completa | como o `symlink` |
+| 267 | readlinkat | completa | como o `readlink` |
 | 269 | faccessat | parcial | como o `access` |
 | 292 | dup3 | completa | `O_CLOEXEC` |
 | 293 | pipe2 | completa | `O_CLOEXEC`, `O_NONBLOCK` |

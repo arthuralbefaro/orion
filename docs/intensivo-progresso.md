@@ -27,12 +27,19 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-17, noite): 2.5 e 2.6 feitas e commitadas pelo dono, fora do
-intensivo, com a regressao inteira verde. A 2.5 foi fechada junto com a parte 1
-da 2.6 num commit so; as partes 2 e 3 da 2.6 vieram em commits proprios. Versao
-no arvore: 2.1.0-a6.
+Estado (2026-10-17, 22:05, sessao 2): 2.1 a 2.6, 8.7 e a parte 1 da 2.7
+(links simbolicos) commitadas. A 8.7 e a 2.7 parte 1 rodaram pela primeira
+vez no QEMU nesta sessao: regressao inteira verde (291 verificacoes) e
+estresse 5x verde, sem nenhuma correcao.
 
-Proxima etapa: 2.7.
+Proxima etapa: 2.7 parte 2 (`chmod`, `fchmod`, `chown`, `fchown`,
+`utimensat`/`utime` gravando no inode do ext2 e no tmpfs, `stat` com modo,
+dono, `nlink` e datas reais, `ls -l`), depois 2.8.
+
+Cuidado: a hora na linha de boot (`build Oct 17 2026 20:37:37`) e a do
+`__TIME__` do `main.c`, que so muda quando o `main.c` e recompilado. Ela
+sozinha nao prova que o kernel testado e o novo; confira que nenhuma fonte
+em `kernel/src` e mais nova que o objeto dela em `build/`.
 
 ## Checklist
 
@@ -63,7 +70,7 @@ Proxima etapa: 2.7.
 | 2.4 | Cache de paginas unificado | [x] | 12:53 | 14:55 | c485b85 |
 | 2.5 | ext2 leitura, piloto em Rust | [x] | 14:56 | 16:36 | ver `git log` |
 | 2.6 | ext2 escrita, mkfs.ext2, fsck | [x] | 16:36 | 19:00 | ver `git log` (3 partes) |
-| 2.7 | Links simbolicos, chmod, chown, utime | [ ] | | | |
+| 2.7 | Links simbolicos, chmod, chown, utime | [~] | 20:20 | | parte 1: ver `git log` |
 | 2.8 | GPT e raiz em ext2 | [ ] | | | |
 | 3.1 | TCP parte 1 | [ ] | | | |
 | 3.2 | TCP parte 2 | [ ] | | | |
@@ -103,7 +110,7 @@ Proxima etapa: 2.7.
 | 8.4 | OOM | [ ] | | | |
 | 8.5 | Perfilador | [ ] | | | |
 | 8.6 | Pilhas do kernel medidas | [ ] | | | |
-| 8.7 | memcpy/memset/memmove do kernel em assembly (rep movsb/stosb) | [ ] | | | |
+| 8.7 | memcpy/memset/memmove do kernel em assembly (rep movsb/stosb) | [x] | 20:05 | 22:00 | `9ad91e7` |
 
 ## Diario
 
@@ -631,3 +638,34 @@ depois), e o fuzz com ASan achou e ajudou a corrigir 3 erros dele; a rodada
 final, com o codigo entregue, passou por 480 imagens mutadas sem erro de
 memoria, sem travar e sem precisar de duas passadas para corrigir. Detalhes em
 `docs/DECISOES.md`.
+
+#### 8.7 memcpy, memset e memmove em assembly - 20:05 a 20:20
+Feita fora do intensivo, como aquecimento antes da 2.7. As tres funcoes sairam
+do `lib/string.c` (onde ja usavam `rep movsb`/`rep stosb` por assembly embutido)
+para `arch/x86_64/mem.S`; o `memmove` com sobreposicao para tras usa `std`,
+`rep movsb` e `cld`, em vez do laco de bytes em C. `string.c` e `string.h`
+perderam os comentarios antigos. Testado no hospedeiro contra uma referencia
+em 200 mil casos (tamanho 0, desalinhado, sobreposicao para os dois lados,
+copias de ate 64 KiB), conferindo retorno e flag de direcao.
+Validada no QEMU na sessao 2 (regressao inteira verde com 291 verificacoes,
+estresse 5x verde) e commitada em `9ad91e7`.
+
+#### 2.7 links simbolicos, chmod, chown, utime - 20:20 - EM ANDAMENTO
+Parte 1 (links simbolicos): a VFS segue links na resolucao de caminho (40 no
+maximo, `ELOOP`), `symlink`/`symlinkat`, `lstat` e `readlink` sem seguir o
+ultimo link, `O_NOFOLLOW`, `O_CREAT` por link pendurado; links no tmpfs e no
+ext2 (curto no inode, longo num bloco). Programa novo `linktest` na regressao
+(tmpfs e ext2) e `ln -s` do sbase. Detalhes em `docs/DECISOES.md`.
+Sessao 2 (21:40 a 22:05): primeira vez no QEMU. `check.ps1` limpo, regressao
+inteira verde (291 verificacoes, 3 novas: `linktest` no tmpfs e no ext2 e
+`ln -s`/`readlink` do sbase; o `fsck.ext2` final passou a vir depois do
+`linktest`), estresse 5x
+verde; nada precisou de correcao. Commit "v2.1: 2.7 (parte 1) - links
+simbolicos". Falta a parte 2: `chmod`, `chown`, `utime`/`utimensat` gravando no inode, `stat` com
+os valores reais e `ls -l`.
+
+### Sessao 2 - 2026-10-17
+
+Ponto de partida (21:40): a arvore batia com o "Como retomar" (8.7 e 2.7
+parte 1 sem commit, mais nada). `.\check.ps1` limpo. Primeiro trabalho:
+validar no QEMU e commitar a 8.7 e a 2.7 parte 1 (entradas acima).

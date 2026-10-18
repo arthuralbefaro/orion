@@ -85,13 +85,21 @@ static char *kstrdup(const char *s)
     return d;
 }
 
-static long walk_user(int dirfd, const char *upath, struct vnode **out, struct upath *up)
+static long walk_user_ex(int dirfd, const char *upath, bool follow, struct vnode **out, struct upath *up)
 {
     long r = upath_get(dirfd, upath, up);
+    bool followed = false;
     if (r == 0)
-        r = vfs_walk(up->start, up->path, out);
+        r = vfs_walk_ex(up->start, up->path, follow, out, &followed);
+    if (followed)
+        up->full_ok = false;
     upath_put(up);
     return r;
+}
+
+static long walk_user(int dirfd, const char *upath, struct vnode **out, struct upath *up)
+{
+    return walk_user_ex(dirfd, upath, true, out, up);
 }
 
 static long sys_read(int fd, void *ubuf, size_t len)
@@ -275,13 +283,14 @@ static long sys_openat(int dirfd, const char *upath, int flags)
     struct upath up;
     long r = upath_get(dirfd, upath, &up);
     struct file *f = NULL;
+    bool followed = false;
     if (r == 0)
-        r = vfs_open(up.start, up.path, flags, &f);
+        r = vfs_open_ex(up.start, up.path, flags, &f, &followed);
     upath_put(&up);
     if (r < 0)
         return r;
-    f->flags = (uint32_t)flags & ~(uint32_t)(O_CREAT | O_EXCL | O_TRUNC | O_CLOEXEC);
-    if (up.full_ok)
+    f->flags = (uint32_t)flags & ~(uint32_t)(O_CREAT | O_EXCL | O_TRUNC | O_CLOEXEC | O_NOFOLLOW);
+    if (up.full_ok && !followed)
         f->path = kstrdup(up.full);
     int fd = process_fd_alloc(process_current(), f, 0, (flags & O_CLOEXEC) != 0);
     if (fd < 0)
@@ -643,7 +652,7 @@ static long sys_newfstatat(int dirfd, const char *upath, struct user_stat *ust, 
         return -EFAULT;
     struct upath up;
     struct vnode *v;
-    long r = walk_user(dirfd, upath, &v, &up);
+    long r = walk_user_ex(dirfd, upath, !(flags & AT_SYMLINK_NOFOLLOW), &v, &up);
     if (r < 0)
         return r;
     struct user_stat st;
@@ -652,19 +661,24 @@ static long sys_newfstatat(int dirfd, const char *upath, struct user_stat *ust, 
     return copy_to_user(ust, &st, sizeof(st));
 }
 
-static long sys_faccessat(int dirfd, const char *upath, int mode)
+static long faccess(int dirfd, const char *upath, int mode, bool follow)
 {
     if (mode & ~7)
         return -EINVAL;
     struct upath up;
     struct vnode *v;
-    long r = walk_user(dirfd, upath, &v, &up);
+    long r = walk_user_ex(dirfd, upath, follow, &v, &up);
     if (r < 0)
         return r;
     if ((mode & 2) && (vnode_is_reg(v) || vnode_is_dir(v)) && vfs_is_rdonly(v))
         r = -EROFS;
     vnode_put(v);
     return r;
+}
+
+static long sys_faccessat(int dirfd, const char *upath, int mode)
+{
+    return faccess(dirfd, upath, mode, true);
 }
 
 static long sys_faccessat2(int dirfd, const char *upath, int mode, int flags)
@@ -683,14 +697,14 @@ static long sys_faccessat2(int dirfd, const char *upath, int mode, int flags)
             return process_fd_pin(dirfd) ? 0 : -EBADF;
         }
     }
-    return sys_faccessat(dirfd, upath, mode);
+    return faccess(dirfd, upath, mode, !(flags & AT_SYMLINK_NOFOLLOW));
 }
 
 static long sys_readlinkat(int dirfd, const char *upath, char *ubuf, uint64_t size)
 {
     struct upath up;
     struct vnode *v;
-    long r = walk_user(dirfd, upath, &v, &up);
+    long r = walk_user_ex(dirfd, upath, false, &v, &up);
     if (r < 0)
         return r;
     if ((v->mode & S_IFMT) != S_IFLNK || !v->mnt->type->readlink) {
@@ -714,6 +728,23 @@ static long sys_readlinkat(int dirfd, const char *upath, char *ubuf, uint64_t si
         n = -EFAULT;
     kfree(buf);
     return n;
+}
+
+static long sys_symlinkat(const char *utarget, int dirfd, const char *upath)
+{
+    char *target = kmalloc(USER_PATH_MAX);
+    if (!target)
+        return -ENOMEM;
+    long r = strncpy_from_user(target, utarget, USER_PATH_MAX);
+    if (r >= 0) {
+        struct upath up;
+        r = upath_get(dirfd, upath, &up);
+        if (r == 0)
+            r = vfs_symlink(up.start, up.path, target);
+        upath_put(&up);
+    }
+    kfree(target);
+    return r;
 }
 
 static uint8_t dirent_type(uint32_t mode)
@@ -1027,11 +1058,14 @@ static long sys_chdir(const char *upath)
     struct upath up;
     long r = upath_get(AT_FDCWD, upath, &up);
     struct vnode *v = NULL;
+    bool followed = false;
     if (r == 0)
-        r = vfs_walk(up.start, up.path, &v);
+        r = vfs_walk_ex(up.start, up.path, true, &v, &followed);
     upath_put(&up);
     if (r < 0)
         return r;
+    if (followed)
+        up.full_ok = false;
     if (!vnode_is_dir(v)) {
         vnode_put(v);
         return -ENOTDIR;
@@ -1116,7 +1150,7 @@ static long sys_mount(const char *usource, const char *utarget, const char *utyp
     struct vnode *target = NULL;
     if (r == 0)
         r = walk_user(AT_FDCWD, utarget, &target, up);
-    if (r == 0 && !up->full_ok)
+    if (r == 0 && !up->full_ok && vfs_getpath(target, up->full, sizeof(up->full)) < 0)
         r = -ENAMETOOLONG;
     if (r == 0) {
         r = vfs_mount(t, dev, source, target, up->full, (flags & MS_RDONLY) ? MNT_RDONLY : 0, opts);
@@ -1137,7 +1171,7 @@ static long sys_umount2(const char *utarget, int flags)
     if (!up)
         return -ENOMEM;
     struct vnode *v;
-    long r = walk_user(AT_FDCWD, utarget, &v, up);
+    long r = walk_user_ex(AT_FDCWD, utarget, !(flags & UMOUNT_NOFOLLOW), &v, up);
     kfree(up);
     if (r < 0)
         return r;
@@ -1631,7 +1665,10 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_KILL:        ret = sys_kill((int)f->rdi, (int)f->rsi); break;
     case SYS_RT_SIGACTION: ret = sys_rt_sigaction((int)f->rdi, (const struct user_sigaction *)f->rsi, (struct user_sigaction *)f->rdx, f->r10); break;
     case SYS_RT_SIGPROCMASK: ret = sys_rt_sigprocmask((int)f->rdi, (const uint64_t *)f->rsi, (uint64_t *)f->rdx, f->r10); break;
-    case SYS_LSTAT:       ret = sys_stat((const char *)f->rdi, (struct user_stat *)f->rsi); break;
+    case SYS_LSTAT:       ret = sys_newfstatat(AT_FDCWD, (const char *)f->rdi, (struct user_stat *)f->rsi,
+                                           AT_SYMLINK_NOFOLLOW); break;
+    case SYS_SYMLINK:     ret = sys_symlinkat((const char *)f->rdi, AT_FDCWD, (const char *)f->rsi); break;
+    case SYS_SYMLINKAT:   ret = sys_symlinkat((const char *)f->rdi, (int)f->rsi, (const char *)f->rdx); break;
     case SYS_ACCESS:      ret = sys_faccessat(AT_FDCWD, (const char *)f->rdi, (int)f->rsi); break;
     case SYS_READLINK:    ret = sys_readlinkat(AT_FDCWD, (const char *)f->rdi, (char *)f->rsi, f->rdx); break;
     case SYS_GETDENTS64:  ret = sys_getdents64((int)f->rdi, (void *)f->rsi, f->rdx); break;

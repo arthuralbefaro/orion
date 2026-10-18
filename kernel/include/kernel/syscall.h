@@ -58,6 +58,7 @@
 #define SYS_GETRLIMIT     97
 #define SYS_LSTAT         6
 #define SYS_ACCESS        21
+#define SYS_SYMLINK       88
 #define SYS_READLINK      89
 #define SYS_GETDENTS64    217
 #define SYS_OPENAT        257
@@ -65,6 +66,7 @@
 #define SYS_NEWFSTATAT    262
 #define SYS_UNLINKAT      263
 #define SYS_RENAMEAT      264
+#define SYS_SYMLINKAT     266
 #define SYS_READLINKAT    267
 #define SYS_FACCESSAT     269
 #define SYS_FACCESSAT2    439

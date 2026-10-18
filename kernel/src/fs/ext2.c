@@ -241,6 +241,19 @@ static int ext2v_create(struct vnode *dir, const char *name, uint32_t mode, stru
     return ino_vnode(dir->mnt, ino, out);
 }
 
+static int ext2v_symlink(struct vnode *dir, const char *name, const char *target, struct vnode **out)
+{
+    struct ext2_mnt *em = em_of(dir);
+    uint32_t ino = 0;
+    mutex_lock(&em->lock);
+    int r = ext2_symlink(em->fs, (uint32_t)dir->key, (const uint8_t *)name, (uint32_t)strlen(name),
+                         (const uint8_t *)target, (uint32_t)strlen(target), now_epoch(), &ino);
+    mutex_unlock(&em->lock);
+    if (r < 0)
+        return r;
+    return ino_vnode(dir->mnt, ino, out);
+}
+
 static void forget(struct vnode *victim, uint32_t nlink)
 {
     if (nlink)
@@ -367,6 +380,7 @@ const struct fs_type ext2_fs_type = {
     .write = ext2v_write,
     .truncate = ext2v_truncate,
     .create = ext2v_create,
+    .symlink = ext2v_symlink,
     .unlink = ext2v_unlink,
     .rename = ext2v_rename,
     .release = ext2v_release,

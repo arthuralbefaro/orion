@@ -16,6 +16,7 @@ struct tnode {
     uint32_t mode;
     uint64_t size;
     char *name;
+    char *link;
     struct tnode *parent;
     struct tnode *next;
     struct tnode *children;
@@ -144,6 +145,7 @@ static void free_node(struct tmpfs *t, struct tnode *n)
     free_from(t, n, 0);
     t->nr_inodes--;
     kfree(n->name);
+    kfree(n->link);
     kfree(n);
 }
 
@@ -410,6 +412,60 @@ static int tmpfs_create(struct vnode *dir, const char *name, uint32_t mode, stru
     return r;
 }
 
+static int tmpfs_symlink(struct vnode *dir, const char *name, const char *target, struct vnode **out)
+{
+    struct tmpfs *t = dir->mnt->priv;
+    struct tnode *d = dir->priv;
+    if (!name_ok(name))
+        return -EINVAL;
+    char *copy = dup_name(target);
+    if (!copy)
+        return -ENOMEM;
+    mutex_lock(&t->lock);
+    int r = 0;
+    if (!d->linked)
+        r = -ENOENT;
+    else if (find_child(d, name))
+        r = -EEXIST;
+    struct tnode *n = NULL;
+    if (r == 0) {
+        n = new_node(t, name, S_IFLNK | 0777);
+        if (!n)
+            r = -ENOSPC;
+    }
+    if (r == 0) {
+        n->link = copy;
+        copy = NULL;
+        n->size = strlen(n->link);
+        link_child(d, n);
+        r = node_vnode(dir->mnt, n, out);
+        if (r < 0) {
+            unlink_child(d, n);
+            maybe_free(t, n);
+        }
+    }
+    mutex_unlock(&t->lock);
+    kfree(copy);
+    return r;
+}
+
+static int64_t tmpfs_readlink(struct vnode *v, char *buf, uint64_t size)
+{
+    struct tmpfs *t = v->mnt->priv;
+    struct tnode *n = v->priv;
+    mutex_lock(&t->lock);
+    int64_t r = -EINVAL;
+    if (n->link) {
+        uint64_t len = strlen(n->link);
+        if (len > size)
+            len = size;
+        memcpy(buf, n->link, len);
+        r = (int64_t)len;
+    }
+    mutex_unlock(&t->lock);
+    return r;
+}
+
 static int tmpfs_unlink(struct vnode *dir, const char *name, struct vnode *victim)
 {
     struct tmpfs *t = dir->mnt->priv;
@@ -621,7 +677,9 @@ const struct fs_type tmpfs_type = {
     .read = tmpfs_read,
     .write = tmpfs_write,
     .truncate = tmpfs_truncate,
+    .readlink = tmpfs_readlink,
     .create = tmpfs_create,
+    .symlink = tmpfs_symlink,
     .unlink = tmpfs_unlink,
     .rename = tmpfs_rename,
     .release = tmpfs_release,

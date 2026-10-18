@@ -1736,3 +1736,59 @@ Uma linha por decisao, na ordem em que foram tomadas.
   `sdd` (o que o kernel gravou tem de estar limpo), o `mkfs.ext2` formata o
   `sdd`, o `fsck.ext2` confere, o kernel monta, o `fstest -a` passa (o
   criterio da etapa) e o `fsck.ext2` confere de novo depois do `umount`.
+
+## v2.1.0-a6, etapa 8.7 (memcpy, memset e memmove em assembly)
+
+- `memcpy`, `memset` e `memmove` do kernel estao em `arch/x86_64/mem.S`. Elas
+  ja usavam `rep movsb`/`rep stosb` por assembly embutido no C, entao o ganho
+  de desempenho e nulo; o que muda e que o codigo fica onde o plano diz que
+  assembly mora, e o `memmove` para tras deixou de ser um laco de bytes em C.
+- O `memmove` so copia de tras para frente quando o destino comeca dentro da
+  origem; ai usa `std`, `rep movsb` com os ponteiros no ultimo byte e `cld`.
+  Isso e seguro porque toda entrada no kernel (`isr_common` e
+  `syscall_entry`) faz `cld` antes de chamar C, e o `iretq` devolve a flag de
+  direcao de quem foi interrompido; uma interrupcao no meio da copia nao faz
+  um `memcpy` do tratador andar para tras. A copia para tras nao tem a
+  otimizacao de strings rapidas das CPUs, mas e rara no kernel.
+- `memcmp` e as funcoes de string continuam em C: o clang gera para elas
+  codigo tao bom quanto o feito a mao.
+
+## v2.1.0-a6, etapa 2.7 parte 1 (links simbolicos)
+
+- A resolucao de caminho da VFS (`walk_core`) segue links: quando um
+  componente e link e nao e o ultimo (ou e o ultimo e o chamador quer seguir,
+  ou vem uma barra depois), o alvo e lido pela operacao `readlink` do sistema
+  de arquivos e emendado no resto do caminho, num buffer alocado so no
+  primeiro link. Alvo absoluto recomeca da raiz; relativo, do diretorio que
+  contem o link. Limite de 40 links por resolucao (`ELOOP`), como o Linux; o
+  `..` depois de um link vai ao pai real do alvo, nao ao do link.
+- Quem nao segue o ultimo componente: `lstat`, `newfstatat` com
+  `AT_SYMLINK_NOFOLLOW`, `readlink`, `faccessat2` com `AT_SYMLINK_NOFOLLOW`,
+  `umount2` com `UMOUNT_NOFOLLOW`, e tudo que passa por `walk_parent`
+  (`unlink`, `rmdir`, `rename`, `mkdir`, `symlink`), que segue os links do
+  meio mas nunca o ultimo. `open` com `O_NOFOLLOW` no link da `ELOOP`.
+  `open` com `O_CREAT` num link segue o alvo e, se ele nao existe, cria o
+  alvo, como no Linux; com `O_EXCL` da `EEXIST`. Isso e um laco (nao
+  recursao), para 40 links em cadeia nao gastarem a pilha do kernel.
+- O caminho em texto que o processo guarda (o cwd e o caminho de cada arquivo
+  aberto, usados pelo `getcwd`, pelo `openat` relativo e pelo nome do ponto de
+  montagem) e normalizado lexicalmente, o que da errado depois de um link.
+  A resolucao avisa quando seguiu algum link, e ai o texto e descartado e
+  recalculado a partir do vnode (`vfs_getpath`): `getcwd` depois de
+  `chdir` por um link mostra o caminho real, como no Linux.
+- Operacao nova `symlink` no `struct fs_type`. tmpfs guarda o alvo como texto
+  no no. ext2 guarda alvo de ate 59 bytes dentro do inode (`i_block`, sem
+  bloco de dados) e maior num bloco proprio, como o Linux, e o alvo tem de
+  caber num bloco. FAT nao tem a operacao e devolve `EPERM`. Alvo vazio da
+  `ENOENT`.
+- Testes: `cargo test` cria links de 1, 59, 60, 61, 300 e (tamanho do bloco -
+  1) bytes em imagens do `mkext2.py` e do `mke2fs`, confere o lugar (inode ou
+  bloco), le de volta, renomeia, apaga e confere que blocos e inodes voltaram,
+  com `e2fsck -fn` no meio e no fim; o fuzz de escrita sorteia tambem
+  `symlink`. O `linktest` (novo) foi conferido contra o Linux do hospedeiro
+  antes de entrar e roda na regressao no tmpfs (sequencia A) e no ext2
+  formatado pelo `mkfs.ext2` (sequencia C, antes do `fsck.ext2` final):
+  relativo, absoluto, cadeia, diretorio no meio do caminho, `..` fisico,
+  `getcwd`, laco, pendurado, `O_CREAT` por pendurado, `O_NOFOLLOW`, 40 saltos
+  passam e 41 dao `ELOOP`, alvo longo, `rename` e `unlink` do link. A
+  sequencia A tambem roda `ln -s` e `readlink` do sbase.

@@ -89,6 +89,10 @@ function Test-ShotColors([string]$ppm, [string]$what, [int]$min) {
 
 $buildFlag = @{}
 if ($NoBuild) { $buildFlag = @{ NoBuild = $true } }
+if (-not $NoBuild -and -not ($runAll -or $OnlyA)) {
+    Write-Host "== Build ==" -ForegroundColor Cyan
+    & (Join-Path $Root "build.ps1") | Out-Null
+}
 
 # ---------------- Sequencia A: texto ----------------
 if ($runAll -or $OnlyA) {
@@ -123,6 +127,8 @@ if ($runAll -or $OnlyA) {
         "cmd:vfstest -n /", "until:60:falha(s))",
         "cmd:tmptest", "until:400:falha(s))",
         "cmd:vfstest /tmp", "until:200:falha(s))",
+        "cmd:linktest /tmp", "until:120:falha(s))",
+        "cmd:ln -s alvo-do-ln /tmp/lnx", "cmd:readlink /tmp/lnx", "cmd:rm /tmp/lnx", "wait:1",
         "cmd:cat /proc/self/maps", "wait:1", "cmd:cat /proc/mounts", "wait:1",
         "cmd:proctest um dois", "until:60:falha(s))",
         "cmd:pctest", "until:120:falha(s))",
@@ -298,6 +304,8 @@ if ($runAll -or $OnlyA) {
     Expect $a "nr_inodes limita com ENOSPC +ok" "tmpfs: nr_inodes"
     Expect $a "rename no mesmo diretorio durante o readdir termina +ok" "tmpfs: rename durante o readdir"
     Expect $a "(?s)vfstest /tmp.*?vfstest: TUDO OK" "vfstest no tmpfs"
+    Expect $a "(?s)linktest: links simbolicos em /tmp\s.*?linktest: TUDO OK" "linktest no tmpfs"
+    Expect $a "readlink /tmp/lnx\s*\n\s*alvo-do-ln" "ln -s e readlink do sbase"
     Expect $a "(?s)cat /proc/self/maps\s*\n\s*[0-9a-f]{8,}-[0-9a-f]{8,} r--p [0-9a-f]{8} 00:00 \d+\s+/bin/cat" "cat /proc/self/maps mostra as VMAs do proprio cat"
     Expect $a "[0-9a-f]+-7ffffffff000 rw-p 00000000 00:00 0\s+\[stack\]" "maps mostra a pilha"
     Expect $a "proc /proc proc ro 0 0" "/proc/mounts lista o procfs"
@@ -471,6 +479,7 @@ if ($runAll -or $OnlyC) {
         "cmd:fsck.ext2 /dev/sdd", 'cmd:echo FIM$X-FSCK3', "until:120:FIM-FSCK3",
         "cmd:mount -t ext2 /dev/sdd /tmp/e1", "cmd:ls /tmp/e1",
         "cmd:fstest -a /tmp/e1", 'cmd:echo FIM$X-FSTEST', "until:600:FIM-FSTEST",
+        "cmd:linktest /tmp/e1", 'cmd:echo FIM$X-LINK', "until:200:FIM-LINK",
         "cmd:umount /tmp/e1", "wait:1",
         "cmd:fsck.ext2 /dev/sdd", 'cmd:echo FIM$X-FSCK4', "until:120:FIM-FSCK4",
         "key:0B", "cmd:mem", "cmd:lsblk", "cmd:mutex"
@@ -539,7 +548,8 @@ if ($runAll -or $OnlyC) {
     Expect $c "ext2\s+sdd: rev 1, blocos de 1024 bytes, \d+ blocos \(\d+ livres\), \d+ inodes, \d+ grupo\(s\), label 'NOVO', leitura e escrita" "kernel monta o ext2 do mkfs.ext2"
     Expect $c "ls /tmp/e1\s*\n\s*<DIR>\s+lost\+found/" "ext2 novo tem o lost+found"
     Expect $c "(?s)fstest -a /tmp/e1.*?criou 300 arquivos com nome longo\s+ok.*?escreveu 3 MiB\s+ok.*?fstest: TUDO OK.*?FIM-FSTEST" "fstest -a no ext2"
-    Expect $c "(?s)FIM-FSTEST.*?fsck\.ext2: /dev/sdd: limpo.*?FIM-FSCK4" "ext2 limpo no fsck depois do fstest -a"
+    Expect $c "(?s)linktest: links simbolicos em /tmp/e1.*?linktest: TUDO OK.*?FIM-LINK" "linktest no ext2"
+    Expect $c "(?s)FIM-LINK.*?fsck\.ext2: /dev/sdd: limpo.*?FIM-FSCK4" "ext2 limpo no fsck depois do fstest -a e do linktest"
     Test-MemDelta $c "memoria estavel na sequencia C" 24
 }
 

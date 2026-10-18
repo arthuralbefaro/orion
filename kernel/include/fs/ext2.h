@@ -53,5 +53,7 @@ int ext2_unlink(struct ext2_rs *fs, uint32_t dir, const uint8_t *name, uint32_t 
 int ext2_rename(struct ext2_rs *fs, uint32_t odir, const uint8_t *oname, uint32_t olen, uint32_t ndir,
                 const uint8_t *nname, uint32_t nlen, uint32_t expect, uint32_t now, uint32_t *victim, uint32_t *nlink);
 int ext2_evict(struct ext2_rs *fs, uint32_t ino, uint32_t now);
+int ext2_symlink(struct ext2_rs *fs, uint32_t dir, const uint8_t *name, uint32_t len, const uint8_t *target,
+                 uint32_t tlen, uint32_t now, uint32_t *out);
 
 extern const struct fs_type ext2_fs_type;

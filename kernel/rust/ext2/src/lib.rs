@@ -1107,6 +1107,73 @@ impl Fs {
         Ok(ino)
     }
 
+    fn symlink(&mut self, dir_n: u32, name: &[u8], target: &[u8], now: u32) -> Result<u32, i32> {
+        self.writable()?;
+        check_name(name)?;
+        if target.is_empty() {
+            return Err(ENOENT);
+        }
+        if target.len() >= self.block_size as usize {
+            return Err(ENAMETOOLONG);
+        }
+        if target.contains(&0) {
+            return Err(EINVAL);
+        }
+        let parent = self.dir_inode(dir_n)?;
+        match self.locate(&parent, name) {
+            Ok(_) => return Err(EEXIST),
+            Err(ENOENT) => {}
+            Err(e) => return Err(e),
+        }
+        let ino = self.alloc_inode(false, self.group_of(dir_n))?;
+        let mut node = Inode {
+            mode: S_IFLNK | 0o777,
+            uid: 0,
+            gid: 0,
+            nlink: 1,
+            size: target.len() as u64,
+            atime: now,
+            mtime: now,
+            ctime: now,
+            sectors: 0,
+            file_acl: 0,
+            flags: 0,
+            block: [0; 15],
+        };
+        let inline = target.len() < 60;
+        let r = self
+            .fill_link(ino, &mut node, target, inline)
+            .and_then(|_| self.dir_add(dir_n, name, ino, file_type(node.mode), now));
+        if let Err(e) = r {
+            if !inline && node.block[0] != 0 {
+                let _ = self.free_block(node.block[0]);
+            }
+            let _ = self.clear_inode(ino, now);
+            let _ = self.free_inode(ino, false);
+            return Err(e);
+        }
+        Ok(ino)
+    }
+
+    fn fill_link(&mut self, ino: u32, node: &mut Inode, target: &[u8], inline: bool) -> Result<(), i32> {
+        if inline {
+            let mut raw = [0u8; 60];
+            raw[..target.len()].copy_from_slice(target);
+            for (k, b) in node.block.iter_mut().enumerate() {
+                *b = le32(&raw, k * 4);
+            }
+        } else {
+            let bs = self.block_size as usize;
+            let b = self.new_block(self.group_of(ino), false, &mut node.sectors)?;
+            node.block[0] = b;
+            let mut buf = zeroed(bs)?;
+            buf[..target.len()].copy_from_slice(target);
+            self.write_block(b, &buf)?;
+        }
+        self.clear_inode(ino, 0)?;
+        self.write_inode(ino, node)
+    }
+
     fn unlink(&mut self, dir_n: u32, name: &[u8], expect: u32, rmdir: bool, now: u32) -> Result<(u32, u32), i32> {
         self.writable()?;
         check_name(name)?;
@@ -1688,6 +1755,33 @@ pub unsafe extern "C" fn ext2_evict(fs: *mut Fs, ino: u32, now: u32) -> i32 {
     let fs = &mut *fs;
     match fs.evict(ino, now) {
         Ok(()) => 0,
+        Err(e) => errno(e),
+    }
+}
+
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn ext2_symlink(
+    fs: *mut Fs,
+    dir: u32,
+    name: *const u8,
+    len: u32,
+    target: *const u8,
+    tlen: u32,
+    now: u32,
+    out: *mut u32,
+) -> i32 {
+    let fs = &mut *fs;
+    if target.is_null() {
+        return errno(EINVAL);
+    }
+    let t = core::slice::from_raw_parts(target, tlen as usize);
+    let r = name_of(name, len).and_then(|n| fs.symlink(dir, n, t, now));
+    match r {
+        Ok(ino) => {
+            *out = ino;
+            0
+        }
         Err(e) => errno(e),
     }
 }

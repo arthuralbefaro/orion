@@ -725,7 +725,7 @@ fn churn(data: StdVec<u8>, rng: &mut Rng) -> bool {
         let e = dirs[rng.below(dirs.len() as u64) as usize];
         let a = pick(rng, &pool);
         let b = pick(rng, &pool);
-        match rng.below(5) {
+        match rng.below(6) {
             0 => {
                 let _ = mk(&mut fs, d, &a, REG);
             }
@@ -743,6 +743,10 @@ fn churn(data: StdVec<u8>, rng: &mut Rng) -> bool {
             }
             3 => {
                 let _ = mv(&mut fs, d, &a, e, &b);
+            }
+            4 => {
+                let t = b"../alvo/de/um/link/que/pode/ser/longo/o/bastante/para/sair/do/inode/e/ganhar/bloco";
+                let _ = ln(&mut fs, d, &a, &t[..rng.below(t.len() as u64) as usize]);
             }
             _ => {
                 if let Ok(ino) = fs.lookup(d, &a) {
@@ -776,4 +780,88 @@ fn namespace_ops_on_mutated_images_never_panic() {
         }
         assert!(mounted > 0, "{}: nenhuma imagem mutada montou (semente {})", name, s);
     }
+}
+
+fn ln(fs: &mut Fs, dir: u32, name: &[u8], target: &[u8]) -> Result<u32, i32> {
+    let mut ino = 0u32;
+    let r = unsafe {
+        ext2_symlink(fs, dir, name.as_ptr(), name.len() as u32, target.as_ptr(), target.len() as u32, NOW, &mut ino)
+    };
+    if r < 0 {
+        Err(-r)
+    } else {
+        Ok(ino)
+    }
+}
+
+fn readlink_of(fs: &Fs, ino: u32) -> StdVec<u8> {
+    let mut buf = vec![0u8; 8192];
+    let n = unsafe { ext2_readlink(fs, ino, buf.as_mut_ptr(), buf.len() as u64) };
+    assert!(n >= 0, "readlink falhou: {}", n);
+    buf.truncate(n as usize);
+    buf
+}
+
+fn target_of(len: usize, seed: u8) -> StdVec<u8> {
+    (0..len).map(|i| b'a' + ((i as u8).wrapping_add(seed) % 26)).collect()
+}
+
+#[test]
+fn symlinks_keep_the_image_valid() {
+    let mut images: StdVec<(String, StdVec<u8>)> = StdVec::new();
+    images.push(("ln-1k".into(), image("ln-1k", &["--size", "16", "--block", "1024"])));
+    images.push(("ln-4k".into(), image("ln-4k", &["--size", "16", "--block", "4096"])));
+    if let Some(img) = mke2fs_image("ln-mke2fs", 16, &["-b", "1024", "-I", "256", "-N", "600"]) {
+        images.push(("ln-mke2fs".into(), img));
+    }
+    for (name, data) in images {
+        let disk = Disk { data: RefCell::new(data), reads: Cell::new(0) };
+        let mut info = empty_info();
+        let ctx = &disk as *const Disk as *mut c_void;
+        let mut fs = mount(ctx, disk_read, Some(disk_write), &mut info).expect("monta rw");
+        let free0 = fs.free_blocks;
+        let inodes0 = fs.free_inodes;
+        let root_sectors0 = fs.inode(ROOT_INO).expect("raiz").sectors;
+        let bs = fs.block_size as usize;
+        let dir = mk(&mut fs, ROOT_INO, b"links", DIR).expect("mkdir links");
+        let lens = [1usize, 59, 60, 61, 300, bs - 1];
+        let mut made = StdVec::new();
+        for (k, &len) in lens.iter().enumerate() {
+            let t = target_of(len, k as u8);
+            let nm = format!("l{}", len);
+            let ino = ln(&mut fs, dir, nm.as_bytes(), &t).expect("symlink");
+            let node = fs.inode(ino).expect("inode");
+            assert_eq!(node.mode & S_IFMT, S_IFLNK);
+            assert_eq!(node.size, len as u64);
+            assert_eq!(node.sectors == 0, len < 60, "{}: link de {} bytes no lugar errado", name, len);
+            assert_eq!(readlink_of(&fs, ino), t, "{}: alvo de {} bytes", name, len);
+            made.push((nm, ino, t));
+        }
+        let slow = lens.iter().filter(|&&l| l >= 60).count() as u32;
+        assert_eq!(free0 - fs.free_blocks, 1 + slow, "{}: blocos dos links", name);
+        assert_eq!(ln(&mut fs, dir, b"l1", b"x"), Err(EEXIST));
+        assert_eq!(ln(&mut fs, dir, b"vazio", b""), Err(ENOENT));
+        assert_eq!(ln(&mut fs, dir, b"grande", &target_of(bs, 0)), Err(ENAMETOOLONG));
+        assert_eq!(ln(&mut fs, dir, b"com-nul", b"a\0b"), Err(EINVAL));
+        assert_eq!(mv(&mut fs, dir, b"l300", ROOT_INO, b"movido"), Ok((0, 0)));
+        assert_eq!(readlink_of(&fs, made[4].1), made[4].2);
+        assert_eq!(unsafe { ext2_sync(&mut *fs, NOW, true) }, 0);
+        fsck(&format!("{}-meio", name), &fs_bytes(&fs));
+
+        rm_now(&mut fs, ROOT_INO, b"movido", false);
+        for (nm, _, _) in made.iter().filter(|(n, _, _)| n != "l300") {
+            rm_now(&mut fs, dir, nm.as_bytes(), false);
+        }
+        rm_now(&mut fs, ROOT_INO, b"links", true);
+        let growth = (fs.inode(ROOT_INO).expect("raiz").sectors - root_sectors0) / fs.sectors_per_block();
+        assert_eq!(fs.free_blocks + growth, free0, "{}: blocos perdidos", name);
+        assert_eq!(fs.free_inodes, inodes0, "{}: inodes perdidos", name);
+        assert_eq!(unsafe { ext2_sync(&mut *fs, NOW, true) }, 0);
+        drop(fs);
+        fsck(&name, &disk.data.borrow());
+    }
+    let disk = Disk { data: RefCell::new(image("ln-ro", &["--size", "8", "--block", "1024"])), reads: Cell::new(0) };
+    let mut info = empty_info();
+    let mut fs = mount(&disk as *const Disk as *mut c_void, disk_read, None, &mut info).expect("monta");
+    assert_eq!(ln(&mut fs, ROOT_INO, b"x", b"y"), Err(EROFS));
 }

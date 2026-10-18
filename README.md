@@ -102,6 +102,9 @@ O ext2 (o driver e o piloto em Rust do kernel) monta com leitura e escrita;
     fstest -a /tmp/e
     umount /tmp/e
 
+Links simbolicos funcionam no ext2 e no tmpfs (`ln -s alvo nome`,
+`readlink nome`); o FAT nao tem links e devolve `EPERM`.
+
 Os dois recusam disco montado. O `fsck.ext2` sai com 0 (limpo), 1 (corrigiu
 tudo), 4 (sobrou problema) ou 8 (nao deu para conferir), como o `e2fsck`.
 Imagens prontas tambem saem do `tools\mkext2.py`, a partir de um diretorio ou
@@ -138,7 +141,7 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
     ifconfig ping nslookup dhcp mkfs mkfs.ext2 fsck.ext2 mount umount
-    testes: memtest fstest vfstest tmptest proctest pctest ext2test polltest forktest ptytest limtest stress sctest filetest
+    testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
 
