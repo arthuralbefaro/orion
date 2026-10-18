@@ -80,7 +80,7 @@ if (-not (Wait-PortFree $SerialPort 20)) { Write-Host "AVISO: porta $SerialPort 
 if (-not (Wait-PortFree $MonitorPort 20)) { Write-Host "AVISO: porta $MonitorPort ainda ocupada" -ForegroundColor Yellow }
 
 $qemuArgs = @(
-    "-M", "q35", "-cpu", "qemu64", "-smp", "$Smp", "-m", "${Memory}M",
+    "-M", "q35", "-cpu", "qemu64,+smep,+smap", "-smp", "$Smp", "-m", "${Memory}M",
     "-drive", "if=pflash,format=raw,unit=0,file=$ovmfCode,readonly=on",
     "-drive", "if=pflash,format=raw,unit=1,file=$ovmfVars",
     "-drive", $(if ($Image) { "format=raw,file=out/orion.img" } else { "format=raw,file=fat:rw:out/esp" }),

@@ -6,6 +6,7 @@
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/gdt.h>
 #include <arch/x86_64/interrupts.h>
+#include <arch/x86_64/protect.h>
 #include <mm/vmm.h>
 #include <mm/pmm.h>
 #include <mm/memory.h>
@@ -438,6 +439,26 @@ static long sys_pipe2(int *ufds, int flags)
 static long sys_pipe(int *ufds)
 {
     return sys_pipe2(ufds, 0);
+}
+
+static long sys_kfault(uint64_t op, uint64_t addr)
+{
+    if (!cred_is_root())
+        return -EPERM;
+    if (addr >= USER_ADDR_MAX)
+        return -EFAULT;
+    if (op == 1) {
+        if (!smep_enabled)
+            return -EOPNOTSUPP;
+        ((void (*)(void))addr)();
+        return 0;
+    }
+    if (op == 2) {
+        if (!smap_enabled)
+            return -EOPNOTSUPP;
+        return *(volatile uint8_t *)addr;
+    }
+    return -EINVAL;
 }
 
 static long sys_openpty(int *ufds)
@@ -1992,6 +2013,7 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_WAIT4:       ret = sys_wait4((int)f->rdi, (int *)f->rsi, (int)f->rdx, (struct user_rusage *)f->r10); break;
     case SYS_READDIR:     ret = sys_readdir((int)f->rdi, (struct user_dirent *)f->rsi, f->rdx); break;
     case SYS_OPENPTY:     ret = sys_openpty((int *)f->rdi); break;
+    case SYS_KFAULT:      ret = sys_kfault(f->rdi, f->rsi); break;
     case SYS_POLL:        ret = sys_poll((struct user_pollfd *)f->rdi, f->rsi, (int)f->rdx); break;
     case SYS_SELECT:      ret = sys_select((int)f->rdi, (uint64_t *)f->rsi, (uint64_t *)f->rdx, (uint64_t *)f->r10,
                                            (struct user_timeval *)f->r8); break;

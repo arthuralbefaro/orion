@@ -4,7 +4,7 @@ param(
     [switch]$Gdb,
     [int]$Memory = 512,
     [int]$Smp = 1,
-    [string]$Cpu = "qemu64",
+    [string]$Cpu = "qemu64,+smep,+smap",
     [string]$Accel = "",
     [switch]$Disk,
     [switch]$Gui,

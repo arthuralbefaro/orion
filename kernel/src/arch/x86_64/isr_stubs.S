@@ -41,6 +41,10 @@ isr_common:
     swapgs
 1:
     cld
+    cmpb $0, smap_enabled(%rip)
+    je 3f
+    clac
+3:
     movq %rsp, %rdi
     call isr_dispatch
 

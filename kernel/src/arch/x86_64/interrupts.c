@@ -16,6 +16,7 @@
 #include <mm/vma.h>
 #include <kernel/smp.h>
 #include <arch/x86_64/percpu.h>
+#include <arch/x86_64/protect.h>
 
 struct idt_entry {
     uint16_t offset_low;
@@ -218,7 +219,15 @@ static void handle_exception(struct interrupt_frame *f)
         return;
     }
 
-    if (f->int_no == EXC_PAGE_FAULT && cr2 < USER_ADDR_MAX) {
+    const char *guard = NULL;
+    if (f->int_no == EXC_PAGE_FAULT && (f->cs & 3) == 0 && cr2 < USER_ADDR_MAX) {
+        if (f->err_code & 16)
+            guard = "SMEP: o kernel tentou executar codigo de usuario";
+        else if (smap_enabled && !(f->rflags & RFLAGS_AC))
+            guard = "SMAP: o kernel acessou memoria de usuario fora das copias de uaccess";
+    }
+
+    if (!guard && f->int_no == EXC_PAGE_FAULT && cr2 < USER_ADDR_MAX) {
         struct process *p = process_current();
         if (p) {
             bool was_on = (f->rflags & RFLAGS_IF) != 0;
@@ -231,7 +240,7 @@ static void handle_exception(struct interrupt_frame *f)
         }
     }
 
-    if ((f->int_no == EXC_PAGE_FAULT || f->int_no == EXC_GENERAL_PROTECTION) && (f->cs & 3) == 0 &&
+    if (!guard && (f->int_no == EXC_PAGE_FAULT || f->int_no == EXC_GENERAL_PROTECTION) && (f->cs & 3) == 0 &&
         uaccess_fixup(f, cr2))
         return;
 
@@ -275,6 +284,8 @@ static void handle_exception(struct interrupt_frame *f)
                 (err & 8) ? ", bit reservado" : "",
                 (err & 16) ? ", busca de instrucao" : "");
     }
+    if (guard)
+        kprintf("  %s (endereco %016lx); panico controlado.\n", guard, cr2);
     if (f->int_no == EXC_DOUBLE_FAULT)
         kprintf("  Double fault: a CPU nao conseguiu entregar uma excecao (CR2=%016lx).\n"
                 "  A causa mais comum e estouro da pilha do kernel.\n", cr2);

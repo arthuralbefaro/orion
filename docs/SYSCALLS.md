@@ -155,6 +155,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 452 | fchmodat2 | completa | `AT_SYMLINK_NOFOLLOW` (num link da `EOPNOTSUPP`, como o Linux), `AT_EMPTY_PATH` (2.7) |
 | 1000 | readdir | propria | uma entrada por chamada; a libc usa o `getdents64` |
 | 1001 | openpty | propria | |
+| 1002 | kfault | propria | so root; faz o kernel executar (1) ou ler (2) um endereco de usuario, para testar SMEP e SMAP (`crash smep`/`crash smap`); `EOPNOTSUPP` sem a protecao (4.3) |
 
 Chamadas bloqueantes interrompidas por sinal (pipe, terminal, pty, `/dev/input`,
 `recvfrom`, `wait4`, `futex` sem prazo) sao reiniciadas sozinhas quando o

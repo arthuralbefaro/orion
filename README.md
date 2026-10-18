@@ -126,6 +126,11 @@ O ext2 (o driver e o piloto em Rust do kernel) monta com leitura e escrita;
 Links simbolicos funcionam no ext2 e no tmpfs (`ln -s alvo nome`,
 `readlink nome`); o FAT nao tem links e devolve `EPERM`.
 
+O kernel liga SMEP e SMAP quando a CPU tem (o QEMU roda com
+`-cpu qemu64,+smep,+smap`): ele nao executa nem le memoria de usuario fora das
+copias conferidas. `crash smep` e `crash smap` (como root) provocam de proposito
+o panico controlado de cada uma.
+
 Usuarios e permissoes valem desde a 4.1: cada processo tem `uid`/`gid`, a VFS
 confere leitura, escrita e execucao, o `/tmp` tem o bit *sticky* e binario com
 `setuid` troca o usuario efetivo. `id` mostra quem voce e; o `/etc/shadow`

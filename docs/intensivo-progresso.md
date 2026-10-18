@@ -28,15 +28,15 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 (mesmas portas 4444/4445).
 
 Estado (2026-10-18, 05:28, sessao 2): Fases 2 e 3 inteiras (tags `v2.1` e
-`v2.2`), 8.7, 4.1 e 4.2 commitadas. Versao 2.3.0-a2. O boot pede usuario e
+`v2.2`), 8.7 e 4.1 a 4.3 commitadas. Versao 2.3.0-a3. SMEP e SMAP ligados. O boot pede usuario e
 senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram sozinhos como root.
-A regressao inteira roda no `out\orion.img` (GPT, raiz em ext2), com 369
+A regressao inteira roda no `out\orion.img` (GPT, raiz em ext2), com 373
 verificacoes; a sequencia A sobe o `tools/hostweb.py` no hospedeiro e usa
 `hostfwd` (5555 e 8081).
 
-Proxima etapa: 4.3 (SMEP e SMAP; o QEMU passa a `-cpu qemu64,+smep,+smap`),
-depois 4.4 (ASLR), que fecha a Fase 4 (versao 2.3.0, tag `v2.3`). Depois,
-pela ordem recomendada, 7.1 e 7.2 (ISO e sistema live) e 5.1.
+Proxima etapa: 4.4 (ASLR de pilha e `mmap`), que fecha a Fase 4 (versao
+2.3.0, tag `v2.3`). Depois, pela ordem recomendada, 7.1 e 7.2 (ISO e sistema
+live) e 5.1.
 
 ## Checklist
 
@@ -78,7 +78,7 @@ pela ordem recomendada, 7.1 e 7.2 (ISO e sistema live) e 5.1.
 | 3.7 | DHCP fora do kernel | [x] | 03:36 | 04:15 | ver `git log` (tag `v2.2`) |
 | 4.1 | uid/gid e permissoes | [x] | 04:16 | 04:46 | ver `git log` |
 | 4.2 | passwd, shadow, login | [x] | 04:46 | 05:28 | ver `git log` |
-| 4.3 | SMEP e SMAP | [ ] | | | |
+| 4.3 | SMEP e SMAP | [x] | 05:28 | 05:55 | ver `git log` |
 | 4.4 | ASLR basico | [ ] | | | |
 | 5.1 | uACPI | [ ] | | | |
 | 5.2 | MSI/MSI-X | [ ] | | | |
@@ -931,6 +931,24 @@ vazamento, 120 `su` seguidos e 120 `passwd` seguidos (num `dash`, porque o
 comeco ao fim; o limite subiu para 32 por causa das slabs dos testes novos.
 Ficou de fora: tela de login grafica (o `-Gui` continua entrando como root),
 `/etc/login.defs`, envelhecimento de senha, `newgrp`.
+
+#### 4.3 SMEP e SMAP - 05:28 a 05:55 - FEITO
+O kernel liga SMEP e SMAP em cada CPU (CPUID folha 7); as duas rotinas de
+`uaccess.S` abrem o acesso com `stac` e fecham com `clac` (tambem no caminho
+de falha), e a entrada comum de interrupcoes faz `clac`. Um page fault de
+ring 0 num endereco de usuario por busca de instrucao, ou com o `AC`
+desligado, vira panico com a causa escrita ("SMEP: o kernel tentou executar
+codigo de usuario", "SMAP: ... fora das copias de uaccess"), sem passar pelo
+`vma_fault`. Syscall de teste `kfault` (1002, so root) e `crash smep` /
+`crash smap`. O QEMU passou a `-cpu qemu64,+smep,+smap` no `build.ps1`, no
+`test.ps1` e no `qrun.py`. Criterio: `crash smep` faz o kernel tentar
+executar uma pagina de usuario e o resultado e o panico controlado (e o
+mesmo para `crash smap`), na sequencia B, com um `reboot:` entre os dois.
+Toda a regressao roda com SMAP ligado. Regressao 369 -> 373, estresse 5x
+verde. Versao 2.3.0-a3.
+Problemas: nenhum de comportamento; a regressao inteira passou com SMAP ligado na primeira rodada, o que confirma que a 0.2 tinha deixado todo acesso do kernel a memoria de usuario dentro do `uaccess`. O cuidado foi no tratador de page fault: sem o desvio novo, um acesso proibido a uma pagina presente iria para o `vma_fault`, que a acharia valida, e a instrucao repetiria a falta para sempre.
+Ficou de fora: remendo de `stac`/`clac` em tempo de execucao (hoje um teste
+de variavel por copia), UMIP, KPTI.
 
 ### Sessao 2 - 2026-10-17
 

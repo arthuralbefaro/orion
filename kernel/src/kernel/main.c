@@ -36,6 +36,7 @@
 #include <mm/memory.h>
 #include <limine.h>
 #include <arch/x86_64/fpu.h>
+#include <arch/x86_64/protect.h>
 
 static void init_console(void)
 {
@@ -116,6 +117,7 @@ void kmain(void)
     sched_init();
     syscall_init();
     fpu_init_cpu();
+    cpu_protect_init();
     log_info("boot", "%u modulo(s) carregado(s)", boot_info.module_count);
 
     sti();

@@ -149,7 +149,7 @@ class Machine:
         while time.time() < end and not (port_free(self.serial_port) and port_free(self.monitor_port)):
             time.sleep(0.3)
         args = [
-            qemu, "-M", "q35", "-cpu", "qemu64", "-smp", str(self.smp), "-m", f"{self.memory}M",
+            qemu, "-M", "q35", "-cpu", "qemu64,+smep,+smap", "-smp", str(self.smp), "-m", f"{self.memory}M",
             "-drive", f"if=pflash,format=raw,unit=0,file={code},readonly=on",
             "-drive", f"if=pflash,format=raw,unit=1,file={vars_copy}",
             "-drive", "format=raw,file=out/orion.img" if self.image else "format=raw,file=fat:rw:out/esp",

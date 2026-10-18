@@ -11,6 +11,7 @@
 #include <arch/x86_64/interrupts.h>
 #include <arch/x86_64/lapic.h>
 #include <arch/x86_64/percpu.h>
+#include <arch/x86_64/protect.h>
 #include <mm/vmm.h>
 #include <limine.h>
 
@@ -71,6 +72,7 @@ static void ap_entry(struct limine_mp_info *info)
     lapic_enable_this_cpu();
     syscall_init_cpu();
     fpu_init_cpu();
+    cpu_protect_init();
     sched_init_ap();
     time_init_ap();
 

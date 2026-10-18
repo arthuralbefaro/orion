@@ -2318,3 +2318,37 @@ Uma linha por decisao, na ordem em que foram tomadas.
   `0600`, root trocando a senha de volta sem a atual e `su` de root sem senha.
   Uma verificacao negativa garante que nenhum texto digitado aparece depois de
   um pedido de senha em toda a sequencia.
+
+## v2.3.0-a3 (etapa 4.3: SMEP e SMAP)
+
+- `cpu_protect_init` (`arch/x86_64/protect.c`) liga `CR4.SMEP` e `CR4.SMAP`
+  em cada CPU quando o CPUID (folha 7) mostra suporte; o boot registra
+  "SMEP ligado, SMAP ligado" ou "ausente na CPU". Sem suporte o kernel roda
+  como antes.
+- As unicas portas do kernel para a memoria de usuario continuam sendo as
+  duas rotinas de `uaccess.S` (a copia e a de string, com a tabela de
+  excecoes da 0.2): elas fazem `stac` antes e `clac` depois, inclusive no
+  caminho de falha. Como `stac`/`clac` sao instrucoes invalidas em CPU sem
+  SMAP, elas sao puladas por um teste de `smap_enabled` em vez de remendo de
+  codigo em tempo de execucao; o custo e uma comparacao por copia. A entrada
+  do `syscall` ja limpava o `AC` pelo `FMASK`; a entrada comum de
+  interrupcoes e excecoes passou a fazer `clac` (uma interrupcao no meio de
+  uma copia, ou um programa que liga o `AC` no proprio `RFLAGS`, nao deixa o
+  kernel com o acesso aberto). O `iretq` devolve o `AC` de quem foi
+  interrompido.
+- Page fault em ring 0 num endereco de usuario: busca de instrucao vira
+  "SMEP: o kernel tentou executar codigo de usuario"; qualquer acesso com o
+  `AC` desligado (com SMAP ligado) vira "SMAP: o kernel acessou memoria de
+  usuario fora das copias de uaccess". Nos dois casos o tratador nao tenta o
+  `vma_fault` nem a tabela de excecoes (seria um laco de faltas numa pagina
+  presente) e cai no panico normal, com a linha a mais explicando a causa.
+- Teste: syscall propria `kfault` (1002), so para root, que de proposito
+  chama ou le um endereco de usuario dentro do kernel (devolve
+  `EOPNOTSUPP` se a protecao correspondente nao estiver ligada, para nunca
+  executar codigo de usuario em ring 0 de verdade). `crash smep` e
+  `crash smap` usam essa syscall; a sequencia B termina com os dois, com um
+  `reboot:` entre eles. O equivalente no Linux e o `lkdtm`.
+- QEMU: `-cpu qemu64,+smep,+smap` no `build.ps1` (parametro `-Cpu`), no
+  `test.ps1` e no `qrun.py`; o TCG emula as duas. A regressao inteira roda
+  com SMAP ligado, o que confere que nenhum caminho do kernel le memoria de
+  usuario sem passar pelo `uaccess`.

@@ -239,6 +239,7 @@ if ($runAll -or $OnlyA) {
     if ($Verbose) { Write-Output $a }
 
     Expect $a "Orion sh \(pid \d+\)" "shell de usuario subiu"
+    Expect $a "\[info\] cpu\s+SMEP ligado, SMAP ligado" "SMEP e SMAP ligados em todas as copias de memoria de usuario"
     Expect $a "ls /bin \| wc[\s\S]{0,80}?\d+\s+\d+\s+\d+" "ls /bin | wc produziu contagem"
     Expect $a "resultado: TUDO OK" "memtest TUDO OK"
     Expect $a "tocar 10 paginas aloca so essas paginas\s+ok" "mmap anonimo aloca sob demanda"
@@ -534,7 +535,8 @@ if ($runAll -or $OnlyB) {
         "mon:sendkey ctrl-q", "wait:1.5", "shot:out\shots\reg-wm-5-ctrl-q.ppm",
         "mon:sendkey ctrl-alt-x", "wait:5",
         "cmd:echo TTY-DE-VOLTA", "wait:1", "shot:out\shots\reg-wm-6-tty.ppm",
-        "key:0B", "cmd:mem", "cmd:pty", "cmd:procs"
+        "key:0B", "cmd:mem", "cmd:pty", "cmd:procs",
+        "key:0B", "cmd:crash smep", "wait:4", "reboot:", "cmd:crash smap", "wait:4"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -LogPath "out\reg-b.log" `
         -Script $stepsB -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
@@ -554,6 +556,9 @@ if ($runAll -or $OnlyB) {
     Expect $b "0 pty\(s\) viva\(s\)" "nenhuma pty vazada"
     Expect $b "(?s)pid\s+ppid\s+estado[^\n]*\n\s+\d+\s+1\s+running\s+\d+\s+sh\s*\n\s+1\s+0\s+running\s+\d+\s+init" "procs so tem init e sh"
     Test-MemDelta $b "memoria estavel na sequencia B" 16
+    Expect $b 'crash: pedindo ao kernel para executar codigo de usuario \(SMEP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?busca de instrucao[\s\S]*?SMEP: o kernel tentou executar codigo de usuario \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMEP: kernel executando pagina de usuario vira panico controlado"
+    Expect $b 'crash: pedindo ao kernel para ler memoria de usuario sem copy_from_user \(SMAP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?SMAP: o kernel acessou memoria de usuario fora das copias de uaccess \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMAP: kernel lendo memoria de usuario fora do uaccess vira panico controlado"
+    ExpectNot $b 'crash: o kernel voltou' "o kernel nunca volta de um acesso proibido a memoria de usuario"
 }
 
 # ---------------- Sequencia C: disco e shell ----------------
