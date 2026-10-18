@@ -86,6 +86,34 @@ def tcp_probe(port):
         s.close()
 
 
+def host_get(port, path):
+    try:
+        s = socket.create_connection(("127.0.0.1", port), timeout=5)
+    except OSError as e:
+        return f"erro: {e}"
+    try:
+        s.settimeout(15)
+        s.sendall(f"GET {path} HTTP/1.0\r\nHost: orion\r\n\r\n".encode())
+        data = b""
+        while True:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+    except OSError as e:
+        return f"erro: {e}"
+    finally:
+        s.close()
+    text = data.decode("ascii", errors="replace")
+    k = text.find("\r\n\r\n")
+    if k < 0:
+        return "erro: resposta sem cabecalho"
+    status = text[:text.find("\r\n")]
+    body = text[k + 4:]
+    shown = "\n".join("[hostget] " + line for line in body[:300].split("\n"))
+    return f"{status}, corpo de {len(body)} bytes\n{shown}"
+
+
 class Machine:
     def __init__(self, smp=4, memory=512, disk=False, extra_disks=(), serial_port=4444, monitor_port=4445,
                  boot_timeout=60.0, image=False, hostfwd=()):
@@ -285,6 +313,12 @@ class Machine:
             res = tcp_probe(int(arg))
             print(f"  tcpprobe {arg}: {res}")
             self.log += f"\n[tcpprobe] porta {arg}: {res}\n".encode()
+            self.pump(0.5)
+        elif kind == "hostget":
+            port, _, path = arg.partition(":")
+            res = host_get(int(port), path)
+            print(f"  hostget {port} {path}")
+            self.log += f"\n[hostget] porta {port} {path}: {res}\n".encode()
             self.pump(0.5)
         elif kind == "reboot":
             print("  reboot")

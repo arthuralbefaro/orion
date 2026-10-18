@@ -345,6 +345,39 @@ try {
                 [void]$log.Append("`n[tcpprobe] porta $port`: $res`n")
                 Pump-Serial 0.5
             }
+            "hostget" {
+                $j = $arg.IndexOf(':')
+                $port = [int]$arg.Substring(0, $j)
+                $path = $arg.Substring($j + 1)
+                $res = ""
+                $tc = New-Object System.Net.Sockets.TcpClient
+                try {
+                    $iar = $tc.BeginConnect("127.0.0.1", $port, $null, $null)
+                    if (-not $iar.AsyncWaitHandle.WaitOne(5000)) { throw "sem resposta ao connect" }
+                    $tc.EndConnect($iar)
+                    $st = $tc.GetStream()
+                    $st.ReadTimeout = 15000
+                    $req = [System.Text.Encoding]::ASCII.GetBytes("GET $path HTTP/1.0`r`nHost: orion`r`n`r`n")
+                    $st.Write($req, 0, $req.Length)
+                    $ms = New-Object System.IO.MemoryStream
+                    $buf = New-Object byte[] 65536
+                    while (($n = $st.Read($buf, 0, $buf.Length)) -gt 0) { $ms.Write($buf, 0, $n) }
+                    $text = [System.Text.Encoding]::ASCII.GetString($ms.ToArray())
+                    $k = $text.IndexOf("`r`n`r`n")
+                    if ($k -lt 0) { throw "resposta sem cabecalho" }
+                    $status = $text.Substring(0, $text.IndexOf("`r`n"))
+                    $body = $text.Substring($k + 4)
+                    $show = if ($body.Length -gt 300) { $body.Substring(0, 300) } else { $body }
+                    $res = "$status, corpo de $($body.Length) bytes`n" + (($show -split "`n" | ForEach-Object { "[hostget] $_" }) -join "`n")
+                } catch {
+                    $res = "erro: $($_.Exception.Message)"
+                } finally {
+                    $tc.Close()
+                }
+                Write-Host "  hostget $port $path" -ForegroundColor DarkGray
+                [void]$log.Append("`n[hostget] porta $port $path`: $res`n")
+                Pump-Serial 0.5
+            }
             "reboot" {
                 Write-Host "  reboot" -ForegroundColor DarkGray
                 Pump-Serial 0.5

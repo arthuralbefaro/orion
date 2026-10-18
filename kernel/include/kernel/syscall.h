@@ -17,6 +17,15 @@
 #define SYS_RECVFROM      45
 #define SYS_BIND          49
 #define SYS_SENDMSG       46
+#define SYS_SELECT        23
+#define SYS_ACCEPT        43
+#define SYS_SHUTDOWN      48
+#define SYS_LISTEN        50
+#define SYS_GETSOCKNAME   51
+#define SYS_GETPEERNAME   52
+#define SYS_SETSOCKOPT    54
+#define SYS_GETSOCKOPT    55
+#define SYS_ACCEPT4       288
 #define SYS_RECVMSG       47
 #define SYS_GETPGID       121
 #define SYS_RENAME        82
@@ -184,6 +193,7 @@
 #define EADDRNOTAVAIL 99
 #define EALREADY 114
 #define EINPROGRESS 115
+#define ENOPROTOOPT 92
 #define EHOSTUNREACH 113
 #define ETIMEDOUT 110
 #define EOPNOTSUPP 95

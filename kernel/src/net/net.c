@@ -425,6 +425,45 @@ int net_tcp_info(uint32_t id, struct tcp_conn_info *out)
     return r;
 }
 
+void net_tcp_shutdown(uint32_t id)
+{
+    mutex_lock(&tcp_lock);
+    tcp_close(tcp, id);
+    mutex_unlock(&tcp_lock);
+    tcp_flush(id);
+}
+
+long net_tcp_listen(uint16_t port, uint32_t backlog, bool reuse, uint32_t *id)
+{
+    if (!tcp)
+        return -ENODEV;
+    mutex_lock(&tcp_lock);
+    int64_t r = tcp_listen(tcp, 0, port, backlog, reuse);
+    mutex_unlock(&tcp_lock);
+    if (r < 0)
+        return r;
+    *id = (uint32_t)r;
+    return 0;
+}
+
+long net_tcp_accept(uint32_t lid)
+{
+    mutex_lock(&tcp_lock);
+    int64_t r = tcp_accept(tcp, lid);
+    mutex_unlock(&tcp_lock);
+    return r;
+}
+
+bool net_tcp_port_busy(uint16_t port, bool reuse)
+{
+    if (!tcp)
+        return false;
+    mutex_lock(&tcp_lock);
+    bool b = tcp_port_busy(tcp, port, reuse);
+    mutex_unlock(&tcp_lock);
+    return b;
+}
+
 void net_tcp_close(uint32_t id)
 {
     mutex_lock(&tcp_lock);
@@ -590,7 +629,7 @@ void net_init(void)
     if (!e1000_present())
         return;
     memcpy(netif.mac, e1000_mac(), ETH_ALEN);
-    tcp = tcp_stack_new();
+    tcp = tcp_stack_new(random_u64());
     if (!tcp)
         log_warn("net", "sem memoria para a tabela do TCP");
     running = true;

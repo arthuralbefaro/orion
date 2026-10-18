@@ -56,7 +56,6 @@ static pid_t shell_pgid;
 static int interactive = 1;
 static int last_status;
 static struct job jobs[MAX_JOBS];
-static int next_job_id = 1;
 
 static void on_sigint(int sig)
 {
@@ -653,7 +652,11 @@ static int run_pipeline(struct cmd *cmds, int n, int background, const char *tex
     snprintf(j->text, sizeof(j->text), "%s", text);
 
     if (background) {
-        j->id = next_job_id++;
+        int top = 0;
+        for (int i = 0; i < MAX_JOBS; i++)
+            if (jobs[i].id > top)
+                top = jobs[i].id;
+        j->id = top + 1;
         if (interactive)
             printf("[%d] %d\n", j->id, pgid);
         return 0;

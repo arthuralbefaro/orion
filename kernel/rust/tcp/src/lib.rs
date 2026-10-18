@@ -39,6 +39,7 @@ const ENOTCONN: i32 = 107;
 const ECONNREFUSED: i32 = 111;
 const ECONNRESET: i32 = 104;
 const ENOENT: i32 = 2;
+const EAGAIN: i32 = 11;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Segment<'a> {
@@ -290,7 +291,9 @@ impl<T> Table<T> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
     Closed = 0,
+    Listen = 1,
     SynSent = 2,
+    SynReceived = 3,
     Established = 4,
     FinWait1 = 5,
     FinWait2 = 6,
@@ -345,12 +348,17 @@ pub struct Conn {
     cwnd: u32,
     ssthresh: u32,
     retransmits: u64,
+    parent: u32,
+    backlog: u32,
+    accept_q: VecDeque<u32>,
 }
 
 #[derive(Default)]
 struct Reply {
     flags: u8,
     events: u32,
+    synack: bool,
+    established: bool,
 }
 
 impl Conn {
@@ -392,6 +400,9 @@ impl Conn {
             cwnd: 0,
             ssthresh: u32::MAX / 2,
             retransmits: 0,
+            parent: 0,
+            backlog: 0,
+            accept_q: VecDeque::new(),
         }
     }
 
@@ -422,7 +433,45 @@ impl Conn {
     }
 
     fn synchronized(&self) -> bool {
-        !matches!(self.state, State::Closed | State::SynSent)
+        !matches!(self.state, State::Closed | State::Listen | State::SynSent | State::SynReceived)
+    }
+
+    fn input_syn_received(&mut self, s: &Segment, now: u64) -> Option<Reply> {
+        let mut r = Reply::default();
+        if s.flags & RST != 0 {
+            if s.seq == self.rcv_nxt {
+                self.state = State::Closed;
+                self.detached = true;
+                self.rexmit_at = 0;
+            }
+            return Some(r);
+        }
+        if s.flags & SYN != 0 {
+            if s.seq.wrapping_add(1) == self.rcv_nxt {
+                r.synack = true;
+            }
+            return Some(r);
+        }
+        if s.flags & ACK == 0 {
+            return Some(r);
+        }
+        if s.ack != self.iss.wrapping_add(1) {
+            r.flags = RST;
+            return Some(r);
+        }
+        if let Some((seq, at)) = self.rtt_probe.take() {
+            if le(seq, s.ack) {
+                self.sample_rtt(now.saturating_sub(at));
+            }
+        }
+        self.snd_una = s.ack;
+        self.snd_wnd = s.window as u32;
+        self.snd_wl1 = s.seq;
+        self.snd_wl2 = s.ack;
+        self.rexmit_at = 0;
+        self.retries = 0;
+        self.state = State::Established;
+        None
     }
 
     fn acceptable(&self, s: &Segment) -> bool {
@@ -595,6 +644,22 @@ impl Conn {
         if self.state == State::SynSent {
             return self.input_syn_sent(s, now);
         }
+        let mut established = false;
+        if self.state == State::SynReceived {
+            if let Some(r) = self.input_syn_received(s, now) {
+                return r;
+            }
+            established = true;
+        }
+        let mut r = self.input_synchronized(s, now);
+        r.established = established;
+        if established {
+            r.events |= EV_CONNECTED | EV_WRITABLE;
+        }
+        r
+    }
+
+    fn input_synchronized(&mut self, s: &Segment, now: u64) -> Reply {
         let mut r = Reply::default();
         if !self.acceptable(s) {
             if s.flags & RST == 0 {
@@ -807,7 +872,40 @@ impl Conn {
         build_with(out, key.local_ip, key.remote_ip, &h, &[2, 4, mss[0], mss[1]], &[])
     }
 
+    fn syn_ack(&self, key: &Key, out: &mut [u8]) -> Result<usize, i32> {
+        let h = Header {
+            sport: key.local_port,
+            dport: key.remote_port,
+            seq: self.iss,
+            ack: self.rcv_nxt,
+            flags: SYN | ACK,
+            window: self.rcv_wnd().min(0xFFFF) as u16,
+        };
+        let mss = MSS_OURS.to_be_bytes();
+        build_with(out, key.local_ip, key.remote_ip, &h, &[2, 4, mss[0], mss[1]], &[])
+    }
+
     fn tick(&mut self, key: &Key, now: u64, out: &mut [u8], ev: &mut u32) -> Result<usize, i32> {
+        if self.state == State::SynReceived && self.rexmit_at != 0 && now >= self.rexmit_at {
+            self.retries += 1;
+            if self.retries > SYN_RETRIES {
+                self.state = State::Closed;
+                self.detached = true;
+                self.rexmit_at = 0;
+                return Ok(0);
+            }
+            self.rto = (self.rto * 2).min(RTO_MAX);
+            self.rexmit_at = now + self.rto;
+            self.rtt_probe = None;
+            self.retransmits += 1;
+            return self.syn_ack(key, out);
+        }
+        if self.detached && self.fin_queued && !self.fin_sent && self.synchronized() && self.rexmit_at == 0 {
+            let n = self.output(key, out, now)?;
+            if n > 0 {
+                return Ok(n);
+            }
+        }
         if self.state == State::TimeWait && self.timewait_at != 0 && now >= self.timewait_at {
             self.state = State::Closed;
             self.timewait_at = 0;
@@ -898,21 +996,76 @@ pub struct Stack {
     next_id: u32,
     next_port: u16,
     retired_retransmits: u64,
+    rng: u64,
 }
 
 impl Default for Stack {
     fn default() -> Self {
+        Stack::with_seed(0x9E37_79B9_7F4A_7C15)
+    }
+}
+
+impl Stack {
+    pub fn with_seed(seed: u64) -> Stack {
         Stack {
             table: Table::default(),
             stats: TcpStats::default(),
             next_id: 1,
             next_port: PORT_FIRST,
             retired_retransmits: 0,
+            rng: seed | 1,
         }
     }
-}
 
-impl Stack {
+    fn random(&mut self) -> u32 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        (self.rng >> 16) as u32
+    }
+
+    fn new_id(&mut self) -> u32 {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        id
+    }
+
+    fn listener_input(&mut self, lid: u32, key: Key, s: &Segment, now: u64, out: &mut [u8]) -> Result<usize, i32> {
+        if s.flags & RST != 0 {
+            self.stats.rx_dropped += 1;
+            return Ok(0);
+        }
+        if s.flags & ACK != 0 {
+            let h = reset_for(s).ok_or(EINVAL)?;
+            self.stats.tx_resets += 1;
+            return build(out, key.local_ip, key.remote_ip, &h, &[]);
+        }
+        if s.flags & SYN == 0 {
+            self.stats.rx_dropped += 1;
+            return Ok(0);
+        }
+        let pending = self.table.iter().filter(|(_, c)| c.parent == lid).count();
+        let (_, l) = self.conn(lid)?;
+        if pending + l.accept_q.len() >= l.backlog as usize {
+            self.stats.rx_dropped += 1;
+            return Ok(0);
+        }
+        let id = self.new_id();
+        let iss = self.random();
+        let mut c = Conn::new(id, iss);
+        c.state = State::SynReceived;
+        c.parent = lid;
+        c.rcv_nxt = s.seq.wrapping_add(1);
+        c.snd_wnd = s.window as u32;
+        c.mss = s.mss().unwrap_or(MSS_DEFAULT).clamp(64, MSS_OURS);
+        c.cwnd = 10 * c.mss as u32;
+        c.rtt_probe = Some((iss.wrapping_add(1), now));
+        c.arm(now);
+        let n = c.syn_ack(&key, out)?;
+        self.table.insert(key, c)?;
+        Ok(n)
+    }
+
     pub fn input(
         &mut self,
         src: u32,
@@ -932,11 +1085,18 @@ impl Stack {
         };
         self.stats.rx_segments += 1;
         let key = Key { local_ip: dst, local_port: s.dport, remote_ip: src, remote_port: s.sport };
+        let found = self.table.lookup(&key).filter(|c| c.state != State::Closed).map(|c| (c.state, c.id));
+        if let Some((State::Listen, lid)) = found {
+            return self.listener_input(lid, key, &s, now, out);
+        }
         if let Some(c) = self.table.lookup(&key).filter(|c| c.state != State::Closed) {
             let r = c.input(&s, now);
             ev.conn = c.id;
             ev.events = r.events;
-            let n = if r.flags & RST != 0 {
+            let parent = if r.established { c.parent } else { 0 };
+            let n = if r.synack {
+                c.syn_ack(&key, out)?
+            } else if r.flags & RST != 0 {
                 let h = Header { sport: key.local_port, dport: key.remote_port, seq: s.ack, ack: 0, flags: RST, window: 0 };
                 self.stats.tx_resets += 1;
                 build(out, dst, src, &h, &[])?
@@ -947,6 +1107,21 @@ impl Stack {
             } else {
                 0
             };
+            if parent != 0 {
+                let child = ev.conn;
+                match self.conn(parent) {
+                    Ok((_, l)) if l.state == State::Listen => {
+                        l.accept_q.push_back(child);
+                        *ev = TcpEvent { conn: parent, events: EV_READABLE };
+                    }
+                    _ => {
+                        if let Ok((_, c)) = self.conn(child) {
+                            c.fail(ECONNRESET);
+                            c.detached = true;
+                        }
+                    }
+                }
+            }
             self.reap();
             return Ok(n);
         }
@@ -1000,8 +1175,7 @@ impl Stack {
         }
         let port = self.free_port().ok_or(EADDRNOTAVAIL)?;
         let key = Key { local_ip, local_port: port, remote_ip, remote_port };
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1).max(1);
+        let id = self.new_id();
         let mut c = Conn::new(id, iss);
         let n = c.syn(&key, out)?;
         c.rtt_probe = Some((iss.wrapping_add(1), now));
@@ -1068,8 +1242,61 @@ impl Stack {
         Ok(n)
     }
 
+    pub fn port_busy(&self, port: u16, reuse: bool) -> bool {
+        self.table
+            .iter()
+            .any(|(k, c)| k.local_port == port && (c.state == State::Listen || (!reuse && c.state != State::Closed)))
+    }
+
+    pub fn listen(&mut self, local_ip: u32, port: u16, backlog: u32, reuse: bool) -> Result<u32, i32> {
+        if port == 0 {
+            return Err(EINVAL);
+        }
+        if self.port_busy(port, reuse) {
+            return Err(EADDRINUSE);
+        }
+        let id = self.new_id();
+        let mut c = Conn::new(id, 0);
+        c.state = State::Listen;
+        c.backlog = backlog.clamp(1, 128);
+        let key = Key { local_ip, local_port: port, remote_ip: 0, remote_port: 0 };
+        self.table.insert(key, c)?;
+        Ok(id)
+    }
+
+    pub fn accept(&mut self, lid: u32) -> Result<u32, i32> {
+        let (_, l) = self.conn(lid)?;
+        if l.state != State::Listen {
+            return Err(EINVAL);
+        }
+        let child = l.accept_q.pop_front().ok_or(EAGAIN)?;
+        if let Ok((_, c)) = self.conn(child) {
+            c.parent = 0;
+        }
+        Ok(child)
+    }
+
     pub fn close(&mut self, id: u32) -> Result<(), i32> {
         let (_, c) = self.conn(id)?;
+        if c.state == State::Listen {
+            c.state = State::Closed;
+            let queued: Vec<u32> = c.accept_q.drain(..).collect();
+            for (_, child) in self.table.iter_mut() {
+                if child.parent == id || queued.contains(&child.id) {
+                    child.parent = 0;
+                    child.detached = true;
+                    child.rx.clear();
+                    match child.state {
+                        State::Established | State::CloseWait => child.fin_queued = true,
+                        _ => {
+                            child.state = State::Closed;
+                            child.rexmit_at = 0;
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
         match c.state {
             State::SynSent => {
                 c.state = State::Closed;
@@ -1095,7 +1322,7 @@ impl Stack {
         Ok(TcpInfo {
             state: c.state as u32,
             error: c.error,
-            readable: c.rx.len() as u32,
+            readable: if c.state == State::Listen { c.accept_q.len() as u32 } else { c.rx.len() as u32 },
             writable: (TX_CAP - c.tx.len()) as u32,
             unacked: c.snd_max.wrapping_sub(c.snd_una),
             eof: (c.peer_fin && c.rx.is_empty()) as u32,
@@ -1117,12 +1344,39 @@ impl Stack {
 }
 
 #[no_mangle]
-pub extern "C" fn tcp_stack_new() -> *mut Stack {
+pub extern "C" fn tcp_stack_new(seed: u64) -> *mut Stack {
     let p = unsafe { alloc::alloc::alloc(core::alloc::Layout::new::<Stack>()) } as *mut Stack;
     if !p.is_null() {
-        unsafe { p.write(Stack::default()) };
+        unsafe { p.write(Stack::with_seed(seed)) };
     }
     p
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tcp_listen(st: *mut Stack, local_ip: u32, port: u16, backlog: u32, reuse: bool) -> i64 {
+    if st.is_null() {
+        return -(EINVAL as i64);
+    }
+    match (*st).listen(local_ip, port, backlog, reuse) {
+        Ok(id) => id as i64,
+        Err(e) => -(e as i64),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tcp_accept(st: *mut Stack, lid: u32) -> i64 {
+    if st.is_null() {
+        return -(EINVAL as i64);
+    }
+    match (*st).accept(lid) {
+        Ok(id) => id as i64,
+        Err(e) => -(e as i64),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tcp_port_busy(st: *const Stack, port: u16, reuse: bool) -> bool {
+    !st.is_null() && (*st).port_busy(port, reuse)
 }
 
 fn ret(r: Result<usize, i32>) -> i64 {

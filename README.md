@@ -6,7 +6,7 @@ copy-on-write, threads, futex, sinais no formato do Linux, cache de paginas
 unificado (read, exec e mmap de arquivo), VFS com vnodes e
 montagens (`mount`/`umount`; raiz em ext2 numa particao GPT, com a particao EFI
 em `/boot/efi`, FAT e ext2 em outros discos, devfs em `/dev`, tmpfs em `/tmp` e
-`/run`, procfs em `/proc`), rede IPv4 (UDP, ICMP e cliente TCP) e um compositor de janelas em
+`/run`, procfs em `/proc`), rede IPv4 (UDP, ICMP e TCP) e um compositor de janelas em
 espaco de usuario.
 
 Desde a versao 2.0 o espaco de usuario e Linux: os programas sao binarios
@@ -170,7 +170,7 @@ E (estresse: quatro `stress 3000 16` em pipeline com 4 CPUs).
 ## Programas proprios em /bin
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
-    ifconfig ping nslookup httpget dhcp mkfs mkfs.ext2 fsck.ext2 mount umount
+    ifconfig ping nslookup httpget httpd dhcp mkfs mkfs.ext2 fsck.ext2 mount umount
     testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
@@ -190,14 +190,17 @@ O QEMU sobe uma e1000 com a rede de usuario (SLIRP): 10.0.2.15 para o Orion,
 
 A pilha faz ARP, IPv4, ICMP, UDP e TCP (em Rust, `kernel/rust/tcp`); sockets
 `SOCK_STREAM`, `SOCK_DGRAM` e `SOCK_RAW`. O TCP conecta, manda e recebe
-(cliente) com retransmissao, controle de congestionamento, reordenacao e
-`TIME_WAIT`; servidor (`listen`/`accept`) vem na 3.4. O comando `net` do shell
+e serve (`listen`/`accept`) com retransmissao, controle de congestionamento,
+reordenacao e `TIME_WAIT`. O comando `net` do shell
 do kernel mostra os contadores, e `tcploss N` descarta 1 em N segmentos TCP
 para testar a retransmissao (o SLIRP do QEMU nao perde nada).
 
     httpget example.com               baixa e mostra a pagina (HTTP/1.0)
     httpget -o /tmp/x 10.0.2.2 8000 /arquivo   grava o corpo; 10.0.2.2 e o hospedeiro
     httpget -u /tmp/x 10.0.2.2 8000 /destino   envia o arquivo com PUT
+    httpd -p 80 -r / &                servidor de arquivos (GET); com
+                                      .\test.ps1 -HostFwd @("tcp:127.0.0.1:8081-:80")
+                                      o navegador do hospedeiro abre http://127.0.0.1:8081/
  O `test.ps1` grava o
 trafego em `out\net.pcap`.
 

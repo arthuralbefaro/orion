@@ -698,3 +698,134 @@ fn bulk_receive_survives_loss_and_reordering() {
         assert_eq!(got, data, "perda de {}%", loss);
     }
 }
+
+fn client(port: u16) -> Peer {
+    Peer { port, local_port: 80 }
+}
+
+fn handshake_in(st: &mut Stack, lid: u32, cport: u16, cseq: u32) -> (u32, Segment<'static>) {
+    let c = client(cport);
+    let (r, ev) = feed_at(st, &c.seg(SYN, cseq, 0, 16384, &[2, 4, 0x05, 0xB4], &[]), 0);
+    let sa = r.expect("SYN|ACK");
+    assert_eq!((sa.flags, sa.ack, sa.sport, sa.dport), (SYN | ACK, cseq + 1, 80, cport));
+    assert_eq!(sa.mss(), Some(MSS_OURS));
+    assert_eq!(ev.events, 0, "nada para o socket antes do handshake terminar");
+    let (_, ev) = feed_at(st, &c.seg(ACK, cseq + 1, sa.seq.wrapping_add(1), 16384, &[], &[]), 1);
+    assert_eq!(ev, TcpEvent { conn: lid, events: EV_READABLE }, "o listener fica legivel");
+    let child = st.accept(lid).expect("accept");
+    (child, sa)
+}
+
+#[test]
+fn passive_open_accept_and_talk() {
+    let mut st = Stack::with_seed(42);
+    let lid = st.listen(0, 80, 4, false).unwrap();
+    assert_eq!(st.info(lid).unwrap().state, State::Listen as u32);
+    let (child, sa) = handshake_in(&mut st, lid, 40000, 1000);
+    assert_eq!(st.accept(lid), Err(EAGAIN));
+    let info = st.info(child).unwrap();
+    assert_eq!((info.state, info.remote_port, info.local_port), (State::Established as u32, 40000, 80));
+    let c = client(40000);
+    let (r, ev) = feed_at(&mut st, &c.seg(ACK | PSH, 1001, sa.seq.wrapping_add(1), 16384, &[], b"GET /"), 2);
+    assert_eq!(r.unwrap().ack, 1006);
+    assert_eq!(ev.conn, child);
+    let mut buf = [0u8; 16];
+    assert_eq!(st.read(child, &mut buf), Ok(5));
+    st.write(child, b"200 OK").unwrap();
+    let mut out = vec![0u8; 2048];
+    let (n, ip) = st.output(child, &mut out, 3).unwrap();
+    assert_eq!(ip, HOST);
+    let seg = parse(ME, HOST, &out[..n]).unwrap();
+    assert_eq!((seg.seq, seg.payload), (sa.seq.wrapping_add(1), &b"200 OK"[..]));
+    let (other, _) = handshake_in(&mut st, lid, 40001, 7000);
+    assert_ne!(other, child);
+}
+
+#[test]
+fn backlog_limits_pending_connections() {
+    let mut st = Stack::with_seed(7);
+    let lid = st.listen(0, 80, 1, false).unwrap();
+    let (r, _) = feed_at(&mut st, &client(1).seg(SYN, 10, 0, 1000, &[], &[]), 0);
+    assert!(r.is_some());
+    let (r, _) = feed_at(&mut st, &client(2).seg(SYN, 20, 0, 1000, &[], &[]), 0);
+    assert!(r.is_none(), "fila cheia: o SYN e ignorado e o cliente tenta de novo");
+    let sa = parse(ME, HOST, &{
+        let mut out = vec![0u8; 128];
+        let mut ev = TcpEvent::default();
+        let n = st.input(HOST, ME, &client(1).seg(SYN, 10, 0, 1000, &[], &[]), 1, &mut out, &mut ev).unwrap();
+        out.truncate(n);
+        out
+    })
+    .map(|s| s.seq)
+    .expect("SYN repetido recebe o mesmo SYN|ACK");
+    feed_at(&mut st, &client(1).seg(ACK, 11, sa.wrapping_add(1), 1000, &[], &[]), 2);
+    assert!(st.accept(lid).is_ok());
+    let (r, _) = feed_at(&mut st, &client(2).seg(SYN, 20, 0, 1000, &[], &[]), 3);
+    assert!(r.is_some(), "depois do accept cabe outro");
+}
+
+#[test]
+fn synack_is_retransmitted_then_given_up() {
+    let mut st = Stack::with_seed(9);
+    st.listen(0, 80, 8, false).unwrap();
+    let (r, _) = feed_at(&mut st, &client(5).seg(SYN, 300, 0, 1000, &[], &[]), 0);
+    let first = r.unwrap();
+    let (segs, _) = tick_at(&mut st, RTO_INIT);
+    assert_eq!(segs.len(), 1);
+    assert_eq!((segs[0].flags, segs[0].seq), (SYN | ACK, first.seq));
+    let mut at = RTO_INIT;
+    let mut rto = RTO_INIT;
+    for _ in 0..SYN_RETRIES {
+        rto *= 2;
+        at += rto;
+        tick_at(&mut st, at);
+    }
+    assert_eq!(st.stats().connections, 1, "so o listener sobra");
+}
+
+#[test]
+fn stray_segments_to_a_listener() {
+    let mut st = Stack::with_seed(3);
+    st.listen(0, 80, 8, false).unwrap();
+    let (r, _) = feed_at(&mut st, &client(9).seg(ACK, 5, 777, 1000, &[], &[]), 0);
+    let r = r.expect("ACK sem conexao recebe RST");
+    assert_eq!((r.flags, r.seq), (RST, 777));
+    let (r, _) = feed_at(&mut st, &client(9).seg(RST, 5, 0, 0, &[], &[]), 0);
+    assert!(r.is_none());
+    let (r, _) = feed_at(&mut st, &client(9).seg(SYN, 50, 0, 1000, &[], &[]), 0);
+    assert!(r.is_some());
+    feed_at(&mut st, &client(9).seg(RST, 51, 0, 0, &[], &[]), 1);
+    assert_eq!(st.stats().connections, 1, "RST no SYN_RECEIVED tira a conexao");
+}
+
+#[test]
+fn port_reuse_rules() {
+    let mut st = Stack::with_seed(11);
+    let lid = st.listen(0, 80, 8, false).unwrap();
+    assert_eq!(st.listen(0, 80, 8, true), Err(EADDRINUSE), "dois listeners na mesma porta nunca");
+    let (child, _) = handshake_in(&mut st, lid, 40100, 1);
+    st.close(lid).unwrap();
+    st.detach(lid);
+    assert_eq!(st.listen(0, 80, 8, false), Err(EADDRINUSE), "conexao viva na porta sem SO_REUSEADDR");
+    let again = st.listen(0, 80, 8, true).expect("com SO_REUSEADDR");
+    assert!(st.port_busy(80, true));
+    st.close(again).unwrap();
+    st.detach(again);
+    st.close(child).unwrap();
+    assert!(!st.port_busy(81, false));
+}
+
+#[test]
+fn closing_the_listener_finishes_queued_connections() {
+    let mut st = Stack::with_seed(13);
+    let lid = st.listen(0, 80, 8, false).unwrap();
+    let c = client(40200);
+    let (r, _) = feed_at(&mut st, &c.seg(SYN, 900, 0, 8000, &[], &[]), 0);
+    let sa = r.unwrap();
+    feed_at(&mut st, &c.seg(ACK, 901, sa.seq.wrapping_add(1), 8000, &[], &[]), 1);
+    st.close(lid).unwrap();
+    st.detach(lid);
+    let (segs, _) = tick_at(&mut st, 2);
+    assert_eq!(segs.len(), 1);
+    assert_eq!(segs[0].flags, FIN | ACK, "a conexao que ninguem aceitou e fechada com FIN");
+}

@@ -2077,3 +2077,51 @@ Uma linha por decisao, na ordem em que foram tomadas.
   nesse teste seria de pelo menos 1000 paginas (uma por arquivo de 3000
   bytes), entao a tolerancia foi para 256 paginas, e o teste imprime os
   componentes para a proxima investigacao.
+
+## v2.2.0-a4 (etapa 3.4: TCP parte 4, servidor)
+
+- Abertura passiva no crate `tcp`: estados `LISTEN` e `SYN_RECEIVED`. Quem
+  escuta e uma entrada da tabela com o lado remoto zerado (a busca da 3.1 ja
+  caia nela depois da exata). Um `SYN` cria uma conexao filha em
+  `SYN_RECEIVED`, com ISS sorteado por um gerador xorshift semeado pelo C
+  (`random_u64` na criacao da pilha), e responde `SYN|ACK` com a opcao MSS. O
+  `SYN|ACK` e retransmitido com backoff e a filha some em silencio depois de 5
+  tentativas; `SYN` repetido recebe o mesmo `SYN|ACK`; `RST` na sequencia
+  certa tira a filha. O ACK do handshake (que pode trazer dados) leva a filha a
+  `ESTABLISHED` e a poe na fila de `accept`, e o evento vai para o socket de
+  quem escuta. `ACK` solto para quem escuta recebe `RST`.
+- `backlog` conta as filhas em `SYN_RECEIVED` mais as que esperam `accept`
+  (limitado a 128); com a fila cheia o `SYN` e ignorado, e o cliente tenta de
+  novo pelo proprio RTO, como o Linux faz.
+- Fechar quem escuta: filhas ainda no handshake somem, e as ja estabelecidas
+  e nao aceitas sao soltas com `FIN` (o `tick` agora tambem manda o `FIN` de
+  conexao solta que estava esperando). O Linux manda `RST` nesse caso; o
+  `FIN` foi escolhido para nao precisar de um caminho de envio novo e o
+  cliente ve o fim da conexao do mesmo jeito.
+- Porta: `bind` em TCP confere a porta na tabela do Rust (`tcp_port_busy`).
+  Sem `SO_REUSEADDR` a porta esta ocupada por qualquer conexao viva nela,
+  inclusive em `TIME_WAIT`; com `SO_REUSEADDR` so outro `LISTEN` impede. Porta
+  0 no `bind` ou `listen` sem `bind` pegam uma efemera. `connect` depois de
+  `bind` ainda usa uma porta efemera nova (o endereco do `bind` so vale para
+  quem escuta).
+- Sockets: `listen`, `accept` e `accept4` (`SOCK_NONBLOCK`, `SOCK_CLOEXEC`),
+  `shutdown` (`SHUT_WR` manda o `FIN` e mantem o socket; `SHUT_RD` faz o
+  `read` devolver 0), `getsockname`, `getpeername`, `setsockopt` e
+  `getsockopt` (`SO_REUSEADDR`, `SO_TYPE`, `SO_ERROR`, `SO_RCVBUF` e
+  `SO_SNDBUF` so para ler, `TCP_NODELAY`). `TCP_NODELAY` aceita so ligar: o
+  TCP daqui nao tem Nagle, entao ele ja esta ligado de fato; desligar da
+  `ENOPROTOOPT`, como qualquer opcao que nao existe (nada e aceito sem
+  efeito). `poll` de quem escuta fica legivel com conexao na fila.
+- `select` sobre o `poll`: o laco do `poll` virou uma funcao interna com o
+  vetor no kernel, usada pelos dois; os conjuntos de ate 1024 descritores viram
+  ate 32 `pollfd` (o limite do `poll`; mais que isso da `EINVAL`), o prazo
+  restante volta no `timeval`, e sinal devolve `EINTR` (reiniciado pelo
+  `SA_RESTART`). O `pselect6` ficou de fora (a musl no x86_64 usa o `select`).
+- Teste do criterio ("`httpd` no Orion responde a `curl` do hospedeiro"): o
+  passo `hostget:<porta>:<caminho>` dos harness faz um GET HTTP/1.0 do
+  hospedeiro por `hostfwd` e anota status, tamanho e o comeco do corpo no log
+  (o `curl` do Windows faria o mesmo, mas o harness nao pode depender dele). O
+  `httpd` novo usa `select` com prazo, `accept4`, `getpeername`, `shutdown`
+  com `SHUT_WR` e `SO_REUSEADDR`, e a regressao roda dois em seguida na porta
+  80 para conferir o `SO_REUSEADDR` com as conexoes da primeira em
+  `TIME_WAIT`.

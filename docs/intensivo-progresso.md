@@ -27,16 +27,19 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 01:45, sessao 2): Fase 2 inteira (tag `v2.1`), 8.7,
-3.1, 3.2 e 3.3 commitadas. Versao 2.2.0-a3. A regressao inteira roda no
-`out\orion.img` (GPT, raiz em ext2), com 318 verificacoes; a sequencia A sobe
-o `tools/hostweb.py` no hospedeiro para os testes de TCP.
+Estado (2026-10-18, 02:25, sessao 2): Fase 2 inteira (tag `v2.1`), 8.7 e
+3.1 a 3.4 commitadas. Versao 2.2.0-a4. A regressao inteira roda no
+`out\orion.img` (GPT, raiz em ext2), com 324 verificacoes; a sequencia A sobe
+o `tools/hostweb.py` no hospedeiro e usa `hostfwd` (5555 e 8081) para os
+testes de TCP.
 
-Proxima etapa: 3.4 (TCP parte 4: `listen`, `accept`, `backlog`,
-`shutdown`, `SO_REUSEADDR`, `getsockopt`/`setsockopt`, `select` sobre o
-`poll`; criterio: um `httpd` no Orion responde ao hospedeiro pelo
-`hostfwd`). A tabela de conexoes ja procura quem escuta depois da busca
-exata (3.1); falta o estado `LISTEN`/`SYN_RECEIVED` e a fila de `accept`.
+Proxima etapa: 3.5 (loopback 127.0.0.1 e sockets `AF_UNIX`; criterio: o
+`wm` e os apps conversam por socket Unix). Plano: o `net_send_ip` para
+127.0.0.0/8 ou para o proprio IP entrega na fila de recepcao em vez da placa;
+`AF_UNIX` `SOCK_STREAM` (e `socketpair`) com o no do socket criado na VFS
+(`S_IFSOCK`, no tmpfs de `/run`); o `wm` escuta em `/run/wm.sock` e um
+programa novo `wmctl` manda comandos (abrir terminal, listar janelas),
+conferido na sequencia D.
 
 ## Checklist
 
@@ -72,7 +75,7 @@ exata (3.1); falta o estado `LISTEN`/`SYN_RECEIVED` e a fila de `accept`.
 | 3.1 | TCP parte 1 | [x] | 23:27 | 23:52 | ver `git log` |
 | 3.2 | TCP parte 2 | [x] | 23:53 | 01:00 | ver `git log` |
 | 3.3 | TCP parte 3 | [x] | 01:02 | 01:45 | ver `git log` |
-| 3.4 | TCP parte 4 | [ ] | | | |
+| 3.4 | TCP parte 4 | [x] | 01:48 | 02:25 | ver `git log` |
 | 3.5 | Loopback e AF_UNIX | [ ] | | | |
 | 3.6 | wget, nc, httpd, telnet | [ ] | | | |
 | 3.7 | DHCP fora do kernel | [ ] | | | |
@@ -805,6 +808,28 @@ barra invertida ou aspas soltas (nada aplicado pela metade); scripts com
 esse tipo de texto passaram a ir sempre por arquivo.
 Ficou de fora: ACK atrasado (cada segmento recebe ACK na hora), SACK, escala
 de janela e timestamps (a janela fica em 32 KiB), keepalive.
+
+#### 3.4 TCP parte 4 - 01:48 a 02:25 - FEITO
+Abertura passiva no crate `tcp` (`LISTEN`, `SYN_RECEIVED`, `SYN|ACK`
+retransmitido, fila de `accept` com `backlog`, ISS sorteado), e no C `bind`
+TCP com conferencia de porta e `SO_REUSEADDR`, `listen`, `accept`/`accept4`,
+`shutdown`, `getsockname`, `getpeername`, `setsockopt`/`getsockopt` e
+`select` sobre o `poll` (o laco do `poll` virou funcao interna). Programa
+novo `httpd` (GET de arquivos e diretorios, `select` com prazo, `accept4`,
+`getpeername`, `shutdown` com `SHUT_WR`). Passo novo `hostget:` nos harness:
+GET feito do hospedeiro por `hostfwd`, anotado no log. Criterio: o `httpd` do
+Orion responde ao hospedeiro (200, 404 e lista de diretorio), e um segundo
+`httpd` reabre a porta 80 com as conexoes do primeiro em `TIME_WAIT`. 6 testes
+novos no crate (passaram de primeira). Regressao 318 -> 324, estresse 5x
+verde. Versao 2.2.0-a4.
+Problema: os `httpd &` da regressao gastaram os numeros de trabalho [1] e [2]
+do `sh`, e os testes de `jobs` que vem depois falharam. O `sh` numerava
+sempre para frente; passou a numerar como o bash (o maior em uso mais 1, de
+volta a 1 com a tabela vazia), e os dois padroes que dependiam da numeracao
+antiga foram ajustados.
+Ficou de fora: `pselect6`, `SO_RCVTIMEO`/`SO_SNDTIMEO`, `SO_KEEPALIVE`,
+`connect` usando a porta do `bind`, `RST` (em vez de `FIN`) para conexoes nao
+aceitas quando quem escuta fecha.
 
 ### Sessao 2 - 2026-10-17
 

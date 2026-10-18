@@ -174,7 +174,9 @@ if ($runAll -or $OnlyA) {
         "key:0B", "cmd:tcploss 10", "key:0B",
         "cmd:httpget -u /tmp/up.bin 10.0.2.2 8088 /up", "until:240:corpo de",
         "cmd:httpget -q 10.0.2.2 8088 /big.bin", "until:240:corpo de",
-        "key:0B", "cmd:tcploss 0", "key:0B", "cmd:rm /tmp/up.bin", "wait:1",
+        "key:0B", "cmd:tcploss 0", "cmd:net", "key:0B", "cmd:rm /tmp/up.bin", "wait:1",
+        "cmd:httpd -n 3 -r / &", "wait:2", "hostget:8081:/etc/passwd", "hostget:8081:/nao-existe", "hostget:8081:/etc",
+        "wait:2", "cmd:httpd -n 1 &", "wait:2", "hostget:8081:/etc/group", "wait:2",
         "cmd:nslookup example.com", "wait:8",
         "cmd:nslookup example.com", "wait:8",
         "cmd:GREETING=ola-mundo", "wait:1",
@@ -205,7 +207,7 @@ if ($runAll -or $OnlyA) {
         "cmd:cat /reboot.txt", "cmd:rm /reboot.txt", "cmd:mount", "wait:1"
     )
     $web = Start-HostWeb 8088
-    & (Join-Path $Root "test.ps1") -Smp $Smp -Image @buildFlag -HostFwd @("tcp:127.0.0.1:5555-:7") -LogPath "out\reg-a.log" `
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image @buildFlag -HostFwd @("tcp:127.0.0.1:5555-:7", "tcp:127.0.0.1:8081-:80") -LogPath "out\reg-a.log" `
         -Script $stepsA -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     Stop-Process -Id $web.Id -Force -ErrorAction SilentlyContinue
     $a = Get-Log "out\reg-a.log"
@@ -356,6 +358,12 @@ if ($runAll -or $OnlyA) {
     Expect $a "(?s)tcploss: descartando 1 em 10 .*?httpget: enviado (\d+) bytes, crc32 ([0-9a-f]{8})\s*\nrecebido \1 bytes, crc32 \2" "TCP: envio de 1 MB com 10% de perda chega inteiro (crc32 no hospedeiro)"
     Expect $a "(?s)tcploss: descartando 1 em 10 .*?corpo de 1048576 bytes, crc32 a2dcf263.*?tcploss: desligado" "TCP: 1 MiB recebido com 10% de perda sem corromper"
     Expect $a "tcp: [1-9]\d* retransmissao\(oes\)" "TCP: retransmissoes contadas no comando net"
+    Expect $a "\[hostget\] porta 8081 /etc/passwd: HTTP/1\.0 200 OK, corpo de \d+ bytes\s*\n\[hostget\] root:x:0:0:" "TCP servidor: httpd do Orion responde ao hospedeiro"
+    Expect $a "\[hostget\] porta 8081 /nao-existe: HTTP/1\.0 404 Not Found" "httpd: 404 para o que nao existe"
+    Expect $a "\[hostget\] porta 8081 /etc: HTTP/1\.0 200 OK[^\n]*\n(\[hostget\] [^\n]*\n)*?\[hostget\] resolv\.conf" "httpd: lista o diretorio"
+    Expect $a "httpd: 10\.0\.2\.2:\d+ GET /etc/passwd -> 200" "httpd: accept4 e getpeername com o endereco do cliente"
+    Expect $a "httpd: fim, 3 conexao\(oes\)" "httpd: select com prazo, contagem e saida limpa"
+    Expect $a "(?s)httpd: fim, 3 conexao.*?\[hostget\] porta 8081 /etc/group: HTTP/1\.0 200 OK" "SO_REUSEADDR: segundo httpd na mesma porta com conexoes em TIME_WAIT"
     Expect $a "(?s)----- reboot -----.*?cat /reboot\.txt\s*\n\s*sobrevive-ao-reboot" "arquivo gravado na raiz sobrevive a reboot"
     Expect $a "(?s)cat /proc/self/maps\s*\n\s*[0-9a-f]{8,}-[0-9a-f]{8,} r--p [0-9a-f]{8} 00:00 \d+\s+/bin/cat" "cat /proc/self/maps mostra as VMAs do proprio cat"
     Expect $a "[0-9a-f]+-7ffffffff000 rw-p 00000000 00:00 0\s+\[stack\]" "maps mostra a pilha"
@@ -415,9 +423,9 @@ if ($runAll -or $OnlyA) {
     Expect $a "\[1\] \d+\s*\n" "cmd & devolve o numero do trabalho e o pid"
     Expect $a "\[1\] rodando\s+sleep 3" "jobs lista o trabalho em segundo plano"
     Expect $a "\[1\] pronto\s+sleep 3" "wait espera o trabalho terminar"
-    Expect $a "\[3\] rodando\s+sleep 1" "dois trabalhos em segundo plano ao mesmo tempo"
+    Expect $a "\[1\] rodando\s+sleep 2\s*\n\[2\] rodando\s+sleep 1" "dois trabalhos em segundo plano ao mesmo tempo (numerados como no bash)"
     Expect $a "(?s)\$ fg\s*\nsleep 1" "fg traz o ultimo trabalho para o primeiro plano"
-    Expect $a "\[2\] pronto\s+sleep 2" "trabalho terminado e avisado no prompt seguinte"
+    Expect $a "\[1\] pronto\s+sleep 2" "trabalho terminado e avisado no prompt seguinte"
     Expect $a "limtest: fim, TUDO OK" "limtest: 256 fds, setrlimit, RLIMIT_NPROC no fork"
     Expect $a "-n arquivos abertos\s+256" "ulimit -a mostra 256 arquivos abertos"
     Expect $a "ps \| wc\s*\n\s+2[0-5]\d\s+" "ps lista mais de 200 processos vivos ao mesmo tempo"

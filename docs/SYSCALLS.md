@@ -20,7 +20,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 4 | stat | completa | `struct stat` do Linux (144 bytes); `st_dev` e o numero da montagem, `st_ino` e estavel enquanto o arquivo existe (2.1); modo, dono, grupo, `st_nlink`, `st_blocks` e datas vem do sistema de arquivos (2.7): ext2 e tmpfs guardam tudo, FAT da as datas da entrada e o bit de somente leitura, devfs e procfs dao dono 0 e a hora do boot; pipe e socket dao a hora do boot |
 | 5 | fstat | completa | idem |
 | 6 | lstat | completa | nao segue o ultimo link (2.7) |
-| 7 | poll | completa | ate 32 descritores; `EINTR` com sinal |
+| 7 | poll | completa | ate 32 descritores; `EINTR` com sinal; socket que escuta fica legivel com conexao na fila (3.4) |
 | 8 | lseek | completa | `SEEK_SET`, `SEEK_CUR`, `SEEK_END` |
 | 9 | mmap | parcial | anonimo, `MAP_FIXED`, arquivo `MAP_PRIVATE`, `MAP_SHARED` anonimo e de arquivo so leitura, dispositivo (`/dev/fb0`); `MAP_SHARED` de arquivo com escrita da `ENODEV` (2.4) |
 | 10 | mprotect | completa | divide areas; `PROT_NONE` preserva paginas populadas |
@@ -36,6 +36,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 20 | writev | completa | ate 1024 pedacos |
 | 21 | access | parcial | confere a existencia; `W_OK` em arquivo de montagem so de leitura da `EROFS` (permissoes na 4.1) |
 | 22 | pipe | completa | |
+| 23 | select | parcial | sobre o `poll`: ate 32 descritores marcados; prazo restante volta no `timeval` (3.4) |
 | 24 | sched_yield | completa | |
 | 25 | mremap | parcial | memoria anonima privada: encolhe, cresce no lugar, ou move com `MREMAP_MAYMOVE` (leva as paginas sem copiar); sem `MREMAP_FIXED` nem area de arquivo/compartilhada |
 | 28 | madvise | parcial | `MADV_DONTNEED` descarta paginas privadas; as outras dicas sao aceitas sem efeito |
@@ -49,11 +50,18 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 39 | getpid | completa | |
 | 41 | socket | parcial | `AF_INET` com `SOCK_STREAM` (TCP, 3.2), `SOCK_DGRAM` e `SOCK_RAW`; `SOCK_NONBLOCK` e `SOCK_CLOEXEC` |
 | 42 | connect | parcial | UDP fixa o destino; TCP faz o handshake (o `SYN` e retransmitido com backoff e desiste em uns 63 s com `ETIMEDOUT`), `ECONNREFUSED` com `RST`, `EINPROGRESS` com `O_NONBLOCK` (3.3) |
+| 43 | accept | completa | bloqueia ate ter conexao na fila; endereco do cliente (3.4) |
 | 44 | sendto | parcial | UDP e ICMP; em TCP e um `write` (o endereco e ignorado); sem `SIGPIPE` com a conexao fechada, so `EPIPE` |
 | 45 | recvfrom | parcial | UDP e ICMP; em TCP e um `read` (sem endereco de volta); `flags` ignoradas |
 | 46 | sendmsg | parcial | como o `sendto`, juntando ate 1024 `iovec`; sem dados de controle (3.2) |
 | 47 | recvmsg | parcial | como o `recvfrom`, espalhando nos `iovec`; `msg_controllen` volta 0, `MSG_TRUNC` em `msg_flags` (3.2) |
-| 49 | bind | parcial | so UDP e ICMP (TCP na 3.4) |
+| 48 | shutdown | completa | `SHUT_WR` manda `FIN`, `SHUT_RD` faz o `read` devolver 0 (3.4) |
+| 49 | bind | parcial | UDP e ICMP; TCP confere a porta (`EADDRINUSE`, respeitando `SO_REUSEADDR`), porta 0 pega uma efemera; o endereco vale so para `listen` (3.4) |
+| 50 | listen | completa | `backlog` de 1 a 128, contando conexoes no handshake e na fila (3.4) |
+| 51 | getsockname | completa | (3.4) |
+| 52 | getpeername | completa | (3.4) |
+| 54 | setsockopt | parcial | `SO_REUSEADDR`; `TCP_NODELAY` so ligado (nao ha Nagle); o resto da `ENOPROTOOPT` (3.4) |
+| 55 | getsockopt | parcial | `SO_REUSEADDR`, `SO_TYPE`, `SO_ERROR`, `SO_RCVBUF`/`SO_SNDBUF` (32 KiB) e `TCP_NODELAY`; o resto da `ENOPROTOOPT` (3.4) |
 | 56 | clone | parcial | `CLONE_THREAD` (com `CLONE_VM` e `CLONE_SIGHAND`), `CLONE_SETTLS`, `CLONE_PARENT_SETTID`, `CLONE_CHILD_SETTID`, `CLONE_CHILD_CLEARTID`; sem `CLONE_THREAD` e um fork com pilha opcional (sem `CLONE_VM` de verdade) |
 | 57 | fork | completa | copy-on-write; respeita `RLIMIT_NPROC` |
 | 58 | vfork | parcial | igual ao `fork` (copy-on-write) |
@@ -128,6 +136,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 268 | fchmodat | completa | como o `chmod`, relativo ao descritor |
 | 269 | faccessat | parcial | como o `access` |
 | 280 | utimensat | completa | nanossegundos no tmpfs, segundos no ext2 (ate 2038), 2 s no FAT (so `mtime` e o dia do `atime`); `UTIME_NOW`, `UTIME_OMIT`, `AT_SYMLINK_NOFOLLOW`, `AT_EMPTY_PATH`, caminho `NULL` com descritor (o `futimens` da musl); muda o `ctime` para agora (2.7) |
+| 288 | accept4 | completa | `SOCK_NONBLOCK`, `SOCK_CLOEXEC` (3.4) |
 | 292 | dup3 | completa | `O_CLOEXEC` |
 | 293 | pipe2 | completa | `O_CLOEXEC`, `O_NONBLOCK` |
 | 302 | prlimit64 | parcial | so para o proprio processo |

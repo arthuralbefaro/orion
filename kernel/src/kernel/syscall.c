@@ -474,18 +474,11 @@ static long sys_restart_syscall(void)
     }
 }
 
-static long do_poll(struct user_pollfd *ufds, uint64_t nfds, int timeout, uint64_t deadline)
+static long poll_core(struct user_pollfd *fds, uint64_t nfds, int timeout, uint64_t deadline)
 {
-    if (nfds > POLL_TABLE_MAX)
-        return -EINVAL;
-    struct user_pollfd fds[POLL_TABLE_MAX];
-    if (copy_from_user(fds, ufds, nfds * sizeof(*fds)) < 0)
-        return -EFAULT;
-
     struct poll_table *pt = kzalloc(sizeof(*pt));
     if (!pt)
         return -ENOMEM;
-
     long ret = 0;
     for (;;) {
         poll_table_init(pt);
@@ -527,23 +520,121 @@ static long do_poll(struct user_pollfd *ufds, uint64_t nfds, int timeout, uint64
         }
         poll_table_sleep(pt, wait_ms);
         if (signal_pending_current()) {
-            if (timeout < 0) {
-                ret = -ERESTARTNOHAND;
-            } else {
-                struct thread *t = thread_current();
-                t->restart_kind = RESTART_POLL;
-                t->restart_deadline_us = deadline;
-                t->restart_arg[0] = (uint64_t)ufds;
-                t->restart_arg[1] = nfds;
-                ret = -ERESTART_RESTARTBLOCK;
-            }
+            ret = -EINTR;
             break;
         }
     }
     kfree(pt);
+    return ret;
+}
+
+static long do_poll(struct user_pollfd *ufds, uint64_t nfds, int timeout, uint64_t deadline)
+{
+    if (nfds > POLL_TABLE_MAX)
+        return -EINVAL;
+    struct user_pollfd fds[POLL_TABLE_MAX];
+    if (copy_from_user(fds, ufds, nfds * sizeof(*fds)) < 0)
+        return -EFAULT;
+    long ret = poll_core(fds, nfds, timeout, deadline);
+    if (ret == -EINTR) {
+        if (timeout < 0)
+            return -ERESTARTNOHAND;
+        struct thread *t = thread_current();
+        t->restart_kind = RESTART_POLL;
+        t->restart_deadline_us = deadline;
+        t->restart_arg[0] = (uint64_t)ufds;
+        t->restart_arg[1] = nfds;
+        return -ERESTART_RESTARTBLOCK;
+    }
     if (ret >= 0 && copy_to_user(ufds, fds, nfds * sizeof(*fds)) < 0)
         return -EFAULT;
     return ret;
+}
+
+#define SELECT_MAX 1024
+#define POLLPRI_   0x0002
+
+static long sys_select(int nfds, uint64_t *ur, uint64_t *uw, uint64_t *ue, struct user_timeval *utv)
+{
+    if (nfds < 0 || nfds > SELECT_MAX)
+        return -EINVAL;
+    uint64_t sets[3][SELECT_MAX / 64];
+    uint64_t *usets[3] = { ur, uw, ue };
+    size_t bytes = (size_t)(nfds + 63) / 64 * 8;
+    memset(sets, 0, sizeof(sets));
+    for (int k = 0; k < 3; k++)
+        if (usets[k] && bytes && copy_from_user(sets[k], usets[k], bytes) < 0)
+            return -EFAULT;
+    int timeout = -1;
+    uint64_t deadline = 0;
+    if (utv) {
+        struct user_timeval tv;
+        if (copy_from_user(&tv, utv, sizeof(tv)) < 0)
+            return -EFAULT;
+        if (tv.tv_sec < 0 || tv.tv_usec < 0 || tv.tv_usec > 999999)
+            return -EINVAL;
+        uint64_t ms = (uint64_t)tv.tv_sec * 1000 + ((uint64_t)tv.tv_usec + 999) / 1000;
+        if (ms > 0x7FFFFFFF)
+            ms = 0x7FFFFFFF;
+        timeout = (int)ms;
+        deadline = time_uptime_ms() + ms;
+    }
+    struct user_pollfd fds[POLL_TABLE_MAX];
+    uint64_t n = 0;
+    for (int fd = 0; fd < nfds; fd++) {
+        short ev = 0;
+        if (sets[0][fd / 64] >> (fd % 64) & 1)
+            ev |= POLLIN;
+        if (sets[1][fd / 64] >> (fd % 64) & 1)
+            ev |= POLLOUT;
+        if (sets[2][fd / 64] >> (fd % 64) & 1)
+            ev |= POLLPRI_;
+        if (!ev)
+            continue;
+        if (n == POLL_TABLE_MAX)
+            return -EINVAL;
+        fds[n].fd = fd;
+        fds[n].events = ev;
+        fds[n].revents = 0;
+        n++;
+    }
+    long ret = poll_core(fds, n, timeout, deadline);
+    if (ret == -EINTR)
+        return -ERESTARTNOHAND;
+    if (ret < 0)
+        return ret;
+    memset(sets, 0, sizeof(sets));
+    long count = 0;
+    for (uint64_t i = 0; i < n; i++) {
+        short r = fds[i].revents;
+        int fd = fds[i].fd;
+        if (r & POLLNVAL)
+            return -EBADF;
+        uint64_t bit = 1ull << (fd % 64);
+        if ((fds[i].events & POLLIN) && (r & (POLLIN | POLLHUP | POLLERR))) {
+            sets[0][fd / 64] |= bit;
+            count++;
+        }
+        if ((fds[i].events & POLLOUT) && (r & (POLLOUT | POLLERR))) {
+            sets[1][fd / 64] |= bit;
+            count++;
+        }
+        if ((fds[i].events & POLLPRI_) && (r & POLLPRI_)) {
+            sets[2][fd / 64] |= bit;
+            count++;
+        }
+    }
+    for (int k = 0; k < 3; k++)
+        if (usets[k] && bytes && copy_to_user(usets[k], sets[k], bytes) < 0)
+            return -EFAULT;
+    if (utv) {
+        uint64_t now = time_uptime_ms();
+        uint64_t left = deadline > now ? deadline - now : 0;
+        struct user_timeval tv = { (int64_t)(left / 1000), (int64_t)(left % 1000) * 1000 };
+        if (copy_to_user(utv, &tv, sizeof(tv)) < 0)
+            return -EFAULT;
+    }
+    return count;
 }
 
 static long sys_fcntl(int fd, int cmd, uint64_t arg)
@@ -1852,6 +1943,19 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_READDIR:     ret = sys_readdir((int)f->rdi, (struct user_dirent *)f->rsi, f->rdx); break;
     case SYS_OPENPTY:     ret = sys_openpty((int *)f->rdi); break;
     case SYS_POLL:        ret = sys_poll((struct user_pollfd *)f->rdi, f->rsi, (int)f->rdx); break;
+    case SYS_SELECT:      ret = sys_select((int)f->rdi, (uint64_t *)f->rsi, (uint64_t *)f->rdx, (uint64_t *)f->r10,
+                                           (struct user_timeval *)f->r8); break;
+    case SYS_LISTEN:      ret = sys_listen((int)f->rdi, (int)f->rsi); break;
+    case SYS_ACCEPT:      ret = sys_accept4((int)f->rdi, (struct sockaddr_in *)f->rsi, (uint32_t *)f->rdx, 0); break;
+    case SYS_ACCEPT4:     ret = sys_accept4((int)f->rdi, (struct sockaddr_in *)f->rsi, (uint32_t *)f->rdx, (int)f->r10);
+                          break;
+    case SYS_SHUTDOWN:    ret = sys_shutdown((int)f->rdi, (int)f->rsi); break;
+    case SYS_GETSOCKNAME: ret = sys_getsockname((int)f->rdi, (struct sockaddr_in *)f->rsi, (uint32_t *)f->rdx); break;
+    case SYS_GETPEERNAME: ret = sys_getpeername((int)f->rdi, (struct sockaddr_in *)f->rsi, (uint32_t *)f->rdx); break;
+    case SYS_SETSOCKOPT:  ret = sys_setsockopt((int)f->rdi, (int)f->rsi, (int)f->rdx, (const void *)f->r10,
+                                               (uint32_t)f->r8); break;
+    case SYS_GETSOCKOPT:  ret = sys_getsockopt((int)f->rdi, (int)f->rsi, (int)f->rdx, (void *)f->r10,
+                                               (uint32_t *)f->r8); break;
     case SYS_FCNTL:       ret = sys_fcntl((int)f->rdi, (int)f->rsi, f->rdx); break;
     case SYS_KILL:        ret = sys_kill((int)f->rdi, (int)f->rsi); break;
     case SYS_RT_SIGACTION: ret = sys_rt_sigaction((int)f->rdi, (const struct user_sigaction *)f->rsi, (struct user_sigaction *)f->rdx, f->r10); break;

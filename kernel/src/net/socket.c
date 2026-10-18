@@ -35,6 +35,10 @@ struct socket {
     uint16_t peer_port;
     bool     bound;
     bool     tcp_open;
+    bool     listening;
+    bool     reuse;
+    bool     shut_rd;
+    bool     shut_wr;
     uint32_t tcp_id;
     uint32_t ev_seq;
     struct sock_pkt *queue[SOCK_QUEUE];
@@ -134,8 +138,10 @@ static bool tcp_can_send(const struct tcp_conn_info *in)
 static int64_t stream_read(struct file *f, void *buf, uint64_t len)
 {
     struct socket *s = f->priv;
-    if (!s->tcp_open)
+    if (!s->tcp_open || s->listening)
         return -ENOTCONN;
+    if (s->shut_rd)
+        return 0;
     if (len == 0)
         return 0;
     for (;;) {
@@ -161,8 +167,10 @@ static int64_t stream_read(struct file *f, void *buf, uint64_t len)
 static int64_t stream_write(struct file *f, const void *buf, uint64_t len)
 {
     struct socket *s = f->priv;
-    if (!s->tcp_open)
+    if (!s->tcp_open || s->listening)
         return -ENOTCONN;
+    if (s->shut_wr)
+        return -EPIPE;
     uint64_t done = 0;
     while (done < len) {
         uint32_t seen = ev_seen(s);
@@ -217,6 +225,16 @@ static long stream_connect(struct file *f, struct socket *s, uint32_t ip, uint16
     }
 }
 
+static struct socket *new_socket(int type, int proto)
+{
+    struct socket *s = kzalloc(sizeof(*s));
+    if (s) {
+        s->type = type;
+        s->proto = proto;
+    }
+    return s;
+}
+
 static bool port_taken(uint16_t port)
 {
     for (struct socket *s = sockets; s; s = s->next)
@@ -252,6 +270,8 @@ static short sock_poll(struct file *f, struct poll_table *pt)
             return POLLOUT | POLLHUP;
         if (net_tcp_info(s->tcp_id, &in) < 0)
             return POLLIN | POLLHUP;
+        if (s->listening)
+            return in.readable ? POLLIN : 0;
         short ev = 0;
         if (in.readable || in.eof || in.error || in.state == TCP_CLOSED)
             ev |= POLLIN;
@@ -407,6 +427,32 @@ long sys_bind(int fd, const struct sockaddr_in *uaddr, uint32_t len)
     if (e < 0)
         return e;
     uint16_t port = ntohs(a.sin_port);
+    if (s->type == SOCK_STREAM) {
+        if (a.sin_family != AF_INET)
+            return -EAFNOSUPPORT;
+        if (s->bound || s->tcp_open)
+            return -EINVAL;
+        uint32_t ip = ntohl(a.sin_addr);
+        struct netif *ni = net_interface();
+        if (ip && ip != ni->ip)
+            return -EADDRNOTAVAIL;
+        if (port == 0) {
+            for (int i = 0; i < 16384 && !port; i++) {
+                uint16_t p = next_port++;
+                if (next_port == 0)
+                    next_port = PORT_EPHEMERAL_BASE;
+                if (!net_tcp_port_busy(p, false))
+                    port = p;
+            }
+            if (!port)
+                return -EADDRINUSE;
+        } else if (net_tcp_port_busy(port, s->reuse)) {
+            return -EADDRINUSE;
+        }
+        s->local_port = port;
+        s->bound = true;
+        return 0;
+    }
     uint64_t flags = spin_lock_irqsave(&sock_lock);
     if (port && port != s->local_port && port_taken(port)) {
         spin_unlock_irqrestore(&sock_lock, flags);
@@ -756,4 +802,214 @@ long sys_recvmsg(int fd, struct user_msghdr *umsg, int flags)
         copy_to_user(&umsg->flags, &mflags, sizeof(mflags)) < 0)
         return -EFAULT;
     return n;
+}
+
+long sys_listen(int fd, int backlog)
+{
+    struct socket *s = sock_from_fd(fd, NULL);
+    if (!s)
+        return -ENOTSOCK;
+    if (s->type != SOCK_STREAM)
+        return -EOPNOTSUPP;
+    if (s->listening)
+        return 0;
+    if (s->tcp_open)
+        return -EINVAL;
+    for (int i = 0; i < 16384 && !s->bound; i++) {
+        uint16_t p = next_port++;
+        if (next_port == 0)
+            next_port = PORT_EPHEMERAL_BASE;
+        if (!net_tcp_port_busy(p, false)) {
+            s->local_port = p;
+            s->bound = true;
+        }
+    }
+    if (!s->bound)
+        return -EADDRINUSE;
+    uint32_t id = 0;
+    long r = net_tcp_listen(s->local_port, backlog < 1 ? 1 : (uint32_t)backlog, s->reuse, &id);
+    if (r < 0)
+        return r;
+    uint64_t flags = spin_lock_irqsave(&sock_lock);
+    s->tcp_id = id;
+    s->tcp_open = true;
+    s->listening = true;
+    spin_unlock_irqrestore(&sock_lock, flags);
+    return 0;
+}
+
+static long put_addr(uint32_t ip, uint16_t port, struct sockaddr_in *uaddr, uint32_t *ulen)
+{
+    if (!uaddr || !ulen)
+        return 0;
+    uint32_t room;
+    if (copy_from_user(&room, ulen, sizeof(room)) < 0)
+        return -EFAULT;
+    struct sockaddr_in a = { 0 };
+    a.sin_family = AF_INET;
+    a.sin_port = htons(port);
+    a.sin_addr = htonl(ip);
+    uint32_t full = sizeof(a);
+    uint32_t n = room < full ? room : full;
+    if (n && copy_to_user(uaddr, &a, n) < 0)
+        return -EFAULT;
+    return copy_to_user(ulen, &full, sizeof(full));
+}
+
+long sys_accept4(int fd, struct sockaddr_in *uaddr, uint32_t *ulen, int flags)
+{
+    struct file *f;
+    struct socket *s = sock_from_fd(fd, &f);
+    if (!s)
+        return -ENOTSOCK;
+    if (flags & ~(SOCK_NONBLOCK | SOCK_CLOEXEC))
+        return -EINVAL;
+    if (s->type != SOCK_STREAM)
+        return -EOPNOTSUPP;
+    if (!s->listening)
+        return -EINVAL;
+    long child;
+    for (;;) {
+        uint32_t seen = ev_seen(s);
+        child = net_tcp_accept(s->tcp_id);
+        if (child >= 0)
+            break;
+        if (child != -EAGAIN)
+            return child;
+        if (f->flags & O_NONBLOCK)
+            return -EAGAIN;
+        long w = ev_wait(s, seen, TCP_WAIT_MS);
+        if (w < 0)
+            return w;
+    }
+    struct tcp_conn_info in;
+    struct socket *c = new_socket(SOCK_STREAM, IPPROTO_TCP);
+    struct file *cf = c ? file_alloc(&socket_ops, c) : NULL;
+    if (!c || !cf || net_tcp_info((uint32_t)child, &in) < 0) {
+        kfree(c);
+        if (cf)
+            file_unref(cf);
+        net_tcp_close((uint32_t)child);
+        return -ENOMEM;
+    }
+    if (flags & SOCK_NONBLOCK)
+        cf->flags |= O_NONBLOCK;
+    c->tcp_id = (uint32_t)child;
+    c->tcp_open = true;
+    c->bound = true;
+    c->local_port = in.local_port;
+    c->peer_ip = in.remote_ip;
+    c->peer_port = in.remote_port;
+    uint64_t irq = spin_lock_irqsave(&sock_lock);
+    c->next = sockets;
+    sockets = c;
+    spin_unlock_irqrestore(&sock_lock, irq);
+    int nfd = process_fd_alloc(process_current(), cf, 0, (flags & SOCK_CLOEXEC) != 0);
+    if (nfd < 0) {
+        file_unref(cf);
+        return nfd;
+    }
+    if (put_addr(in.remote_ip, in.remote_port, uaddr, ulen) < 0)
+        return -EFAULT;
+    return nfd;
+}
+
+long sys_shutdown(int fd, int how)
+{
+    struct socket *s = sock_from_fd(fd, NULL);
+    if (!s)
+        return -ENOTSOCK;
+    if (how < SHUT_RD || how > SHUT_RDWR)
+        return -EINVAL;
+    if (s->type != SOCK_STREAM || !s->tcp_open || s->listening)
+        return -ENOTCONN;
+    if (how != SHUT_WR)
+        s->shut_rd = true;
+    if (how != SHUT_RD && !s->shut_wr) {
+        s->shut_wr = true;
+        net_tcp_shutdown(s->tcp_id);
+    }
+    uint64_t irq = spin_lock_irqsave(&sock_lock);
+    s->ev_seq++;
+    wake_up_all(&s->rx_wq);
+    spin_unlock_irqrestore(&sock_lock, irq);
+    return 0;
+}
+
+long sys_getsockname(int fd, struct sockaddr_in *uaddr, uint32_t *ulen)
+{
+    struct socket *s = sock_from_fd(fd, NULL);
+    if (!s)
+        return -ENOTSOCK;
+    uint32_t ip = 0;
+    if (s->type == SOCK_STREAM && s->tcp_open && !s->listening) {
+        struct tcp_conn_info in;
+        if (net_tcp_info(s->tcp_id, &in) == 0)
+            ip = in.local_ip;
+    }
+    return put_addr(ip, s->local_port, uaddr, ulen);
+}
+
+long sys_getpeername(int fd, struct sockaddr_in *uaddr, uint32_t *ulen)
+{
+    struct socket *s = sock_from_fd(fd, NULL);
+    if (!s)
+        return -ENOTSOCK;
+    if (!s->peer_ip || s->listening)
+        return -ENOTCONN;
+    return put_addr(s->peer_ip, s->peer_port, uaddr, ulen);
+}
+
+long sys_setsockopt(int fd, int level, int name, const void *uval, uint32_t len)
+{
+    struct socket *s = sock_from_fd(fd, NULL);
+    if (!s)
+        return -ENOTSOCK;
+    int v = 0;
+    if (len < sizeof(int))
+        return -EINVAL;
+    if (copy_from_user(&v, uval, sizeof(v)) < 0)
+        return -EFAULT;
+    if (level == SOL_SOCKET && name == SO_REUSEADDR) {
+        s->reuse = v != 0;
+        return 0;
+    }
+    if (level == SOL_TCP && name == TCP_NODELAY && s->type == SOCK_STREAM)
+        return v ? 0 : -ENOPROTOOPT;
+    return -ENOPROTOOPT;
+}
+
+long sys_getsockopt(int fd, int level, int name, void *uval, uint32_t *ulen)
+{
+    struct socket *s = sock_from_fd(fd, NULL);
+    if (!s)
+        return -ENOTSOCK;
+    uint32_t room;
+    if (copy_from_user(&room, ulen, sizeof(room)) < 0)
+        return -EFAULT;
+    if (room < sizeof(int))
+        return -EINVAL;
+    int v;
+    if (level == SOL_SOCKET && name == SO_REUSEADDR) {
+        v = s->reuse;
+    } else if (level == SOL_SOCKET && name == SO_TYPE) {
+        v = s->type;
+    } else if (level == SOL_SOCKET && name == SO_ERROR) {
+        v = 0;
+        if (s->type == SOCK_STREAM && s->tcp_open) {
+            struct tcp_conn_info in;
+            if (net_tcp_info(s->tcp_id, &in) == 0)
+                v = in.error;
+        }
+    } else if (level == SOL_SOCKET && (name == SO_RCVBUF || name == SO_SNDBUF) && s->type == SOCK_STREAM) {
+        v = 32768;
+    } else if (level == SOL_TCP && name == TCP_NODELAY && s->type == SOCK_STREAM) {
+        v = 1;
+    } else {
+        return -ENOPROTOOPT;
+    }
+    uint32_t n = sizeof(v);
+    if (copy_to_user(uval, &v, n) < 0 || copy_to_user(ulen, &n, sizeof(n)) < 0)
+        return -EFAULT;
+    return 0;
 }

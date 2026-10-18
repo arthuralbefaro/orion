@@ -11,7 +11,9 @@ struct tcp_rs;
 #define TCP_EV_CLOSED    16u
 
 #define TCP_CLOSED      0
+#define TCP_LISTEN      1
 #define TCP_SYN_SENT    2
+#define TCP_SYN_RECEIVED 3
 #define TCP_ESTABLISHED 4
 #define TCP_FIN_WAIT1   5
 #define TCP_FIN_WAIT2   6
@@ -51,7 +53,10 @@ struct tcp_conn_info {
     uint32_t cwnd;
 };
 
-struct tcp_rs *tcp_stack_new(void);
+struct tcp_rs *tcp_stack_new(uint64_t seed);
+int64_t tcp_listen(struct tcp_rs *st, uint32_t local_ip, uint16_t port, uint32_t backlog, bool reuse);
+int64_t tcp_accept(struct tcp_rs *st, uint32_t lid);
+bool tcp_port_busy(const struct tcp_rs *st, uint16_t port, bool reuse);
 int64_t tcp_input(struct tcp_rs *st, uint32_t src, uint32_t dst, const uint8_t *seg, size_t len, uint64_t now,
                   uint8_t *out, size_t cap, struct tcp_event *ev);
 int64_t tcp_connect(struct tcp_rs *st, uint32_t local_ip, uint32_t remote_ip, uint16_t remote_port, uint32_t iss,
@@ -73,4 +78,8 @@ long net_tcp_write(uint32_t id, const void *buf, size_t len);
 long net_tcp_read(uint32_t id, void *buf, size_t len);
 int net_tcp_info(uint32_t id, struct tcp_conn_info *out);
 void net_tcp_close(uint32_t id);
+void net_tcp_shutdown(uint32_t id);
+long net_tcp_listen(uint16_t port, uint32_t backlog, bool reuse, uint32_t *id);
+long net_tcp_accept(uint32_t lid);
+bool net_tcp_port_busy(uint16_t port, bool reuse);
 void socket_tcp_event(uint32_t conn, uint32_t events);
