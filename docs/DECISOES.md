@@ -2660,3 +2660,25 @@ Uma linha por decisao, na ordem em que foram tomadas.
   a quinta por um mapeamento separado com `MAP_FIXED`, e 40 execucoes seguidas
   passaram. O teste tambem deixou de ler `MAP_FAILED + 8192` quando uma
   verificacao anterior falha, e mostra os enderecos quando o `mremap` falha.
+
+## v2.4.0-a7 (etapa 6.6 parte 1: visualizador de imagens)
+
+- A 6.6 ("um app por etapa") vai em partes, um app por commit, cada um com
+  captura na sequencia B.
+- `libgui`: componente tela (`gui_canvas`), em que o proprio app desenha por
+  uma funcao de pintura; o app aumenta `version` quando o desenho muda, e a
+  assinatura das areas sujas da 6.5 passa a incluir esse numero, entao a tela
+  so e redesenhada quando muda. Tela nao recebe foco do Tab; clique nela chama
+  a acao com a posicao em `click_x`/`click_y`. Tambem `gui_blit` (copiar um
+  bloco de pixels) e o gancho `on_key`, que deixa o app tratar teclas antes
+  dos componentes (o `imgview` usa para `q`, `f` e as setas).
+- `imgview` (novo): abre um PNG ou JPEG, ajustado a area de 640x380 mantendo
+  a proporcao (vizinho mais proximo) ou em 1:1, e anda pelas outras imagens da
+  mesma pasta com as setas ou os botoes. Decodifica com o `stb_image`, como o
+  `wm`. O titulo traz nome e tamanho.
+- Regressao: `Test-ShotPixel` (novo, no `regressao.ps1` e no `regress.py`)
+  confere a cor de um pixel da captura com tolerancia; e o que prova que a
+  imagem certa esta na tela, ja que a contagem de cores ficou inutil com o papel
+  de parede. A sequencia B abre o `imgview` no JPEG de teste, confere os
+  quadrantes vermelho e amarelo na captura, passa para o PNG pela seta e fecha
+  com `q`.

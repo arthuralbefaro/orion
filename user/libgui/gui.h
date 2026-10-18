@@ -28,6 +28,7 @@ enum gui_kind {
     GUI_TEXT,
     GUI_LIST,
     GUI_CHECK,
+    GUI_CANVAS,
 };
 
 struct gui;
@@ -47,6 +48,8 @@ struct gui_widget {
     gui_action action;
     void *user;
     uint32_t drawn_sig;
+    void (*paint)(struct gui *g, struct gui_widget *w);
+    int version;
 };
 
 struct gui_menu {
@@ -74,6 +77,8 @@ struct gui {
     int drawn_menu;
     unsigned long frames;
     unsigned long partial_frames;
+    bool (*on_key)(struct gui *g, int ascii, int scancode, int mods);
+    int click_x, click_y;
     bool running;
     char in[512];
     int inlen;
@@ -88,6 +93,8 @@ struct gui_widget *gui_button(struct gui *g, int x, int y, int w, const char *te
 struct gui_widget *gui_text(struct gui *g, int x, int y, int w, const char *initial, gui_action on_enter);
 struct gui_widget *gui_list(struct gui *g, int x, int y, int w, int rows, gui_action on_select);
 struct gui_widget *gui_check(struct gui *g, int x, int y, int w, const char *text, gui_action on_toggle);
+struct gui_widget *gui_canvas(struct gui *g, int x, int y, int w, int h,
+                              void (*paint)(struct gui *g, struct gui_widget *w), gui_action on_click);
 void gui_list_add(struct gui_widget *list, const char *item);
 void gui_list_clear(struct gui_widget *list);
 int gui_menu(struct gui *g, const char *title, const char *const *items, int count,
@@ -100,5 +107,6 @@ void gui_run(struct gui *g);
 void gui_quit(struct gui *g);
 
 void gui_fill(struct gui *g, int x, int y, int w, int h, uint32_t rgb);
+void gui_blit(struct gui *g, int x, int y, const uint32_t *src, int w, int h, int stride);
 void gui_draw_text(struct gui *g, int x, int y, const char *s, uint32_t rgb);
 int gui_text_width(const char *s);

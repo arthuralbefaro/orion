@@ -32,7 +32,7 @@ def parse_sequences():
         end = re.search(r"^\}\s*$", body, flags=re.M)
         if end:
             body = body[:end.start()]
-        seq = {"name": name, "steps": [], "expect": [], "memdelta": None, "shots": [], "disk": False, "gui": False, "image": False, "hostfwd": [],
+        seq = {"name": name, "steps": [], "expect": [], "memdelta": None, "shots": [], "pixels": [], "disk": False, "gui": False, "image": False, "hostfwd": [],
                "extra": [], "prep": [],
                "delay": 1.0, "boot": 60.0, "remove_disk": False, "log": f"out/reg-{name.lower()}.log",
                "stress": None, "hostweb": None}
@@ -72,6 +72,9 @@ def parse_sequences():
             pat = ps_string(STRING.match(e.group(2)))
             desc = ps_string(STRING.match(e.group(3)))
             seq["expect"].append((pat, desc, e.group(1) == "ExpectNot"))
+        for px in re.finditer(r'^\s*Test-ShotPixel "([^"]+)" (\d+) (\d+) 0x([0-9a-fA-F]{6}) (\d+) "([^"]+)"\s*$', body, flags=re.M):
+            seq["pixels"].append((px.group(1).replace("\\", "/"), int(px.group(2)), int(px.group(3)),
+                                  int(px.group(4), 16), int(px.group(5)), px.group(6)))
         for sc in re.finditer(r'^\s*Test-ShotColors "([^"]+)" "([^"]+)" (\d+)\s*$', body, flags=re.M):
             seq["shots"].append((sc.group(1).replace("\\", "/"), sc.group(2), int(sc.group(3))))
         md = re.search(r'^\s*Test-MemDelta \$\w+ "([^"]+)" (\d+)\s*$', body, flags=re.M)
@@ -115,6 +118,33 @@ class Report:
             print(f"  [FALHA] {desc} ({a} -> {b}, delta {d} > {limit})")
             self.failures.append(desc)
 
+
+    def shot_pixel(self, ppm, x, y, rgb, tol, desc):
+        self.checks += 1
+        path = ROOT / ppm
+        if not path.exists():
+            print(f"  [FALHA] {desc}   (sem a captura {ppm})")
+            self.failures.append(desc)
+            return
+        data = path.read_bytes()
+        fields, i = [], 0
+        while len(fields) < 4 and i < len(data):
+            tok = b""
+            while i < len(data) and not data[i:i + 1].isspace():
+                tok += data[i:i + 1]
+                i += 1
+            if tok:
+                fields.append(tok)
+            i += 1
+        p = i + (y * int(fields[1]) + x) * 3
+        got = data[p:p + 3]
+        exp = ((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255)
+        seen = got.hex()
+        if all(abs(got[c] - exp[c]) <= tol for c in range(3)):
+            print(f"  [ok]    {desc} (pixel {x},{y} = {seen})")
+        else:
+            print(f"  [FALHA] {desc} (pixel {x},{y} = {seen}, esperado {rgb:06x} +-{tol})")
+            self.failures.append(desc)
 
     def shot_colors(self, ppm, desc, minimum):
         self.checks += 1
@@ -218,6 +248,8 @@ def main():
             rep.expect(log, pat, desc, negate)
         for ppm, desc, minimum in seq["shots"]:
             rep.shot_colors(ppm, desc, minimum)
+        for ppm, x, y, rgb, tol, desc in seq["pixels"]:
+            rep.shot_pixel(ppm, x, y, rgb, tol, desc)
         if seq["memdelta"]:
             rep.memdelta(log, *seq["memdelta"])
 

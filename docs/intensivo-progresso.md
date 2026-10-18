@@ -27,20 +27,20 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 15:47, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
-`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1 e 6.1 a 6.5. Versao 2.4.0-a6. O
+Estado (2026-10-18, 17:40, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.5 e a parte 1 da 6.6
+(`imgview`). Versao 2.4.0-a7. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e
-na ISO na F, com 427 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+na ISO na F, com 432 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 6.6, um app por parte, cada um com captura na sequencia B.
-Parte 1: visualizador de imagens (`imgview`, com o componente tela da
-`libgui`); depois monitor do sistema, arquivos, editor, configuracoes e
-terminal. Versao 2.4.0-a7 em diante.
+Proxima etapa: 6.6 parte 2, monitor do sistema, com captura na sequencia B
+como o `imgview`; depois arquivos, editor, configuracoes e terminal, um app
+por parte. Versao 2.4.0-a8 em diante.
 
 ## Checklist
 
@@ -98,7 +98,7 @@ terminal. Versao 2.4.0-a7 em diante.
 | 6.3 | Fontes TrueType | [x] | 12:27 | 13:05 | ver `git log` |
 | 6.4 | Imagens PNG/JPEG | [x] | 13:05 | 13:38 | ver `git log` |
 | 6.5 | Compositor com areas sujas | [x] | 13:38 | 15:47 | ver `git log` |
-| 6.6 | Apps | [ ] | | | |
+| 6.6 | Apps | [~] | 15:47 | | |
 | 6.7 | Area de trabalho | [ ] | | | |
 | 7.1 | ISO hibrida | [x] | 06:26 | 09:44 | ver `git log` |
 | 7.2 | Live | [x] | 09:44 | 10:13 | ver `git log` |
@@ -1141,6 +1141,25 @@ e sobravam 0,2 GB), e o QEMU nao conseguia reservar o buffer do JIT. Com o
 OneDrive encerrado pelo dono, a regressao passou inteira.
 Ficou de fora: compositor com transparencia e sombras, sincronizar com o
 retraco vertical (o framebuffer da UEFI nao tem).
+
+#### 6.6 parte 1 Visualizador de imagens - 15:47 a 17:40 - FEITO
+A `libgui` ganhou o componente tela (`gui_canvas`: o app pinta por uma funcao
+e aumenta `version` quando o desenho muda, numero que entra na assinatura das
+areas sujas), o `gui_blit` e o gancho `on_key`. `imgview` (novo) abre PNG e
+JPEG com o `stb_image`, ajustado a 640x380 mantendo a proporcao ou em 1:1
+(`f`), anda pelas imagens da mesma pasta com as setas ou os botoes e fecha com
+`q`. `Test-ShotPixel` (novo, no `regressao.ps1` e no `regress.py`) confere a
+cor de um pixel da captura. Criterio: na sequencia B o `imgview` abre o JPEG
+de teste, a captura `reg-app-imgview` tem os quadrantes vermelho e amarelo no
+lugar certo, a seta passa para o PNG da mesma pasta e o `q` fecha a janela.
+Regressao 427 -> 432, verde na primeira rodada completa (31 minutos). Versao
+2.4.0-a7.
+Problemas: o PC travou no meio da etapa, antes do commit. Os arquivos ficaram
+integros; a etapa foi terminada, compilada e passou na regressao sem mudanca
+no codigo. O Windows tinha so 1,5 GB de memoria comprometida livre (muitos
+programas abertos, sem vazamento), e foi o bastante para o QEMU.
+Ficou de fora: zoom e rolagem em 1:1 (imagem maior que a area aparece cortada
+no centro), GIF e BMP.
 
 ### Sessao 2 - 2026-10-17
 

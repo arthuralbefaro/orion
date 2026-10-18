@@ -201,7 +201,7 @@ static struct gui_widget *add(struct gui *g, enum gui_kind kind, int x, int y, i
     wd->h = h;
     wd->selected = -1;
     snprintf(wd->text, sizeof(wd->text), "%s", text ? text : "");
-    if (g->focus < 0 && kind != GUI_LABEL)
+    if (g->focus < 0 && kind != GUI_LABEL && kind != GUI_CANVAS)
         g->focus = g->count - 1;
     return wd;
 }
@@ -233,6 +233,33 @@ struct gui_widget *gui_list(struct gui *g, int x, int y, int w, int rows, gui_ac
     if (l)
         l->action = on_select;
     return l;
+}
+
+struct gui_widget *gui_canvas(struct gui *g, int x, int y, int w, int h,
+                              void (*paint)(struct gui *g, struct gui_widget *w), gui_action on_click)
+{
+    struct gui_widget *c = add(g, GUI_CANVAS, x, y, w, h, NULL);
+    if (c) {
+        c->paint = paint;
+        c->action = on_click;
+    }
+    if (c && g->focus == (int)(c - g->widgets))
+        g->focus = -1;
+    return c;
+}
+
+void gui_blit(struct gui *g, int x, int y, const uint32_t *src, int w, int h, int stride)
+{
+    for (int j = 0; j < h; j++) {
+        int ty = y + j;
+        if (ty < 0 || ty >= g->height)
+            continue;
+        for (int i = 0; i < w; i++) {
+            int tx = x + i;
+            if (tx >= 0 && tx < g->width)
+                g->pixels[(size_t)ty * (size_t)g->width + (size_t)tx] = src[(size_t)j * (size_t)stride + (size_t)i];
+        }
+    }
 }
 
 struct gui_widget *gui_check(struct gui *g, int x, int y, int w, const char *text, gui_action on_toggle)
@@ -337,6 +364,11 @@ static void draw_widget(struct gui *g, struct gui_widget *w, bool focused)
             gui_fill(g, w->x + 4, w->y + 7, 10, 10, COL_SELECT);
         draw_text_clip(g, w->x + 26, ty, w->text, (w->w - 26) / CHAR_W, COL_TEXT);
         break;
+    case GUI_CANVAS:
+        gui_fill(g, w->x, w->y, w->w, w->h, COL_PANEL);
+        if (w->paint)
+            w->paint(g, w);
+        break;
     case GUI_LIST: {
         gui_fill(g, w->x, w->y, w->w, w->h, COL_PANEL);
         frame(g, w->x, w->y, w->w, w->h, focused ? COL_FOCUS : COL_DIM);
@@ -401,7 +433,7 @@ static uint32_t widget_sig(const struct gui *g, const struct gui_widget *w, int 
     uint32_t h = 2166136261u;
     for (const char *c = w->text; *c; c++)
         h = (h ^ (uint8_t)*c) * 16777619u;
-    int vals[] = { w->checked, w->selected, w->top, w->count, index == g->focus };
+    int vals[] = { w->checked, w->selected, w->top, w->count, index == g->focus, w->version };
     for (size_t i = 0; i < sizeof(vals) / sizeof(vals[0]); i++)
         h = (h ^ (uint32_t)vals[i]) * 16777619u;
     return h | 1;
@@ -463,7 +495,7 @@ static void focus_next(struct gui *g, int dir)
     int i = g->focus;
     for (int n = 0; n < g->count; n++) {
         i = (i + dir + g->count) % g->count;
-        if (g->widgets[i].kind != GUI_LABEL) {
+        if (g->widgets[i].kind != GUI_LABEL && g->widgets[i].kind != GUI_CANVAS) {
             g->focus = i;
             return;
         }
@@ -473,6 +505,8 @@ static void focus_next(struct gui *g, int dir)
 static void key(struct gui *g, int ascii, int scancode, int mods)
 {
     bool ext = (mods & GUI_MOD_EXTENDED) != 0;
+    if (g->open_menu < 0 && g->on_key && g->on_key(g, ascii, scancode, mods))
+        return;
     if (!ext && scancode == GUI_SC_F10 && g->menu_count) {
         g->open_menu = g->open_menu >= 0 ? -1 : 0;
         g->menu_item = 0;
@@ -581,6 +615,13 @@ static void click(struct gui *g, int x, int y)
         struct gui_widget *w = &g->widgets[i];
         if (!inside(w, x, y) || w->kind == GUI_LABEL)
             continue;
+        if (w->kind == GUI_CANVAS) {
+            g->click_x = x - w->x;
+            g->click_y = y - w->y;
+            if (w->action)
+                w->action(g, w);
+            return;
+        }
         g->focus = i;
         if (w->kind == GUI_LIST) {
             int sx = w->x + w->w - SCROLL_W - 1;

@@ -69,6 +69,39 @@ function Start-HostWeb([int]$port) {
     return $p
 }
 
+function Test-ShotPixel([string]$ppm, [int]$x, [int]$y, [string]$hex, [int]$tol, [string]$what) {
+    $script:checks++
+    $path = Join-Path $Root $ppm
+    if (-not (Test-Path $path)) {
+        Write-Host ("  [FALHA] " + $what + "   (sem a captura " + $ppm + ")") -ForegroundColor Red
+        $script:failures += $what
+        return
+    }
+    $bytes = [System.IO.File]::ReadAllBytes($path)
+    $fields = @()
+    $i = 0
+    while ($fields.Count -lt 4 -and $i -lt $bytes.Length) {
+        $tok = ""
+        while ($i -lt $bytes.Length -and [char]$bytes[$i] -notmatch '\s') { $tok += [char]$bytes[$i]; $i++ }
+        if ($tok) { $fields += $tok }
+        $i++
+    }
+    $w = [int]$fields[1]
+    $p = $i + ($y * $w + $x) * 3
+    $want = [Convert]::ToInt32($hex.Substring(2), 16)
+    $got = @([int]$bytes[$p], [int]$bytes[$p + 1], [int]$bytes[$p + 2])
+    $exp = @((($want -shr 16) -band 255), (($want -shr 8) -band 255), ($want -band 255))
+    $ok = $true
+    for ($c = 0; $c -lt 3; $c++) { if ([Math]::Abs($got[$c] - $exp[$c]) -gt $tol) { $ok = $false } }
+    $seen = "{0:x2}{1:x2}{2:x2}" -f $got[0], $got[1], $got[2]
+    if ($ok) {
+        Write-Host ("  [ok]    " + $what + " (pixel $x,$y = $seen)") -ForegroundColor Green
+    } else {
+        Write-Host ("  [FALHA] " + $what + " (pixel $x,$y = $seen, esperado $hex +-$tol)") -ForegroundColor Red
+        $script:failures += $what
+    }
+}
+
 function Test-ShotColors([string]$ppm, [string]$what, [int]$min) {
     $script:checks++
     $path = Join-Path $Root $ppm
@@ -159,7 +192,7 @@ if ($runAll -or $OnlyA) {
         "raw:cho homeok", "keys:1B5B48", "raw:e", "key:0D", "wait:1.5",
         "raw:eccho delok", "keys:1B5B48", "keys:1B5B43", "keys:1B5B43", "keys:1B5B337E",
         "key:0D", "wait:1.5",
-        "cmd:history", "wait:1",
+        "cmd:history", "wait:3",
         "cmd:forktest", "wait:30",
         "cmd:forktest -s 6", "wait:3", "key:0B", "cmd:mem", "key:0B", "wait:12",
         "cmd:dhcp", "wait:8",
@@ -546,6 +579,8 @@ if ($runAll -or $OnlyB) {
         "wait:2", "mon:sendkey ctrl-c", "wait:2", "shot:out\shots\reg-wm-3b-ctrlc.ppm",
         "mon:sendkey ctrl-t", "wait:2", "shot:out\shots\reg-wm-4-ctrl-t.ppm",
         "mon:sendkey ctrl-q", "wait:1.5", "shot:out\shots\reg-wm-5-ctrl-q.ppm",
+        "type:imgview /usr/share/imagens/teste.jpg &", "mon:sendkey ret", "wait:4",
+        "shot:out\shots\reg-app-imgview.ppm", "mon:sendkey right", "wait:1", "mon:sendkey q", "wait:2",
         "mon:sendkey ctrl-alt-x", "wait:5",
         "cmd:echo TTY-DE-VOLTA", "wait:1", "shot:out\shots\reg-wm-6-tty.ppm",
         "key:0B", "cmd:mem", "cmd:pty", "cmd:procs",
@@ -573,6 +608,11 @@ if ($runAll -or $OnlyB) {
     Expect $b "0 pty\(s\) viva\(s\)" "nenhuma pty vazada"
     Expect $b "(?s)pid\s+ppid\s+estado[^\n]*\n\s+\d+\s+1\s+running\s+\d+\s+sh\s*\n\s+1\s+0\s+running\s+\d+\s+init" "procs so tem init e sh"
     Test-MemDelta $b "memoria estavel na sequencia B" 16
+    Expect $b "wm: app abriu a janela \d+ \(660x490, 'imgview'\)" "imgview abre a janela"
+    Expect $b "agora se chama 'imgview: teste\.jpg 96x64'\s*\n(wm: janela \d+ mostrou o primeiro quadro\s*\n)?wm: janela \d+ agora se chama 'imgview: teste\.png 48x32'" "imgview mostra o JPEG e a seta passa para o PNG da mesma pasta"
+    Expect $b "wm: app da janela \d+ saiu \(pediu para fechar\) depois de \d+ quadro" "imgview fecha com q"
+    Test-ShotPixel "out\shots\reg-app-imgview.ppm" 413 223 0xc82828 40 "captura do imgview: quadrante vermelho do JPEG"
+    Test-ShotPixel "out\shots\reg-app-imgview.ppm" 698 413 0xdcc828 40 "captura do imgview: quadrante amarelo do JPEG"
     Expect $b 'crash: pedindo ao kernel para executar codigo de usuario \(SMEP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?busca de instrucao[\s\S]*?SMEP: o kernel tentou executar codigo de usuario \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMEP: kernel executando pagina de usuario vira panico controlado"
     Expect $b 'crash: pedindo ao kernel para ler memoria de usuario sem copy_from_user \(SMAP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?SMAP: o kernel acessou memoria de usuario fora das copias de uaccess \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMAP: kernel lendo memoria de usuario fora do uaccess vira panico controlado"
     ExpectNot $b 'crash: o kernel voltou' "o kernel nunca volta de um acesso proibido a memoria de usuario"
