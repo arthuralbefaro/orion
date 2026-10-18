@@ -20,13 +20,15 @@ CFLAGS := --target=x86_64-unknown-none-elf -std=gnu11 -O2 -g -Wall -Wextra \
     -fno-pic -fno-pie -ffunction-sections -fdata-sections \
     -m64 -march=x86-64 -mabi=sysv -mno-80387 -mno-mmx -mno-sse -mno-sse2 \
     -mno-red-zone -mcmodel=kernel \
-    -Ikernel/include -I$(LIMINE) -MMD -MP
+    -Ikernel/include -I$(LIMINE) -Ithird_party/uacpi/include -MMD -MP
 
 LDFLAGS := -m elf_x86_64 -nostdlib -static -z max-page-size=0x1000 \
     -z noexecstack --gc-sections -T linker.ld
 
 SRCS := $(shell find $(SRC_DIR) -name '*.c' -o -name '*.S')
-OBJS := $(patsubst $(SRC_DIR)/%,$(BUILD_DIR)/%.o,$(SRCS))
+UACPI_SRCS := $(wildcard third_party/uacpi/source/*.c)
+OBJS := $(patsubst $(SRC_DIR)/%,$(BUILD_DIR)/%.o,$(SRCS)) \
+    $(patsubst third_party/uacpi/source/%,$(BUILD_DIR)/uacpi/%.o,$(UACPI_SRCS))
 DEPS := $(OBJS:.o=.d)
 
 ESP := $(OUT_DIR)/esp
@@ -54,6 +56,10 @@ $(ELF): $(OBJS) $(RUST_LIB) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(OBJS) $(RUST_LIB)
 
 $(BUILD_DIR)/%.c.o: $(SRC_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/uacpi/%.c.o: third_party/uacpi/source/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 

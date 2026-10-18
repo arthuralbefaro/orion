@@ -2455,3 +2455,48 @@ Uma linha por decisao, na ordem em que foram tomadas.
   um a raiz `initramfs / tmpfs`; no primeiro, `/bin` inteiro, donos e modos,
   escrita e leitura na raiz, `hello`, `lua`, `su`; no segundo, que o arquivo
   gravado antes sumiu; no ultimo, o wad do Doom.
+
+## v2.4.0-a1 (etapa 5.1: uACPI)
+
+- uACPI 6.1.1 (MIT) em `third_party/uacpi` (so `include`, `source`, licenca
+  e README, sem mudar uma linha), compilado junto do kernel pelo `build.ps1`
+  e pelo `Makefile` com as mesmas flags, sem nenhum warning. A 6.1.1 e uma
+  versao de correcao de duas semanas; a 7.0.0 tinha saido dois dias antes.
+- `drivers/acpi_os.c` implementa a interface `uacpi_kernel_*`: tabelas e
+  regioes de memoria pelo HHDM quando a pagina ja esta mapeada e pela janela
+  de MMIO quando nao esta (com um cache, porque a janela so cresce e o
+  `unmap` e vazio), PCI pelo espaco de configuracao legado (leituras e
+  escritas de 8 e 16 bits viram 32 bits com mascara), portas de E/S, mutex
+  com prazo (tentativas de 1 ms), eventos como semaforos com fila de espera,
+  spinlocks, o tempo do TSC, e uma thread `acpi-work` que executa os
+  trabalhos adiados (metodos de GPE e `Notify`). A interrupcao do SCI e uma
+  IRQ ISA (a 9 no QEMU), pelo mesmo caminho das outras.
+- `drivers/power.c`: `power_init` roda logo depois do `pci_init` (antes dos
+  drivers, para eles poderem pedir rotas): `uacpi_initialize`, carga do
+  namespace, `_PIC(1)` quando as IRQs vao pelo I/O APIC (precisa vir depois
+  da carga e antes da inicializacao; na ordem errada o uACPI recusa e o `_PRT`
+  devolve as rotas do PIC), inicializacao do namespace, GPEs, o evento fixo do
+  botao de energia e a tabela `_PRT` da ponte PCI raiz (`PNP0A08`/`PNP0A03`).
+  No QEMU leva uns 60 ms.
+- Rotas de IRQ do PCI: `power_pci_route` acha a entrada do `_PRT` para o
+  slot e o pino; com fonte, le a IRQ, o disparo e a polaridade do `_CRS` do
+  link. A e1000 passou a usar a GSI que o `_PRT` da (22 no q35, nivel, ativa
+  em baixo), roteada pelo `irq_attach_gsi` num vetor a partir de `0x50`; se
+  nao houver rota, volta para a linha de IRQ do espaco de configuracao.
+- `poweroff`: grava os discos (`vfs_sync`), `uacpi_prepare_for_sleep_state`
+  (S5, roda o `_PTS`), desliga as interrupcoes, para as outras CPUs e
+  `uacpi_enter_sleep_state`. `reboot`: grava os discos e `uacpi_reboot`
+  (registrador de reset do FADT); se voltar, o controlador do teclado e, por
+  ultimo, a IDT vazia. O botao de energia agenda o desligamento na thread de
+  trabalho (o evento chega dentro da interrupcao).
+- Syscall `reboot` (169) com os numeros magicos e os comandos do Linux
+  (`RESTART`, `POWER_OFF`, `HALT`; `CAD_ON`/`CAD_OFF` aceitos sem efeito), so
+  para root. Programa `poweroff` (com `reboot` e `halt` pelo `argv[0]`): grava
+  e chama a syscall; quem nao e root recebe o `EPERM` do kernel. O shell do
+  kernel ganhou `poweroff`, e o `reboot` dele passou pelo mesmo caminho.
+- Harness: passo `monlog:<comando>`, que manda o comando ao monitor do QEMU e
+  grava a resposta no log. Com `-no-reboot -no-shutdown` o QEMU pausa tanto
+  no desligamento quanto no reset ("paused (shutdown)"); a regressao separa os
+  dois pela linha do kernel (S5 ou registrador de reset) e confere que o
+  reboot nao precisou do controlador do teclado.
+- Teste no VirtualBox: nao ha VirtualBox nesta maquina; fica para o dono.

@@ -1,3 +1,4 @@
+#include <drivers/power.h>
 #include <kernel/syscall.h>
 #include <kernel/process.h>
 #include <kernel/sched.h>
@@ -439,6 +440,25 @@ static long sys_pipe2(int *ufds, int flags)
 static long sys_pipe(int *ufds)
 {
     return sys_pipe2(ufds, 0);
+}
+
+static long sys_reboot(uint32_t magic1, uint32_t magic2, uint32_t cmd)
+{
+    if (!cred_is_root())
+        return -EPERM;
+    if (magic1 != 0xFEE1DEADu || (magic2 != 672274793u && magic2 != 85072278u && magic2 != 369367448u &&
+                                  magic2 != 537993216u))
+        return -EINVAL;
+    switch (cmd) {
+    case 0x01234567u: power_reboot();
+    case 0x4321FEDCu: power_off();
+    case 0xCDEF0123u: power_halt();
+    case 0x89ABCDEFu:
+    case 0:
+        return 0;
+    default:
+        return -EINVAL;
+    }
 }
 
 static long sys_kfault(uint64_t op, uint64_t addr)
@@ -2104,6 +2124,7 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_FTRUNCATE:   ret = sys_ftruncate((int)f->rdi, f->rsi); break;
     case SYS_FSYNC:
     case SYS_SYNC:        ret = vfs_sync() ? 0 : -EIO; break;
+    case SYS_REBOOT:      ret = sys_reboot((uint32_t)f->rdi, (uint32_t)f->rsi, (uint32_t)f->rdx); break;
     case SYS_GETPGID:     ret = process_getpgid((int)f->rdi); break;
     case SYS_GETRLIMIT:   ret = sys_getrlimit((int)f->rdi, (struct user_rlimit *)f->rsi); break;
     case SYS_SETRLIMIT:   ret = sys_setrlimit((int)f->rdi, (const struct user_rlimit *)f->rsi); break;

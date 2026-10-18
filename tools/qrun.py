@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import re
 import os
 import platform
 import shutil
@@ -245,18 +246,23 @@ class Machine:
         self.serial.sendall(data)
         self.serial.setblocking(False)
 
-    def monitor_cmd(self, cmd):
+    def monitor_cmd(self, cmd, wait=0.2):
         if self.monitor is None:
             self.monitor = self._connect(self.monitor_port, 10)
         self.monitor.setblocking(True)
         self.monitor.sendall((cmd + "\n").encode())
         self.monitor.setblocking(False)
-        time.sleep(0.2)
+        time.sleep(wait)
+        reply = b""
         try:
-            while self.monitor.recv(8192):
-                pass
+            while True:
+                chunk = self.monitor.recv(8192)
+                if not chunk:
+                    break
+                reply += chunk
         except (BlockingIOError, OSError):
             pass
+        return reply.decode("ascii", errors="replace")
 
     def screenshot(self, path):
         path = Path(str(path).replace("\\", "/"))
@@ -324,6 +330,15 @@ class Machine:
             print(f"  mon  > {arg}")
             self.monitor_cmd(arg)
             self.pump(0.35)
+        elif kind == "monlog":
+            print(f"  mon  > {arg} (resposta no log)")
+            self.pump(0.3)
+            try:
+                reply = self.monitor_cmd(arg, 1.2)
+            except OSError:
+                reply = "(monitor fechado)"
+            clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", reply).replace("\r", "").strip()
+            self.log += f"\n[monitor] {arg}: {clean}\n".encode()
         elif kind == "wait":
             self.pump(float(arg))
         elif kind == "until":

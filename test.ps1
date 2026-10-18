@@ -226,15 +226,20 @@ function Send-Bytes([byte[]]$bytes) {
     $stream.Flush()
 }
 
-function Send-Monitor([string]$cmd) {
+function Send-Monitor([string]$cmd, [int]$waitMs = 200) {
     if (-not $monitor) { $script:monitor = Connect-Port $MonitorPort 10 }
     $stream = $monitor.GetStream()
     $bytes = [System.Text.Encoding]::ASCII.GetBytes($cmd + "`n")
     $stream.Write($bytes, 0, $bytes.Length)
     $stream.Flush()
-    Start-Sleep -Milliseconds 200
+    Start-Sleep -Milliseconds $waitMs
     $buf = New-Object byte[] 8192
-    while ($stream.DataAvailable) { [void]$stream.Read($buf, 0, $buf.Length) }
+    $reply = New-Object System.Text.StringBuilder
+    while ($stream.DataAvailable) {
+        $n = $stream.Read($buf, 0, $buf.Length)
+        [void]$reply.Append([System.Text.Encoding]::ASCII.GetString($buf, 0, $n))
+    }
+    return $reply.ToString()
 }
 
 function Convert-Ppm([string]$ppm, [string]$png) {
@@ -282,7 +287,7 @@ function Take-Screenshot([string]$path) {
     $dir = Split-Path $path -Parent
     if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     if (Test-Path $path) { Remove-Item $path -Force }
-    Send-Monitor ("screendump " + $path.Replace('\', '/'))
+    [void](Send-Monitor ("screendump " + $path.Replace('\', '/')))
     $end = (Get-Date).AddSeconds(10)
     while ((Get-Date) -lt $end -and -not (Test-Path $path)) { Start-Sleep -Milliseconds 150 }
     if (-not (Test-Path $path)) { Write-Host "  screenshot FALHOU: $path" -ForegroundColor Red; return }
@@ -336,7 +341,15 @@ try {
                 Send-Bytes $bytes
                 Pump-Serial 0.6
             }
-            "mon"  { Write-Host "  mon  > $arg" -ForegroundColor DarkGray; Send-Monitor $arg; Pump-Serial 0.35 }
+            "mon"  { Write-Host "  mon  > $arg" -ForegroundColor DarkGray; [void](Send-Monitor $arg); Pump-Serial 0.35 }
+            "monlog" {
+                Write-Host "  mon  > $arg (resposta no log)" -ForegroundColor DarkGray
+                Pump-Serial 0.3
+                $reply = ""
+                try { $reply = Send-Monitor $arg 1200 } catch { $reply = "(monitor fechado)" }
+                $clean = ($reply -replace "\x1b\[[0-9;]*[A-Za-z]", "" -replace "`r", "").Trim()
+                [void]$log.Append("`n[monitor] ${arg}: $clean`n")
+            }
             "wait" { Pump-Serial ([double]$arg) }
             "until" {
                 $j = $arg.IndexOf(':')
@@ -368,7 +381,7 @@ try {
                             ':' { $name = 'shift-semicolon' }
                         }
                     }
-                    if ($name) { Send-Monitor "sendkey $name" }
+                    if ($name) { [void](Send-Monitor "sendkey $name") }
                 }
                 Pump-Serial 0.3
             }
@@ -442,7 +455,7 @@ try {
             "reboot" {
                 Write-Host "  reboot $arg" -ForegroundColor DarkGray
                 Pump-Serial 0.5
-                try { Send-Monitor "quit" } catch {}
+                try { [void](Send-Monitor "quit") } catch {}
                 try { $client.Close() } catch {}
                 try { if ($monitor) { $monitor.Close() } } catch {}
                 $monitor = $null
@@ -482,7 +495,7 @@ try {
     Write-Host "ERRO: $_" -ForegroundColor Red
     $exitCode = 1
 } finally {
-    try { if ($monitor) { Send-Monitor "quit" } } catch {}
+    try { if ($monitor) { [void](Send-Monitor "quit") } } catch {}
     Start-Sleep -Milliseconds 300
     try { if ($client) { $client.Close() } } catch {}
     try { if ($monitor) { $monitor.Close() } } catch {}

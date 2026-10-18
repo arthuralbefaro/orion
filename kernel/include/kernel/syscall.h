@@ -36,6 +36,7 @@
 #define SYS_FSYNC         74
 #define SYS_FTRUNCATE     77
 #define SYS_SYNC          162
+#define SYS_REBOOT        169
 #define SYS_TRUNCATE      76
 #define SYS_PREAD64       17
 #define SYS_PWRITE64      18

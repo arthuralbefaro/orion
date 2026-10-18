@@ -1,3 +1,4 @@
+#include <drivers/power.h>
 #include <kernel/shell.h>
 #include <kernel/log.h>
 #include <kernel/version.h>
@@ -489,12 +490,14 @@ static void cmd_reboot(const char *args)
 {
     (void)args;
     kprintf("Reiniciando...\n");
-    
-    outb(0x64, 0xFE);
-    
-    struct { uint16_t limit; uint64_t base; } PACKED null_idt = { 0, 0 };
-    __asm__ volatile("lidt %0\n\tint3" : : "m"(null_idt));
-    halt_forever();
+    power_reboot();
+}
+
+static void cmd_poweroff(const char *args)
+{
+    (void)args;
+    kprintf("Desligando...\n");
+    power_off();
 }
 
 static void cmd_halt(const char *args)
@@ -614,6 +617,7 @@ static const struct command commands[] = {
     { "crash",  "divisao por zero (testa excecao #DE)", cmd_crash },
     { "pf",     "page fault proposital (testa #PF)",    cmd_pf },
     { "reboot", "reinicia a maquina",                   cmd_reboot },
+    { "poweroff", "desliga a maquina pelo ACPI",          cmd_poweroff },
     { "halt",   "para a CPU",                           cmd_halt },
 };
 

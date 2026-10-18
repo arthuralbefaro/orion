@@ -128,6 +128,11 @@ O ext2 (o driver e o piloto em Rust do kernel) monta com leitura e escrita;
 Links simbolicos funcionam no ext2 e no tmpfs (`ln -s alvo nome`,
 `readlink nome`); o FAT nao tem links e devolve `EPERM`.
 
+O ACPI passa pelo uACPI (`third_party/uacpi`): `poweroff`, `reboot` e `halt`
+(como root) desligam e reiniciam de verdade, o botao de energia do QEMU
+(`system_powerdown` no monitor) desliga, e a placa de rede usa a IRQ que o
+`_PRT` do firmware indica.
+
 O kernel liga SMEP e SMAP quando a CPU tem (o QEMU roda com
 `-cpu qemu64,+smep,+smap`): ele nao executa nem le memoria de usuario fora das
 copias conferidas. `crash smep` e `crash smap` (como root) provocam de proposito
@@ -172,8 +177,9 @@ tira screenshots (PPM convertido para PNG) e salva o log da serial.
 Passos aceitos em `-Script`: `cmd:<linha>`, `raw:<texto>`, `key:<hex>` (um
 byte cru; `key:0B` e o Ctrl+K), `keys:<hex>`, `mon:<comando do monitor>`,
 `wait:<segundos>`, `until:<segundos>:<texto>` (espera o texto aparecer depois
-do ultimo comando), `shot:<arquivo.ppm>`, `reboot:` (fecha o QEMU e sobe de novo
-com os mesmos discos, util com `-Image`) e `tcpprobe:<porta>` (conecta do
+do ultimo comando), `shot:<arquivo.ppm>`, `monlog:<comando do monitor>` (grava
+a resposta no log), `reboot:` (fecha o QEMU e sobe de novo com os mesmos
+discos, util com `-Image`; `reboot:bios,cd` troca firmware e midia) e `tcpprobe:<porta>` (conecta do
 hospedeiro numa porta de `-HostFwd` e anota no log se o Orion fechou, ficou
 calado ou mandou dados).
 
@@ -201,7 +207,7 @@ desempacota num tmpfs usado como raiz, sem precisar de disco. Login `root` ou
 ## Programas proprios em /bin
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
-    ifconfig ping nslookup wget nc telnet httpget httpd wmctl dhcp netup id login su passwd mkfs mkfs.ext2 fsck.ext2 mount umount
+    ifconfig ping nslookup wget nc telnet httpget httpd wmctl dhcp netup id login su passwd poweroff reboot halt mkfs mkfs.ext2 fsck.ext2 mount umount
     testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest unixtest permtest aslrtest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest

@@ -180,7 +180,7 @@ if ($runAll -or $OnlyA) {
         "wait:2", "cmd:httpd -n 1 &", "wait:2", "hostget:8081:/etc/group", "wait:2",
         "cmd:unixtest /run", "until:60:falha(s))", "cmd:unixtest /", "until:60:falha(s))",
         "cmd:permtest /tmp", "until:90:falha(s))", "cmd:permtest /", "until:90:falha(s))",
-        "cmd:ls -l /etc/shadow", "cmd:id", "wait:1",
+        "cmd:ls -l /etc/shadow", "cmd:id", "wait:1", "cmd:su orion -c poweroff", "wait:1",
         "cmd:aslrtest", "until:30:falha(s))", "cmd:cat /proc/self/maps", "cmd:cat /proc/self/maps", "wait:1",
         "cmd:login", "until:10:login: ", "raw:orion", "key:0D", "until:10:Senha: ", "raw:errada", "key:0D",
         "until:10:Login incorreto", "wait:1", "raw:orion", "key:0D", "wait:1", "raw:orion", "key:0D",
@@ -242,6 +242,9 @@ if ($runAll -or $OnlyA) {
 
     Expect $a "Orion sh \(pid \d+\)" "shell de usuario subiu"
     Expect $a "\[info\] cpu\s+SMEP ligado, SMAP ligado" "SMEP e SMAP ligados em todas as copias de memoria de usuario"
+    Expect $a "\[info\] acpi\s+uACPI pronto em \d+ ms: namespace carregado, botao de energia ligado, _PRT com \d+ rota" "uACPI carrega o namespace, o botao de energia e o _PRT"
+    Expect $a "e1000\s+8086:100e[^\n]*GSI (1[6-9]|2[0-3]) pelo _PRT, link up" "e1000 usa a GSI que o _PRT da (rede funciona por ela)"
+    Expect $a "su orion -c poweroff\s*poweroff: gravando os discos e desligando\s*poweroff: Operation not permitted" "usuario comum nao desliga a maquina (EPERM do kernel)"
     Expect $a "ls /bin \| wc[\s\S]{0,80}?\d+\s+\d+\s+\d+" "ls /bin | wc produziu contagem"
     Expect $a "resultado: TUDO OK" "memtest TUDO OK"
     Expect $a "tocar 10 paginas aloca so essas paginas\s+ok" "mmap anonimo aloca sob demanda"
@@ -540,7 +543,10 @@ if ($runAll -or $OnlyB) {
         "mon:sendkey ctrl-alt-x", "wait:5",
         "cmd:echo TTY-DE-VOLTA", "wait:1", "shot:out\shots\reg-wm-6-tty.ppm",
         "key:0B", "cmd:mem", "cmd:pty", "cmd:procs",
-        "key:0B", "cmd:crash smep", "wait:4", "reboot:", "cmd:crash smap", "wait:4"
+        "key:0B", "cmd:crash smep", "wait:4", "reboot:", "cmd:crash smap", "wait:4",
+        "reboot:", "cmd:reboot", "wait:4", "monlog:info status",
+        "reboot:", "cmd:poweroff", "wait:4", "monlog:info status",
+        "reboot:", "mon:system_powerdown", "wait:8", "monlog:info status"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -LogPath "out\reg-b.log" `
         -Script $stepsB -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
@@ -563,6 +569,10 @@ if ($runAll -or $OnlyB) {
     Expect $b 'crash: pedindo ao kernel para executar codigo de usuario \(SMEP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?busca de instrucao[\s\S]*?SMEP: o kernel tentou executar codigo de usuario \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMEP: kernel executando pagina de usuario vira panico controlado"
     Expect $b 'crash: pedindo ao kernel para ler memoria de usuario sem copy_from_user \(SMAP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?SMAP: o kernel acessou memoria de usuario fora das copias de uaccess \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMAP: kernel lendo memoria de usuario fora do uaccess vira panico controlado"
     ExpectNot $b 'crash: o kernel voltou' "o kernel nunca volta de um acesso proibido a memoria de usuario"
+    Expect $b 'reboot: gravando os discos e reiniciando\s*\[info\] acpi\s+reiniciando: gravando os discos\s*\[info\] acpi\s+reiniciando pelo registrador de reset do FADT(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "reboot pelo registrador de reset do FADT (uACPI)"
+    ExpectNot $b 'reiniciando pelo controlador do teclado' "reboot nao precisou do controlador do teclado"
+    Expect $b 'poweroff: gravando os discos e desligando\s*\[info\] acpi\s+desligando: gravando os discos\s*\[info\] acpi\s+entrando no estado S5(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "poweroff entra no S5 e o QEMU desliga"
+    Expect $b 'botao de energia apertado: desligando\s*\[info\] acpi\s+desligando: gravando os discos\s*\[info\] acpi\s+entrando no estado S5(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "botao de energia (system_powerdown) desliga pelo ACPI"
 }
 
 # ---------------- Sequencia C: disco e shell ----------------
@@ -611,7 +621,7 @@ if ($runAll -or $OnlyC) {
         "cmd:umount /tmp/e4", "cmd:umount /tmp/e1", "wait:1",
         "cmd:fsck.ext2 /dev/sdc", 'cmd:echo FIM$X-FSCK1', "until:120:FIM-FSCK1",
         "cmd:fsck.ext2 /dev/sdd", 'cmd:echo FIM$X-FSCK2', "until:120:FIM-FSCK2",
-        "cmd:mkfs.ext2 -L NOVO /dev/sdd", 'cmd:echo FIM$X-MKFS', "until:120:FIM-MKFS",
+        "cmd:mkfs.ext2 -L NOVO /dev/sdd", "until:120:rotulo 'NOVO'", 'cmd:echo FIM$X-MKFS', "until:120:FIM-MKFS",
         "cmd:fsck.ext2 /dev/sdd", 'cmd:echo FIM$X-FSCK3', "until:120:FIM-FSCK3",
         "cmd:mount -t ext2 /dev/sdd /tmp/e1", "cmd:ls /tmp/e1",
         "cmd:fstest -a /tmp/e1", 'cmd:echo FIM$X-FSTEST', "until:600:FIM-FSTEST",
@@ -742,8 +752,8 @@ if ($runAll -or $OnlyF) {
         "cmd:echo vivo-na-ram > /home/orion/nota.txt", "cmd:cat /home/orion/nota.txt", "cmd:hello",
         "cmd:lua -e print(6*7)", "cmd:su orion -c id", "cmd:free", "wait:1",
         "reboot:uefi,cd", "cmd:mount", "cmd:cat /home/orion/nota.txt", "wait:1",
-        "reboot:bios,isodisk", "cmd:mount", "wait:1",
-        "reboot:uefi,isodisk", "cmd:mount", "cmd:ls /doom", "wait:1"
+        "reboot:bios,isodisk", "cmd:mount", "cmd:poweroff", "wait:4", "monlog:info status",
+        "reboot:uefi,isodisk", "cmd:mount", "cmd:ls /doom", "cmd:reboot", "wait:4", "monlog:info status"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Iso -Bios -NoBuild -LogPath "out\reg-f.log" `
         -Script $stepsF -CommandDelay 1.5 -BootTimeout 90 -NoPrint | Out-Null
@@ -764,6 +774,8 @@ if ($runAll -or $OnlyF) {
     Expect $f "su orion -c id\s*\nuid=1000\(orion\)" "live: su para orion"
     Expect $f "----- reboot uefi,cd -----[\s\S]*?cat: /home/orion/nota\.txt: Arquivo ou diretorio inexistente" "live: nada sobrevive ao reboot (raiz so em RAM)"
     Expect $f "ls /doom\s*\n[^\n]*freedoom1\.wad" "live: o wad do Doom esta no initramfs"
+    Expect $f '----- reboot bios,isodisk -----(?:(?!----- reboot)[\s\S])*?entrando no estado S5(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "poweroff pelo ACPI no BIOS"
+    Expect $f '----- reboot uefi,isodisk -----(?:(?!----- reboot)[\s\S])*?reiniciando pelo registrador de reset do FADT(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "reboot pelo ACPI no UEFI a partir do live"
     ExpectNot $f "PANIC|EXCECAO" "nenhum panico nos quatro boots da ISO"
 }
 

@@ -27,20 +27,20 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 10:13, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
-`v2.2` e `v2.3`), mais 8.7, 7.1 e 7.2. Versao 2.3.2. O boot pede usuario e
-senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram sozinhos como root.
-SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO hibrida e live (raiz
-em tmpfs a partir de um initramfs). A regressao roda no `out\orion.img` (GPT,
-raiz em ext2) nas sequencias A a E e na ISO na F, com 390 verificacoes; a
-sequencia A sobe o `tools/hostweb.py` no hospedeiro e usa `hostfwd` (5555 e
-8081).
+Estado (2026-10-18, 11:05, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2 e 5.1. Versao 2.4.0-a1. O boot pede
+usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram sozinhos
+como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO hibrida e
+live. ACPI pelo uACPI (`poweroff`, `reboot`, botao de energia, `_PRT`). A
+regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e
+na ISO na F, com 399 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.1 (uACPI 6.1.1 em `third_party/uacpi`; `poweroff`,
-`reboot`, botao de energia e rotas do `_PRT`), que abre a versao 2.4.0-a1.
-O tarball ja foi conferido: SHA-256
-`40f2e278b2080e69f4eaa3384404944874d430e50b72c1066cab2ba476e2b769`
-(https://github.com/uACPI/uACPI/archive/refs/tags/6.1.1.tar.gz).
+Proxima etapa: 6.1 (protocolo de janelas: apps em processos separados,
+desenhando num arquivo do `/run/wm` mapeado com `MAP_SHARED` e falando com o
+`wm` por socket Unix; o kernel precisa aceitar `MAP_SHARED` gravavel em
+arquivo do tmpfs). A Fase 6 e a versao 2.5; como a Fase 5 nao terminou, a 6.1
+segue a numeracao corrente (2.4.0-a2), como a 7.1 e a 7.2 seguiram a 2.3.
 
 ## Checklist
 
@@ -84,7 +84,7 @@ O tarball ja foi conferido: SHA-256
 | 4.2 | passwd, shadow, login | [x] | 04:46 | 05:28 | ver `git log` |
 | 4.3 | SMEP e SMAP | [x] | 05:28 | 05:55 | ver `git log` |
 | 4.4 | ASLR basico | [x] | 05:55 | 06:26 | ver `git log` (tag `v2.3`) |
-| 5.1 | uACPI | [ ] | | | |
+| 5.1 | uACPI | [x] | 10:14 | 11:05 | ver `git log` |
 | 5.2 | MSI/MSI-X | [ ] | | | |
 | 5.3 | virtio-blk e virtio-net | [ ] | | | |
 | 5.4 | NVMe | [ ] | | | |
@@ -1007,13 +1007,40 @@ initramfs antes dos discos: monta um tmpfs como raiz, desempacota
 usados. Criterio: a sequencia F entra pelo `login` nos quatro boots da ISO
 (CD e pendrive, BIOS e UEFI), com a raiz `initramfs / tmpfs`, e usa o
 sistema (`/bin` inteiro, `hello`, `lua`, `su`, gravar e ler na raiz); no boot
-seguinte o arquivo gravado nao existe mais. O `Makefile` (Linux) passou a
-gerar a ISO pelo mesmo caminho (`qrun.make_iso`) em vez do `xorriso`.
+seguinte o arquivo gravado nao existe mais. O `make iso` (Linux) gera a
+mesma ISO live pelo `qrun.make_iso`.
 Regressao 380 -> 390, estresse 5x verde. Versao 2.3.2.
 Problemas: nenhum; o desempacotamento e os quatro boots passaram na primeira
 rodada.
 Ficou de fora: compressao do initramfs, escolher no menu do Limine entre live
 e instalar (7.3), persistencia em pendrive.
+
+#### 5.1 uACPI - 10:14 a 11:05 - FEITO
+uACPI 6.1.1 em `third_party/uacpi`, compilado junto do kernel (sem warnings),
+com a interface `uacpi_kernel_*` em `drivers/acpi_os.c` (mapeamento pelo
+HHDM ou pela janela de MMIO, PCI, portas, mutex com prazo, eventos,
+spinlocks, SCI pela IRQ ISA e uma thread `acpi-work` para os trabalhos
+adiados). `drivers/power.c` carrega o namespace (uns 60 ms no QEMU), liga o
+botao de energia e le o `_PRT`; a e1000 passou a usar a GSI que o `_PRT` da
+(22 no q35) em vez da IRQ 11. `poweroff` (S5), `reboot` (registrador de
+reset do FADT) e `halt`, pela syscall `reboot` do Linux (so root; o usuario
+comum recebe `EPERM`), pelo programa `poweroff` (com `reboot` e `halt`) e
+pelo shell do kernel. Harness: passo `monlog:` grava a resposta do monitor
+do QEMU no log. Criterio: no QEMU, `reboot`, `poweroff` e o botao de energia
+(`system_powerdown`) deixam o QEMU em "paused (shutdown)" pelo caminho do
+ACPI, em UEFI (sequencia B) e em BIOS (sequencia F, a partir do live).
+Regressao 390 -> 399, estresse 5x verde. Versao 2.4.0-a1.
+Problemas: (1) o `_PIC(1)` precisa ser avaliado depois da carga do
+namespace e antes da inicializacao; na primeira ordem o uACPI recusou e o
+`_PRT` devolveu as rotas do PIC, e a e1000 continuou na IRQ 11. (2) Com
+`-no-reboot -no-shutdown` o QEMU pausa tanto no reset quanto no S5; o teste
+separa os dois pela linha do kernel e confere que o reboot nao caiu no
+controlador do teclado. (3) A regressao pegou uma corrida antiga da
+sequencia C: o comando seguinte ao `mkfs.ext2` era digitado enquanto ele
+ainda imprimia, e o eco caiu no meio da linha conferida; o passo agora
+espera o "pronto" antes do proximo comando.
+Ficou de fora: o teste no VirtualBox (nao ha VirtualBox aqui), GSIs acima de
+47, outros dispositivos pelo `_PRT` (a AHCI trabalha sem IRQ), suspensao (S3).
 
 ### Sessao 2 - 2026-10-17
 

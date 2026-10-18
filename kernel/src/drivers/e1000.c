@@ -1,3 +1,5 @@
+#include <lib/printf.h>
+#include <drivers/power.h>
 #include <drivers/e1000.h>
 #include <drivers/pci.h>
 #include <arch/x86_64/interrupts.h>
@@ -211,17 +213,28 @@ bool e1000_init(void)
     setup_rx();
     setup_tx();
 
-    uint8_t irq = (uint8_t)(pci_read32(dev->bus, dev->slot, dev->func, 0x3C) & 0xFF);
-    if (irq && irq < 16) {
+    uint32_t line = pci_read32(dev->bus, dev->slot, dev->func, 0x3C);
+    uint8_t irq = (uint8_t)(line & 0xFF);
+    uint8_t pin = (uint8_t)((line >> 8) & 0xFF);
+    char how[48];
+    struct pci_irq_route route;
+    if (dev->bus == 0 && power_pci_route(dev->slot, pin, &route) &&
+        irq_attach_gsi(route.gsi, route.active_low, route.level, e1000_irq, NULL)) {
+        ksnprintf(how, sizeof(how), "GSI %u pelo _PRT", route.gsi);
+        wr(REG_IMS, ICR_RXT0 | ICR_RXDMT0 | ICR_LSC);
+    } else if (irq && irq < 16) {
         interrupts_register((uint8_t)(VECTOR_IRQ_BASE + irq), e1000_irq, NULL);
         irq_enable(irq);
+        ksnprintf(how, sizeof(how), "IRQ %u", irq);
         wr(REG_IMS, ICR_RXT0 | ICR_RXDMT0 | ICR_LSC);
+    } else {
+        ksnprintf(how, sizeof(how), "sem IRQ");
     }
 
     present = true;
-    log_info("e1000", "%04x:%04x em %02x:%02x.%u, MAC %02x:%02x:%02x:%02x:%02x:%02x, IRQ %u, link %s",
+    log_info("e1000", "%04x:%04x em %02x:%02x.%u, MAC %02x:%02x:%02x:%02x:%02x:%02x, %s, link %s",
              dev->vendor, dev->device, dev->bus, dev->slot, dev->func,
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], irq,
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], how,
              e1000_link_up() ? "up" : "down");
     return true;
 }

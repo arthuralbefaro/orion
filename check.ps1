@@ -1,4 +1,4 @@
-$flags = "--target=x86_64-unknown-none-elf","-std=gnu11","-ffreestanding","-nostdlibinc","-fno-stack-protector","-mno-red-zone","-mcmodel=kernel","-mno-sse","-Wall","-Ikernel\include","-Ithird_party\limine","-fsyntax-only"
+$flags = "--target=x86_64-unknown-none-elf","-std=gnu11","-ffreestanding","-nostdlibinc","-fno-stack-protector","-mno-red-zone","-mcmodel=kernel","-mno-sse","-Wall","-Ikernel\include","-Ithird_party\limine","-Ithird_party\uacpi\include","-fsyntax-only"
 $errors = 0
 Get-ChildItem -Recurse kernel\src -File -Include *.c,*.S | ForEach-Object {
     $out = clang @flags $_.FullName 2>&1 | Select-String "error|warning"

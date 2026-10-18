@@ -1,3 +1,4 @@
+#include <drivers/power.h>
 #include <kernel/version.h>
 #include <kernel/log.h>
 #include <kernel/shell.h>
@@ -130,6 +131,7 @@ void kmain(void)
     smp_init();
     heap_start_reclaimer();
     pci_init();
+    power_init();
     ahci_init();
     e1000_init();
     net_init();

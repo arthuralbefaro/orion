@@ -19,6 +19,7 @@ $Kernel    = "orion"
 $SrcDir    = Join-Path $Root "kernel\src"
 $IncDir    = Join-Path $Root "kernel\include"
 $LimineDir = Join-Path $Root "third_party\limine"
+$UacpiDir  = Join-Path $Root "third_party\uacpi"
 $UserDir   = Join-Path $Root "user"
 $BuildDir  = Join-Path $Root "build"
 $OutDir    = Join-Path $Root "out"
@@ -51,7 +52,7 @@ $CFlags = @(
     "-fno-pic", "-fno-pie", "-ffunction-sections", "-fdata-sections",
     "-m64", "-march=x86-64", "-mabi=sysv", "-mno-80387", "-mno-mmx", "-mno-sse", "-mno-sse2",
     "-mno-red-zone", "-mcmodel=kernel",
-    "-I$IncDir", "-I$LimineDir"
+    "-I$IncDir", "-I$LimineDir", ("-I" + (Join-Path $UacpiDir "include"))
 )
 $LdFlags = @(
     "-m", "elf_x86_64", "-nostdlib", "-static", "-z", "max-page-size=0x1000",
@@ -59,7 +60,7 @@ $LdFlags = @(
 )
 
 $sources = Get-ChildItem -Path $SrcDir -Recurse -File | Where-Object { $_.Extension -in @(".c", ".S") }
-$headers = Get-ChildItem -Path $IncDir, $LimineDir -Recurse -File -Filter *.h
+$headers = Get-ChildItem -Path $IncDir, $LimineDir, (Join-Path $UacpiDir "include") -Recurse -File -Filter *.h
 $newestHeader = ($headers | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
 
 $objects = @()
@@ -85,6 +86,24 @@ foreach ($src in $sources) {
         Write-Host "  CC   $rel"
         & $Clang @CFlags -c $src.FullName -o $obj
         if ($LASTEXITCODE -ne 0) { throw "Erro compilando $rel" }
+        $compiled++
+    }
+    $objects += $obj
+}
+
+foreach ($src in Get-ChildItem (Join-Path $UacpiDir "source") -File -Filter *.c) {
+    $obj = Join-Path $BuildDir ("uacpi\" + $src.Name + ".o")
+    $objDir = Split-Path $obj -Parent
+    if (-not (Test-Path $objDir)) { New-Item -ItemType Directory -Path $objDir -Force | Out-Null }
+    $stale = -not (Test-Path $obj)
+    if (-not $stale) {
+        $objTime = (Get-Item $obj).LastWriteTime
+        $stale = ($objTime -lt $src.LastWriteTime) -or ($objTime -lt $newestHeader)
+    }
+    if ($stale) {
+        Write-Host "  CC   uacpi\$($src.Name)"
+        & $Clang @CFlags -c $src.FullName -o $obj
+        if ($LASTEXITCODE -ne 0) { throw "Erro compilando uacpi\$($src.Name)" }
         $compiled++
     }
     $objects += $obj

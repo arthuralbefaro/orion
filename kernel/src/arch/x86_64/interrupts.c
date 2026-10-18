@@ -104,6 +104,20 @@ void irq_enable(uint8_t irq)
     }
 }
 
+bool irq_attach_gsi(uint32_t gsi, bool active_low, bool level, interrupt_handler_t handler, void *ctx)
+{
+    if (irq_mode != IRQ_MODE_IOAPIC || gsi < VECTOR_IRQ_COUNT || gsi >= VECTOR_IRQ_COUNT + VECTOR_GSI_COUNT)
+        return false;
+    uint8_t vector = (uint8_t)(VECTOR_GSI_BASE + (gsi - VECTOR_IRQ_COUNT));
+    interrupts_register(vector, handler, ctx);
+    if (!ioapic_route_gsi(gsi, vector, lapic_id(), active_low, level)) {
+        interrupts_unregister(vector);
+        return false;
+    }
+    ioapic_set_mask_gsi(gsi, false);
+    return true;
+}
+
 void irq_disable(uint8_t irq)
 {
     if (irq_mode == IRQ_MODE_IOAPIC)

@@ -119,6 +119,7 @@ devolve `EFAULT` para ponteiro invalido (0.2).
 | 158 | arch_prctl | parcial | `ARCH_SET_FS` e `ARCH_GET_FS` |
 | 160 | setrlimit | completa | subir o maximo da `EPERM` |
 | 162 | sync | completa | |
+| 169 | reboot | completa | so root; `RESTART`, `POWER_OFF` e `HALT` pelo ACPI (uACPI); `CAD_ON`/`CAD_OFF` aceitos sem efeito (5.1) |
 | 165 | mount | parcial | tipos `vfat` (`fat`, `msdos`) e `ext2` com dispositivo de bloco, `devfs` (`devtmpfs`), `tmpfs` (opcoes `size=`, `nr_inodes=`, `mode=`, `uid=` e `gid=`) e `proc`; `MS_RDONLY`; `MS_NOSUID`, `MS_NODEV`, `MS_NOEXEC`, `MS_SYNCHRONOUS`, `MS_SILENT` e os de `atime` aceitos sem efeito; `MS_REMOUNT`, `MS_BIND` e `MS_MOVE` dao `EINVAL`; um ponto de montagem por diretorio |
 | 166 | umount2 | parcial | `EBUSY` com arquivo aberto, cwd ou montagem dentro; so a flag `UMOUNT_NOFOLLOW` (`MNT_FORCE`, `MNT_DETACH`, `MNT_EXPIRE` dao `EINVAL`) |
 | 186 | gettid | completa | tid de cada thread; a principal tem o pid |
