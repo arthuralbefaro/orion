@@ -63,10 +63,34 @@ def port_free(port):
         s.close()
 
 
+def tcp_probe(port):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(3)
+    try:
+        s.connect(("127.0.0.1", port))
+    except socket.timeout:
+        s.close()
+        return "sem resposta ao connect"
+    except OSError:
+        s.close()
+        return "recusada"
+    s.settimeout(4)
+    try:
+        data = s.recv(64)
+        return "fechada pelo Orion" if not data else f"aberta, {len(data)} byte(s)"
+    except socket.timeout:
+        return "aberta, sem dados"
+    except OSError:
+        return "fechada pelo Orion"
+    finally:
+        s.close()
+
+
 class Machine:
     def __init__(self, smp=4, memory=512, disk=False, extra_disks=(), serial_port=4444, monitor_port=4445,
-                 boot_timeout=60.0, image=False):
+                 boot_timeout=60.0, image=False, hostfwd=()):
         self.image = image
+        self.hostfwd = list(hostfwd)
         self.smp = smp
         self.memory = memory
         self.disk = disk
@@ -104,7 +128,7 @@ class Machine:
             "-serial", f"tcp:127.0.0.1:{self.serial_port},server,nowait",
             "-monitor", f"tcp:127.0.0.1:{self.monitor_port},server,nowait",
             "-no-reboot", "-no-shutdown",
-            "-netdev", "user,id=n0", "-device", "e1000,netdev=n0",
+            "-netdev", "user,id=n0" + "".join(",hostfwd=" + f for f in self.hostfwd), "-device", "e1000,netdev=n0",
             "-object", "filter-dump,id=d0,netdev=n0,file=out/net.pcap",
         ]
         if self.disk:
@@ -257,6 +281,11 @@ class Machine:
         elif kind == "shot":
             self.pump(0.4)
             self.screenshot(arg)
+        elif kind == "tcpprobe":
+            res = tcp_probe(int(arg))
+            print(f"  tcpprobe {arg}: {res}")
+            self.log += f"\n[tcpprobe] porta {arg}: {res}\n".encode()
+            self.pump(0.5)
         elif kind == "reboot":
             print("  reboot")
             self.pump(0.5)
@@ -312,7 +341,8 @@ def write_autostart(gui):
 
 
 def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_build=False, boot_timeout=60.0,
-        command_delay=1.0, settle=2.0, log_path="out/test-serial.log", kernel_shell=False, image=False):
+        command_delay=1.0, settle=2.0, log_path="out/test-serial.log", kernel_shell=False, image=False,
+        hostfwd=()):
     if not no_build:
         build(gui, image)
     elif gui:
@@ -322,7 +352,7 @@ def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_buil
     if image and not (OUT / "orion.img").exists():
         raise SystemExit("out/orion.img nao existe: rode o build com a imagem")
     m = Machine(smp=smp, memory=memory, disk=disk, extra_disks=extra_disks, boot_timeout=boot_timeout,
-                image=image)
+                image=image, hostfwd=hostfwd)
     code = 0
     try:
         m.start()

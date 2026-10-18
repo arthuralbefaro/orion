@@ -27,18 +27,17 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-17, 23:25, sessao 2): Fase 2 inteira (2.1 a 2.8) e 8.7
-commitadas; marco M2 fechado com a tag `v2.1`. Versao 2.1.0. A regressao
-inteira roda no `out\orion.img` (GPT, raiz em ext2), com 307 verificacoes.
+Estado (2026-10-17, 23:52, sessao 2): Fase 2 inteira (tag `v2.1`), 8.7 e
+3.1 commitadas. Versao 2.2.0-a1. A regressao inteira roda no `out\orion.img`
+(GPT, raiz em ext2), com 309 verificacoes.
 
-Proxima etapa: 3.1 (TCP parte 1: cabecalho, checksum, tabela de conexoes,
-`RST` para porta fechada). O plano poe o TCP em Rust; como dois `staticlib`
-Rust no mesmo kernel duplicariam `core`, alocador e `panic`, a ideia e um
-crate `staticlib` unico que junta `ext2` e `tcp` como `rlib` (o `kernel.rs`
-do ext2 muda para ele). A versao da Fase 3 comeca em 2.2.0-a1.
-
-A hora na linha de boot agora muda a cada build que recompila algo do kernel
-(o `main.c` e recompilado junto); antes so mudava com o proprio `main.c`.
+Proxima etapa: 3.2 (TCP parte 2: `connect`, handshake, envio e recebimento
+com janela fixa; criterio: cliente HTTP simples baixa uma pagina). O TCP mora
+em `kernel/rust/tcp` (rlib do workspace `kernel/rust`, ligado pelo
+`staticlib` `orion`); o C (`net.c`) chama `tcp_input` e envia o que o Rust
+devolver. Para testar sem depender da internet, o convidado pode falar com um
+servidor no hospedeiro pelo 10.0.2.2 (o SLIRP leva ao 127.0.0.1 do
+hospedeiro).
 
 ## Checklist
 
@@ -71,7 +70,7 @@ A hora na linha de boot agora muda a cada build que recompila algo do kernel
 | 2.6 | ext2 escrita, mkfs.ext2, fsck | [x] | 16:36 | 19:00 | ver `git log` (3 partes) |
 | 2.7 | Links simbolicos, chmod, chown, utime | [x] | 20:20 | 22:40 | `921c465` e ver `git log` (parte 2) |
 | 2.8 | GPT e raiz em ext2 | [x] | 22:42 | 23:25 | ver `git log` (tag `v2.1`) |
-| 3.1 | TCP parte 1 | [ ] | | | |
+| 3.1 | TCP parte 1 | [x] | 23:27 | 23:52 | ver `git log` |
 | 3.2 | TCP parte 2 | [ ] | | | |
 | 3.3 | TCP parte 3 | [ ] | | | |
 | 3.4 | TCP parte 4 | [ ] | | | |
@@ -721,6 +720,28 @@ da particao), ESP em FAT32 (a especificacao UEFI pede FAT32; o QEMU e o Limine
 aceitam FAT16, a 7.3/7.4 trocam se algum firmware recusar) e desligar limpo
 (sem `poweroff` ate a 5.1, o ext2 fica marcado como nao desmontado; o `sync`
 antes de fechar garante os dados).
+
+#### 3.1 TCP parte 1 - 23:27 a 23:52 - FEITO
+Primeiro Rust novo depois do ext2. `kernel/rust` virou um workspace: `ext2` e
+`tcp` sao `rlib` e `orion` e o unico `staticlib` (com o alocador e o `panic`
+do kernel, antes no ext2), porque dois `staticlib` duplicariam `core`,
+alocador e `panic`. `build.ps1` e `Makefile` ligam o `liborion_rust.a`. O
+crate `tcp` faz cabecalho (opcoes puladas), checksum com pseudo-cabecalho,
+tabela de conexoes (exata, depois quem escuta) e `RST` para porta fechada
+pela RFC 793; o C entrega so o que e para o IP da interface, chama o Rust sob
+um mutex e manda a resposta depois de solta-lo (o envio pode dormir no ARP).
+Contadores no comando `net`. Testes no crate: checksum contra uma
+implementacao simples em 200 tamanhos, campos e erros do `parse`, opcoes,
+casos do `RST` (com e sem `ACK`, FIN com dados e volta no 2^32, `RST` nunca
+responde), tabela, e 20 mil segmentos aleatorios sem `panic`. Criterio ("o
+hospedeiro ve a porta fechada") sem `nmap`: `test.ps1 -HostFwd` e o passo
+`tcpprobe:` (tambem no `qrun.py` e no `regress.py`) conectam do hospedeiro
+por `hostfwd`; conferido tambem no `out\net.pcap` que os `RST|ACK` saem com
+`seq 0`, `ack` certo e checksum valido. Regressao 307 -> 309 (sondagem da
+porta 7 e contadores do TCP), estresse 5x verde. Versao 2.2.0-a1.
+Problemas: o clippy novo recusou `chunks_exact(2)` (quer `as_chunks`), e
+`Box::try_new` ainda e instavel (a pilha TCP e alocada com
+`alloc::alloc::alloc` e conferida contra nulo).
 
 ### Sessao 2 - 2026-10-17
 

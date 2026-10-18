@@ -155,6 +155,7 @@ if ($runAll -or $OnlyA) {
         "cmd:dhcp", "wait:8",
         "cmd:ifconfig", "wait:2",
         "cmd:ping 10.0.2.2 3", "wait:10",
+        "tcpprobe:5555",
         "cmd:nslookup example.com", "wait:8",
         "cmd:nslookup example.com", "wait:8",
         "cmd:GREETING=ola-mundo", "wait:1",
@@ -184,7 +185,7 @@ if ($runAll -or $OnlyA) {
         "cmd:echo sobrevive-ao-reboot > /reboot.txt", "cmd:sync", "wait:3", "reboot:",
         "cmd:cat /reboot.txt", "cmd:rm /reboot.txt", "cmd:mount", "wait:1"
     )
-    & (Join-Path $Root "test.ps1") -Smp $Smp -Image @buildFlag -LogPath "out\reg-a.log" `
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image @buildFlag -HostFwd @("tcp:127.0.0.1:5555-:7") -LogPath "out\reg-a.log" `
         -Script $stepsA -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $a = Get-Log "out\reg-a.log"
     if ($Verbose) { Write-Output $a }
@@ -323,6 +324,8 @@ if ($runAll -or $OnlyA) {
     Expect $a "raiz montada: ext2 em sda2" "raiz em ext2 na particao GPT"
     Expect $a "particao EFI sda1 montada em /boot/efi" "particao EFI montada em /boot/efi"
     Expect $a "/dev/sda2 / ext2 rw 0 0" "raiz ext2 montada com escrita"
+    Expect $a "\[tcpprobe\] porta 5555: fechada pelo Orion" "TCP: o hospedeiro ve a porta 7 fechada (RST)"
+    Expect $a "tcp: [1-9]\d* segmento\(s\), 0 com erro, \d+ descartado\(s\), [1-9]\d* RST enviado\(s\)" "TCP: segmento recebido sem erro de checksum e RST enviado"
     Expect $a "(?s)----- reboot -----.*?cat /reboot\.txt\s*\n\s*sobrevive-ao-reboot" "arquivo gravado na raiz sobrevive a reboot"
     Expect $a "(?s)cat /proc/self/maps\s*\n\s*[0-9a-f]{8,}-[0-9a-f]{8,} r--p [0-9a-f]{8} 00:00 \d+\s+/bin/cat" "cat /proc/self/maps mostra as VMAs do proprio cat"
     Expect $a "[0-9a-f]+-7ffffffff000 rw-p 00000000 00:00 0\s+\[stack\]" "maps mostra a pilha"

@@ -3,8 +3,6 @@
 
 extern crate alloc;
 
-#[cfg(not(test))]
-mod kernel;
 #[cfg(test)]
 mod tests;
 

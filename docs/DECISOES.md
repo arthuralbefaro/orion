@@ -1917,3 +1917,43 @@ Uma linha por decisao, na ordem em que foram tomadas.
   imagem e regerada em todo build da regressao; `-NoBuild` reaproveita a
   imagem com o que as rodadas anteriores deixaram, como acontecia com o
   `out\esp`.
+
+## v2.2.0-a1 (etapa 3.1: TCP parte 1)
+
+- O TCP e Rust, como o plano pede depois do piloto do ext2. Para ter mais de
+  um crate Rust no kernel sem duplicar `core`, o alocador e o `panic` (cada
+  `staticlib` traz uma copia deles), `kernel/rust` virou um workspace do
+  Cargo: `ext2` e `tcp` sao `rlib`, e `orion` e o unico `staticlib`
+  (`liborion_rust.a`), que junta os dois e tem o `kernel.rs` (alocador ligado
+  ao `kmalloc` e `panic` do kernel), antes dentro do `ext2`. Perfis e
+  `Cargo.lock` ficam na raiz do workspace. O `build.ps1` so compila e liga o
+  crate cujo `Cargo.toml` diz `staticlib`; o `Makefile` aponta para o `orion`.
+  O `check.ps1` continua rodando clippy e `cargo test` em cada crate.
+- Desenho do TCP: o Rust nao faz E/S nem guarda tempo. O C chama
+  `tcp_input` com o segmento e os enderecos e recebe de volta o que mandar (por
+  enquanto, um `RST`); quem envia e o C, pelo `net_send_ip`. Isso deixa o
+  protocolo testavel no hospedeiro, sem QEMU, e vai continuar assim nas
+  partes 2 a 4 (conexoes, retransmissao com o relogio passado pelo C).
+- Parte 1: cabecalho (com opcoes puladas pelo `data offset`), checksum com o
+  pseudo-cabecalho IPv4, tabela de conexoes (busca exata pelos quatro campos e
+  depois por quem escuta na porta, com IP local curinga) e `RST` para porta
+  fechada pela RFC 793: segmento com `ACK` recebe `RST` com `SEQ = SEG.ACK`;
+  sem `ACK`, `RST|ACK` com `ACK = SEG.SEQ + SEG.LEN` (SYN e FIN contam 1); um
+  `RST` nunca e respondido. Segmento com checksum errado e contado e
+  descartado. Por enquanto a tabela nunca tem entradas (nao ha `listen` nem
+  `connect`), entao toda porta esta fechada.
+- C: `net.c` entrega o protocolo 6 ao TCP so quando o destino e o IP da
+  interface (nada de responder a broadcast). A chamada ao Rust fica sob um
+  mutex (`tcp`), e o envio da resposta e feito depois de solta-lo, porque o
+  `net_send_ip` pode dormir esperando o ARP. Contadores no comando `net` do
+  shell do kernel.
+- Verificacao: sem `nmap` no Windows, o criterio ("o hospedeiro ve a porta
+  fechada") e testado com o `hostfwd` do QEMU: `test.ps1 -HostFwd` e o passo
+  `tcpprobe:<porta>` (tambem no `qrun.py`) conectam do hospedeiro e anotam no
+  log se a conexao foi fechada, ficou sem resposta ou recebeu dados. O SLIRP
+  aceita a conexao do hospedeiro e manda o SYN ao Orion; o `RST` dele faz o
+  SLIRP fechar a conexao do hospedeiro, e o SLIRP so aceita o `RST` se o
+  checksum estiver certo. Conferido tambem no `out\net.pcap`: `RST|ACK` com
+  `seq 0`, `ack` = SEQ do SYN + 1 e checksum valido. A regressao confere
+  tambem os contadores do `net` (segmentos sem erro de checksum e `RST`
+  enviados).

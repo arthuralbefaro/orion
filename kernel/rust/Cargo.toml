@@ -1,0 +1,13 @@
+[workspace]
+members = ["ext2", "tcp", "orion"]
+resolver = "2"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = 2
+debug = true
+codegen-units = 1
+lto = false

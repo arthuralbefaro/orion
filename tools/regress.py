@@ -31,7 +31,7 @@ def parse_sequences():
         end = re.search(r"^\}\s*$", body, flags=re.M)
         if end:
             body = body[:end.start()]
-        seq = {"name": name, "steps": [], "expect": [], "memdelta": None, "shots": [], "disk": False, "gui": False, "image": False,
+        seq = {"name": name, "steps": [], "expect": [], "memdelta": None, "shots": [], "disk": False, "gui": False, "image": False, "hostfwd": [],
                "extra": [], "prep": [],
                "delay": 1.0, "boot": 60.0, "remove_disk": False, "log": f"out/reg-{name.lower()}.log",
                "stress": None}
@@ -47,6 +47,9 @@ def parse_sequences():
                 seq["extra"] = [ps_string(s) for s in STRING.finditer(ex.group(1))]
             seq["gui"] = "-Gui" in c
             seq["image"] = "-Image" in c
+            hf = re.search(r"-HostFwd\s+@\(([^)]*)\)", c)
+            if hf:
+                seq["hostfwd"] = [ps_string(s) for s in STRING.finditer(hf.group(1))]
             d = re.search(r"-CommandDelay\s+([\d.]+)", c)
             if d:
                 seq["delay"] = float(d.group(1))
@@ -183,7 +186,7 @@ def main():
         if seq["gui"] and a.no_build:
             no_build = True
         _, log = qrun.run(seq["steps"], smp=a.smp, disk=seq["disk"], extra_disks=seq["extra"], gui=seq["gui"],
-                          no_build=no_build, image=seq["image"],
+                          no_build=no_build, image=seq["image"], hostfwd=seq["hostfwd"],
                           boot_timeout=seq["boot"], command_delay=seq["delay"], log_path=seq["log"])
         built = built or not seq["gui"]
         if seq["gui"]:

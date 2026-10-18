@@ -4,6 +4,7 @@
 #include <drivers/e1000.h>
 
 #define IPPROTO_ICMP 1
+#define IPPROTO_TCP  6
 #define IPPROTO_UDP  17
 
 #define ETH_P_IP  0x0800
@@ -24,6 +25,7 @@ struct net_stats {
     uint64_t rx_ip;
     uint64_t rx_icmp;
     uint64_t rx_udp;
+    uint64_t rx_tcp;
     uint64_t rx_unknown;
     uint64_t tx_frames;
     uint64_t checksum_errors;

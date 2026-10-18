@@ -92,6 +92,7 @@ $RustDir = Join-Path $Root "kernel\rust"
 foreach ($crate in Get-ChildItem $RustDir -Directory -ErrorAction SilentlyContinue) {
     $manifest = Join-Path $crate.FullName "Cargo.toml"
     if (-not (Test-Path $manifest)) { continue }
+    if (-not (Select-String -Path $manifest -Pattern 'staticlib' -Quiet)) { continue }
     $Cargo = Find-Tool "cargo.exe" @("$env:USERPROFILE\.cargo\bin\cargo.exe")
     $rustTarget = Join-Path $BuildDir "rust"
     $prevFlags = $env:RUSTFLAGS

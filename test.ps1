@@ -17,7 +17,8 @@ param(
     [switch]$Disk,
     [string[]]$ExtraDisks = @(),
     [switch]$Gui,
-    [switch]$Image
+    [switch]$Image,
+    [string[]]$HostFwd = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -87,7 +88,9 @@ $qemuArgs = @(
     "-no-reboot", "-no-shutdown"
 )
 
-$qemuArgs += @("-netdev", "user,id=n0", "-device", "e1000,netdev=n0",
+$netdev = "user,id=n0"
+foreach ($fwd in $HostFwd) { $netdev += ",hostfwd=$fwd" }
+$qemuArgs += @("-netdev", $netdev, "-device", "e1000,netdev=n0",
                "-object", "filter-dump,id=d0,netdev=n0,file=out/net.pcap")
 if ($Disk) { $qemuArgs += @("-drive", "format=raw,file=out/disk.img") }
 foreach ($extra in $ExtraDisks) { $qemuArgs += @("-drive", "format=raw,file=$extra") }
@@ -308,6 +311,40 @@ try {
                 }
             }
             "shot" { Pump-Serial 0.4; Take-Screenshot $arg }
+            "tcpprobe" {
+                $port = [int]$arg
+                $tc = New-Object System.Net.Sockets.TcpClient
+                $res = "recusada"
+                try {
+                    $iar = $tc.BeginConnect("127.0.0.1", $port, $null, $null)
+                    if (-not $iar.AsyncWaitHandle.WaitOne(3000)) {
+                        $res = "sem resposta ao connect"
+                    } else {
+                        $tc.EndConnect($iar)
+                        $st = $tc.GetStream()
+                        $st.ReadTimeout = 4000
+                        $buf = New-Object byte[] 64
+                        try {
+                            $n = $st.Read($buf, 0, $buf.Length)
+                            $res = if ($n -eq 0) { "fechada pelo Orion" } else { "aberta, $n byte(s)" }
+                        } catch {
+                            $se = $_.Exception.InnerException
+                            if ($se -is [System.Net.Sockets.SocketException] -and $se.SocketErrorCode -eq [System.Net.Sockets.SocketError]::TimedOut) {
+                                $res = "aberta, sem dados"
+                            } else {
+                                $res = "fechada pelo Orion"
+                            }
+                        }
+                    }
+                } catch {
+                    $res = "recusada"
+                } finally {
+                    $tc.Close()
+                }
+                Write-Host "  tcpprobe $port`: $res" -ForegroundColor DarkGray
+                [void]$log.Append("`n[tcpprobe] porta $port`: $res`n")
+                Pump-Serial 0.5
+            }
             "reboot" {
                 Write-Host "  reboot" -ForegroundColor DarkGray
                 Pump-Serial 0.5

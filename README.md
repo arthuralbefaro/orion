@@ -6,7 +6,7 @@ copy-on-write, threads, futex, sinais no formato do Linux, cache de paginas
 unificado (read, exec e mmap de arquivo), VFS com vnodes e
 montagens (`mount`/`umount`; raiz em ext2 numa particao GPT, com a particao EFI
 em `/boot/efi`, FAT e ext2 em outros discos, devfs em `/dev`, tmpfs em `/tmp` e
-`/run`, procfs em `/proc`), rede IPv4 (UDP/ICMP) e um compositor de janelas em
+`/run`, procfs em `/proc`), rede IPv4 (UDP/ICMP, TCP comecando) e um compositor de janelas em
 espaco de usuario.
 
 Desde a versao 2.0 o espaco de usuario e Linux: os programas sao binarios
@@ -151,7 +151,12 @@ tira screenshots (PPM convertido para PNG) e salva o log da serial.
 Passos aceitos em `-Script`: `cmd:<linha>`, `raw:<texto>`, `key:<hex>` (um
 byte cru; `key:0B` e o Ctrl+K), `keys:<hex>`, `mon:<comando do monitor>`,
 `wait:<segundos>`, `until:<segundos>:<texto>` (espera o texto aparecer depois
-do ultimo comando) e `shot:<arquivo.ppm>`.
+do ultimo comando), `shot:<arquivo.ppm>`, `reboot:` (fecha o QEMU e sobe de novo
+com os mesmos discos, util com `-Image`) e `tcpprobe:<porta>` (conecta do
+hospedeiro numa porta de `-HostFwd` e anota no log se o Orion fechou, ficou
+calado ou mandou dados).
+
+    .\test.ps1 -NoBuild -HostFwd @("tcp:127.0.0.1:5555-:7") -Script @("tcpprobe:5555")
 
 `regressao.ps1` roda cinco sequencias e falha se algum marcador esperado sumir:
 A (texto, rede, musl, threads, dash, lua, tcc), B (grafica e Doom, com
@@ -183,8 +188,11 @@ O QEMU sobe uma e1000 com a rede de usuario (SLIRP): 10.0.2.15 para o Orion,
     ping 10.0.2.2 4           ICMP echo
     nslookup example.com      consulta A no DNS
 
-A pilha faz ARP, IPv4, ICMP e UDP; sockets `SOCK_DGRAM` e `SOCK_RAW`. TCP vem
-na fase 3. O `test.ps1` grava o trafego em `out\net.pcap`.
+A pilha faz ARP, IPv4, ICMP e UDP; sockets `SOCK_DGRAM` e `SOCK_RAW`. O TCP
+(em Rust, `kernel/rust/tcp`) esta comecando: por enquanto confere o segmento e
+responde `RST` a toda porta, porque ainda nao ha `connect` nem `listen`; o
+comando `net` do shell do kernel mostra os contadores. O `test.ps1` grava o
+trafego em `out\net.pcap`.
 
 ## Dispositivos em /dev
     /dev/fb0        framebuffer: ioctl FBIOGET_INFO / FBIOREDRAW, mmap
@@ -226,5 +234,6 @@ readdir (1000) e openpty (1001); memoria e processos vem do `/proc`.
 Kernel: clang/lld como cross-compiler (`--target=x86_64-unknown-none-elf`), sem
 libc, sem SSE/x87 no kernel, red zone desligada, modelo de codigo "kernel".
 Programas: `zig cc -target x86_64-linux-musl -static`.
-Rust no kernel (`kernel/rust/`): `cargo` com o alvo `x86_64-unknown-none`
+Rust no kernel (`kernel/rust/`, um workspace: `ext2` e `tcp` ligados por um
+unico `staticlib`, o `orion`): `cargo` com o alvo `x86_64-unknown-none`
 (`rustup target add x86_64-unknown-none`; o `setup.ps1` faz isso).

@@ -1,6 +1,8 @@
 #include <net/net.h>
+#include <net/tcp.h>
 #include <drivers/e1000.h>
 #include <kernel/log.h>
+#include <kernel/mutex.h>
 #include <kernel/sched.h>
 #include <kernel/spinlock.h>
 #include <kernel/syscall.h>
@@ -74,6 +76,8 @@ static struct waitqueue arp_wq = WAITQUEUE_INIT;
 static const uint8_t broadcast_mac[ETH_ALEN] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 static uint16_t ip_id;
 static bool running;
+static struct tcp_rs *tcp;
+static struct mutex tcp_lock = MUTEX_INIT("tcp");
 
 uint16_t net_checksum(const void *data, int len)
 {
@@ -299,6 +303,29 @@ static void handle_icmp(uint32_t src, const uint8_t *data, int len)
     net_deliver_icmp(src, data, len);
 }
 
+static void handle_tcp(uint32_t src, uint32_t dst, const uint8_t *seg, int len)
+{
+    stats.rx_tcp++;
+    if (!tcp || !netif.configured || dst != netif.ip)
+        return;
+    uint8_t reply[64];
+    mutex_lock(&tcp_lock);
+    int64_t n = tcp_input(tcp, src, dst, seg, (size_t)len, reply, sizeof(reply));
+    mutex_unlock(&tcp_lock);
+    if (n > 0)
+        net_send_ip(src, IPPROTO_TCP, reply, (int)n);
+}
+
+void net_tcp_stats(struct tcp_stats *out)
+{
+    memset(out, 0, sizeof(*out));
+    if (!tcp)
+        return;
+    mutex_lock(&tcp_lock);
+    tcp_stats(tcp, out);
+    mutex_unlock(&tcp_lock);
+}
+
 static void handle_ip(const uint8_t *data, int len)
 {
     if (len < (int)sizeof(struct ip_hdr))
@@ -324,6 +351,8 @@ static void handle_ip(const uint8_t *data, int len)
 
     if (ih->proto == IPPROTO_ICMP) {
         handle_icmp(src, payload, plen);
+    } else if (ih->proto == IPPROTO_TCP) {
+        handle_tcp(src, ntohl(ih->dst), payload, plen);
     } else if (ih->proto == IPPROTO_UDP) {
         if (plen < (int)sizeof(struct udp_hdr))
             return;
@@ -415,9 +444,12 @@ void net_init(void)
     if (!e1000_present())
         return;
     memcpy(netif.mac, e1000_mac(), ETH_ALEN);
+    tcp = tcp_stack_new();
+    if (!tcp)
+        log_warn("net", "sem memoria para a tabela do TCP");
     running = true;
     thread_create("netrx", rx_thread, NULL);
-    log_info("net", "pilha IPv4 no ar (ARP, ICMP, UDP); use 'dhcp' ou 'ifconfig'");
+    log_info("net", "pilha IPv4 no ar (ARP, ICMP, UDP, TCP); use 'dhcp' ou 'ifconfig'");
 }
 
 void net_arp_dump(void)
@@ -463,4 +495,8 @@ void net_dump(void)
     kprintf("  pilha: %lu quadro(s), %lu arp, %lu ip, %lu icmp, %lu udp, %lu ignorado(s)\n",
             stats.rx_frames, stats.rx_arp, stats.rx_ip, stats.rx_icmp, stats.rx_udp,
             stats.rx_unknown);
+    struct tcp_stats ts;
+    net_tcp_stats(&ts);
+    kprintf("  tcp: %lu segmento(s), %lu com erro, %lu descartado(s), %lu RST enviado(s), %lu conexao(oes)\n",
+            ts.rx_segments, ts.rx_bad, ts.rx_dropped, ts.tx_resets, ts.connections);
 }
