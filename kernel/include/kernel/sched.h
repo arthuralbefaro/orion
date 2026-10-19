@@ -67,6 +67,7 @@ struct thread {
 
     struct thread *next;
     struct thread *all_next;
+    uint32_t spin_count;
 };
 
 void sched_init(void);

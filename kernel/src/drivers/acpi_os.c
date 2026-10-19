@@ -33,10 +33,7 @@ struct pci_handle {
     uint8_t func;
 };
 
-struct io_handle {
-    uint16_t base;
-    uint16_t len;
-};
+#define IO_HANDLE_TAG (1ull << 62)
 
 struct acpi_event {
     spinlock_t lock;
@@ -216,26 +213,25 @@ uacpi_status uacpi_kernel_io_map(uacpi_io_addr base, uacpi_size len, uacpi_handl
 {
     if (base > 0xFFFF || len > 0x10000 - base)
         return UACPI_STATUS_INVALID_ARGUMENT;
-    struct io_handle *h = kmalloc(sizeof(*h));
-    if (!h)
-        return UACPI_STATUS_OUT_OF_MEMORY;
-    h->base = (uint16_t)base;
-    h->len = (uint16_t)len;
-    *out_handle = h;
+    *out_handle = (uacpi_handle)(uintptr_t)(IO_HANDLE_TAG | ((uint64_t)len << 16) | base);
     return UACPI_STATUS_OK;
 }
 
 void uacpi_kernel_io_unmap(uacpi_handle handle)
 {
-    kfree(handle);
+    (void)handle;
 }
 
 static bool io_ok(uacpi_handle handle, uacpi_size offset, uacpi_size width, uint16_t *port)
 {
-    struct io_handle *h = handle;
-    if (offset + width > h->len)
+    uint64_t v = (uint64_t)(uintptr_t)handle;
+    if (!(v & IO_HANDLE_TAG))
         return false;
-    *port = (uint16_t)(h->base + offset);
+    uint64_t base = v & 0xFFFF;
+    uint64_t len = (v >> 16) & 0x1FFFF;
+    if (offset + width > len)
+        return false;
+    *port = (uint16_t)(base + offset);
     return true;
 }
 

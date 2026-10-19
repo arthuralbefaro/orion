@@ -12,6 +12,8 @@
 #include <kernel/spinlock.h>
 #include <kernel/time.h>
 #include <kernel/wait.h>
+#include <kernel/irqctx.h>
+#include <kernel/syscall.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
 #include <mm/memory.h>
@@ -201,8 +203,15 @@ void usb_disk_add(uint32_t index, uint64_t blocks, const uint8_t *name, size_t l
     blockdev_scan_partitions(dev);
 }
 
+bool usb_test_allowed(void)
+{
+    return irqctx_strict();
+}
+
 static int run_test(const char *name, int32_t (*test)(uint32_t))
 {
+    if (!irqctx_strict())
+        return -EPERM;
     for (uint32_t i = 0; i < USB_DISKS; i++) {
         struct usb_disk *d = &disks[i];
         if (!d->used || strcmp(d->name, name) != 0)
@@ -212,7 +221,7 @@ static int run_test(const char *name, int32_t (*test)(uint32_t))
         mutex_unlock(&d->lock);
         return r;
     }
-    return -1;
+    return -ENODEV;
 }
 
 int usb_test_stall(const char *name)

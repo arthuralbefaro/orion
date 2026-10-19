@@ -23,6 +23,7 @@ extern "C" {
     fn usb_wait_ms(ms: u64);
     fn usb_wake();
     fn usb_yield();
+    fn usb_test_allowed() -> bool;
 }
 
 const RING_TRBS: usize = 256;
@@ -34,6 +35,9 @@ const WAITERS: usize = 16;
 const COMMAND_MS: u64 = 2000;
 const CONTROL_MS: u64 = 2000;
 const BULK_MS: u64 = 5000;
+const EPERM: i32 = 1;
+const EIO: i32 = 5;
+const ENODEV: i32 = 19;
 
 const TRB_NORMAL: u32 = 1;
 const TRB_SETUP: u32 = 2;
@@ -1495,7 +1499,17 @@ pub unsafe extern "C" fn xhci_msc_write(disk: u32, lba: u64, count: u32, buf: *c
 
 #[no_mangle]
 pub extern "C" fn xhci_msc_test_stall(disk: u32) -> i32 {
-    let Some(dev) = with_controller(|hc| hc.and_then(|hc| hc.disks.get(disk as usize).copied())) else { return -1 };
+    if !unsafe { usb_test_allowed() } {
+        return -EPERM;
+    }
+    let Some(dev) = with_controller(|hc| hc.and_then(|hc| hc.disks.get(disk as usize).copied())) else {
+        return -ENODEV;
+    };
+    let mut before = [0u8; 512];
+    if !msc_rw(disk as usize, 0, 1, before.as_mut_ptr(), false) {
+        log("teste: a leitura do setor 0 antes do STALL falhou");
+        return -EIO;
+    }
     let cmd = with_controller(|hc| {
         let st = hc?.devices.get_mut(dev)?.msc.as_mut()?;
         let mut bad = msc::cbw(0xBAD0_0001, 0, false, &msc::test_unit_ready());
@@ -1503,23 +1517,30 @@ pub extern "C" fn xhci_msc_test_stall(disk: u32) -> i32 {
         st.cmd.put(0, &bad);
         Some(st.cmd.phys)
     });
-    let Some(cmd) = cmd else { return -1 };
+    let Some(cmd) = cmd else { return -ENODEV };
     let first = bulk(dev, false, cmd, msc::CBW_LEN);
     let mut msg = String::new();
     let _ = write!(msg, "teste: CBW com assinatura errada respondeu {:?}", first);
     log(&msg);
     if !with_controller(|hc| hc.map(|hc| hc.bot_recover(dev)).unwrap_or(false)) {
-        return -2;
+        return -EIO;
     }
     let mut sector = [0u8; 512];
+    with_controller(|hc| {
+        if let Some(st) = hc.and_then(|hc| hc.devices.get(dev)).and_then(|d| d.msc.as_ref()) {
+            st.data.clear(MSC_PAGES * 4096);
+        }
+    });
     let unit = scsi(dev, &msc::test_unit_ready(), false, 0).is_ok();
     let read = msc_rw(disk as usize, 0, 1, sector.as_mut_ptr(), false);
+    let same = read && sector == before;
     let mut msg = String::new();
     let _ = write!(
         msg,
-        "teste: depois da recuperacao TEST UNIT READY {} e READ(10) do setor 0 {} (assinatura {:02x}{:02x})",
+        "teste: depois da recuperacao TEST UNIT READY {} e READ(10) do setor 0 {}; os 512 bytes {} aos lidos antes do STALL (assinatura {:02x}{:02x})",
         ok(unit),
         ok(read),
+        if same { "iguais" } else { "diferentes" },
         sector[510],
         sector[511]
     );
@@ -1528,10 +1549,10 @@ pub extern "C" fn xhci_msc_test_stall(disk: u32) -> i32 {
     let mut msg = String::new();
     let _ = write!(msg, "teste: READ(10) fora do disco respondeu {:?}", outside);
     log(&msg);
-    if matches!(first, Err(Fail::Stall)) && unit && read && outside == Err(Fail::Check) {
+    if matches!(first, Err(Fail::Stall)) && unit && same && outside == Err(Fail::Check) {
         0
     } else {
-        -3
+        -EIO
     }
 }
 
@@ -1546,6 +1567,9 @@ pub extern "C" fn xhci_msc_release(disk: u32) {
 
 #[no_mangle]
 pub extern "C" fn xhci_msc_test_timeout(disk: u32) -> i32 {
+    if !unsafe { usb_test_allowed() } {
+        return -EPERM;
+    }
     let armed = with_controller(|hc| {
         let hc = hc?;
         let dev = *hc.disks.get(disk as usize)?;
@@ -1554,7 +1578,7 @@ pub extern "C" fn xhci_msc_test_timeout(disk: u32) -> i32 {
         Some(())
     });
     if armed.is_none() {
-        return -1;
+        return -ENODEV;
     }
     let mut sector = [0u8; 512];
     let t0 = now_us();
@@ -1576,6 +1600,6 @@ pub extern "C" fn xhci_msc_test_timeout(disk: u32) -> i32 {
     if !first && !second && waited + 500 >= BULK_MS && after < 100 {
         0
     } else {
-        -3
+        -EIO
     }
 }

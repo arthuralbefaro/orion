@@ -20,6 +20,8 @@
 #include <kernel/smp.h>
 #include <drivers/pci.h>
 #include <drivers/usb.h>
+#include <kernel/irqctx.h>
+#include <kernel/syscall.h>
 #include <fs/block.h>
 #include <fs/vfs.h>
 #include <arch/x86_64/percpu.h>
@@ -551,7 +553,9 @@ static void cmd_usbstall(const char *args)
     int r = usb_test_stall(args);
     if (r == 0)
         kprintf("usbstall: %s travou com STALL, foi recuperado, voltou a ler e o sense chegou\n", args);
-    else if (r == -1)
+    else if (r == -EPERM)
+        kprintf("usbstall: EPERM, so no modo de teste (QEMU com fw_cfg opt/orion/strict)\n");
+    else if (r == -ENODEV)
         kprintf("usbstall: %s nao e um pendrive USB\n", args);
     else
         kprintf("usbstall: %s nao se recuperou (codigo %d)\n", args, r);
@@ -568,10 +572,24 @@ static void cmd_usbtimeout(const char *args)
     int r = usb_test_timeout(args);
     if (r == 0)
         kprintf("usbtimeout: %s estourou o prazo, foi cancelado e agora responde EIO\n", args);
-    else if (r == -1)
+    else if (r == -EPERM)
+        kprintf("usbtimeout: EPERM, so no modo de teste (QEMU com fw_cfg opt/orion/strict)\n");
+    else if (r == -ENODEV)
         kprintf("usbtimeout: %s nao e um pendrive USB\n", args);
     else
         kprintf("usbtimeout: %s nao se comportou como esperado (codigo %d)\n", args, r);
+}
+
+static void cmd_irqtest(const char *args)
+{
+    (void)args;
+    int r = irqctx_selftest();
+    if (r == 0)
+        kprintf("irqtest: contexto de interrupcao ok\n");
+    else if (r == -EPERM)
+        kprintf("irqtest: EPERM, so no modo de teste (QEMU com fw_cfg opt/orion/strict)\n");
+    else
+        kprintf("irqtest: falhou (codigo %d)\n", r);
 }
 
 static void cmd_arp(const char *args)
@@ -650,6 +668,7 @@ static const struct command commands[] = {
     { "tcploss", "descarta 1 em N segmentos TCP (teste)", cmd_tcploss },
     { "usbstall", "forca um STALL no pendrive e recupera (teste)", cmd_usbstall },
     { "usbtimeout", "cala a campainha de uma transferencia do pendrive (teste)", cmd_usbtimeout },
+    { "irqtest", "testa o aviso de kmalloc e espera dentro de interrupcao", cmd_irqtest },
     { "arp",    "cache ARP",                            cmd_arp },
     { "ifconfig", "configura a rede a mao",             cmd_ifconfig },
     { "lsblk",  "discos e particoes",                   cmd_lsblk },

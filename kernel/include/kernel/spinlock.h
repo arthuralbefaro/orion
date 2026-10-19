@@ -16,6 +16,7 @@ typedef struct {
 
 void spin_lock_slow(spinlock_t *l);
 void spin_set_owner(spinlock_t *l, uint64_t pc);
+void spin_owner_release(void *thread);
 bool spin_held(spinlock_t *l);
 void spin_set_timeout(uint64_t tsc_hz);
 
@@ -44,8 +45,11 @@ static inline __attribute__((always_inline)) void spin_lock(spinlock_t *l)
 
 static inline void spin_unlock(spinlock_t *l)
 {
+    void *owner = l->owner_thread;
     l->owner_cpu = 0;
     l->owner_thread = NULL;
+    if (owner)
+        spin_owner_release(owner);
     __sync_lock_release(&l->locked);
 }
 

@@ -16,6 +16,7 @@
 #include <mm/vma.h>
 #include <kernel/smp.h>
 #include <arch/x86_64/percpu.h>
+#include <kernel/irqctx.h>
 #include <arch/x86_64/protect.h>
 
 struct idt_entry {
@@ -363,17 +364,36 @@ static void handle_exception(struct interrupt_frame *f)
     halt_forever();
 }
 
+static void after_interrupt(struct percpu *pc)
+{
+    if (pc && pc->irq_depth)
+        return;
+    irqctx_flush_nmi();
+    sched_check_preempt();
+}
+
 void isr_dispatch(struct interrupt_frame *frame)
 {
     uint8_t vec = (uint8_t)frame->int_no;
     counters[vec]++;
-    if (percpu_ready())
-        cpu_counters[percpu_cpu_id() % MAX_CPUS][vec]++;
+    struct percpu *pc = percpu_ready() ? percpu_get() : NULL;
+    if (pc)
+        cpu_counters[pc->cpu_id % MAX_CPUS][vec]++;
+    uint8_t saved_vec = 0;
+    bool saved_nmi = false;
 
     if (vec < VECTOR_EXCEPTIONS_END) {
+        if (vec == EXC_NMI) {
+            if (pc)
+                irqctx_enter(pc, vec, true, &saved_vec, &saved_nmi);
+            if (!irqctx_nmi_probe())
+                handle_exception(frame);
+            if (pc)
+                irqctx_leave(pc, saved_vec, saved_nmi);
+            return;
+        }
         handle_exception(frame);
-        if (vec != EXC_NMI)
-            signal_check(frame);
+        signal_check(frame);
         return;
     }
 
@@ -383,6 +403,8 @@ void isr_dispatch(struct interrupt_frame *frame)
         if (irq_mode == IRQ_MODE_PIC && pic_is_spurious(irq))
             return;
 
+        if (pc)
+            irqctx_enter(pc, vec, false, &saved_vec, &saved_nmi);
         if (handlers[vec].fn)
             handlers[vec].fn(frame, handlers[vec].ctx);
         else
@@ -392,7 +414,9 @@ void isr_dispatch(struct interrupt_frame *frame)
             lapic_eoi();
         else
             pic_send_eoi(irq);
-        sched_check_preempt();
+        if (pc)
+            irqctx_leave(pc, saved_vec, saved_nmi);
+        after_interrupt(pc);
         signal_check(frame);
         return;
     }
@@ -400,13 +424,17 @@ void isr_dispatch(struct interrupt_frame *frame)
     if (vec == VECTOR_SPURIOUS)
         return;
 
+    if (pc)
+        irqctx_enter(pc, vec, false, &saved_vec, &saved_nmi);
     if (handlers[vec].fn)
         handlers[vec].fn(frame, handlers[vec].ctx);
     else
         log_warn("int", "vetor %u sem handler", vec);
 
     lapic_eoi();
-    sched_check_preempt();
+    if (pc)
+        irqctx_leave(pc, saved_vec, saved_nmi);
+    after_interrupt(pc);
     signal_check(frame);
 }
 

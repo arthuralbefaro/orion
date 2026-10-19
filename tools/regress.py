@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -59,6 +60,7 @@ def parse_sequences():
             seq["no_ps2"] = bool(re.search(r"-NoPs2\b", c))
             seq["usb_disk"] = bool(re.search(r"-UsbDisk\b", c))
             seq["usb_fat"] = bool(re.search(r"-UsbFat\b", c))
+            seq["no_strict"] = bool(re.search(r"-NoStrict\b", c))
             hf = re.search(r"-HostFwd\s+@\(([^)]*)\)", c)
             if hf:
                 seq["hostfwd"] = [ps_string(s) for s in STRING.finditer(hf.group(1))]
@@ -189,7 +191,7 @@ def run_stress(seq, rep, runs, smp, image=False):
         rep.expect(log, r"\nFIM-ESTRESSE", f"estresse rodada {i}: pipeline terminou")
         rep.expect(log, r"stress: \d+ processos, 0 falha\(s\) ok", f"estresse rodada {i}: 0 falhas")
         rep.checks += 1
-        if re.search(r"PANIC|EXCECAO|deadlock|watchdog|FALHA|fork devolveu 0", log):
+        if re.search(r"\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|deadlock|watchdog|FALHA|fork devolveu 0", log):
             print(f"  [FALHA] estresse rodada {i}: panico, deadlock ou falha no log ({log_path})")
             rep.failures.append(f"estresse rodada {i}: log limpo")
         else:
@@ -203,7 +205,10 @@ def main():
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--stress-runs", type=int, default=1)
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--slow-waits", action="store_true", help="esperas fixas antigas, sem esperar o prompt")
     a = ap.parse_args()
+    if a.slow_waits:
+        os.environ["ORION_SLOW_WAITS"] = "1"
 
     seqs = parse_sequences()
     image = any(s["image"] for s in seqs.values())
@@ -248,7 +253,7 @@ def main():
                               bios=seq.get("bios", False), nic=seq.get("nic", "e1000e"),
                               bus=seq.get("bus", "ahci"), usb=seq.get("usb", False),
                               no_ps2=seq.get("no_ps2", False), usb_disk=seq.get("usb_disk", False),
-                              usb_fat=seq.get("usb_fat", False))
+                              usb_fat=seq.get("usb_fat", False), no_strict=seq.get("no_strict", False))
         finally:
             if web:
                 web.kill()

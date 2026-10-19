@@ -27,6 +27,13 @@ struct percpu {
     uint64_t user_ticks;
     uint64_t sys_ticks;
     uint64_t idle_ticks;
+    uint32_t irq_depth;
+    uint32_t irq_depth_max;
+    uint8_t irq_vector;
+    bool in_nmi;
+    const char *nmi_bug_what;
+    uint64_t nmi_bug_caller;
+    uint64_t preempt_deferred;
 };
 
 void percpu_init_bsp(uint32_t lapic_id);

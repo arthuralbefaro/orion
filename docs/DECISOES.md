@@ -3204,3 +3204,155 @@ O que mudou na 5.7 e por que:
   em hardware real (7.4) depende de teclado, e teclado atras de hub e comum;
   hub USB 3 (o lado SuperSpeed) fica para depois. Ate la, o roteiro do teste
   em hardware real manda ligar teclado e pendrive direto numa porta do PC.
+
+## Harness: regressao mais rapida (2026-10-19, junto da v2.4.0-a25)
+
+- O `cmd:` esperava sempre o `-CommandDelay` (1,5 s) e o `wait:N` sempre N
+  segundos, mesmo com o comando ja terminado. Agora o `cmd:` segue assim que
+  o prompt volta (o `-CommandDelay` vira teto), e o `wait:N` logo depois de um
+  comando termina quando o prompt volta e a saida fica 0,4 s quieta (N vira
+  teto). Comando com `&` (segundo plano) mantem a espera fixa, porque ali o
+  prompt volta antes do trabalho acabar.
+- O que conta como prompt: so o que aparece depois da quebra de linha que
+  fecha o eco do comando (nunca o prompt antigo nem a linha "orion> comando")
+  e so se a ultima linha recebida for inteira um prompt (`<dir> $ `,
+  `<dir> # ` ou `orion> `), sem nada depois. Um `$ ` no meio da saida nao
+  dispara.
+- Caso conhecido em que o prompt engana: programa que abre outro shell (o
+  `ptytest` mostra o prompt do shell de dentro do pty). Ali a espera vira
+  `until:` com o texto do fim do programa.
+- `-SlowWaits` (test.ps1, regressao.ps1) e `--slow-waits` (qrun.py,
+  regress.py), ou a variavel `ORION_SLOW_WAITS`, voltam as esperas fixas
+  antigas. Verificacao que comecar a falhar de vez em quando: o primeiro passo
+  e rodar a sequencia com `-SlowWaits`; se passar, a culpa e da espera.
+- Cada `test.ps1` imprime quanto tempo foi para o boot e para cada tipo de
+  passo, e a regressao imprime o tempo total. (Detalhe do PowerShell: numa
+  tabela com uma chave chamada `keys`, `$tabela.Keys` devolve o valor dessa
+  chave; o resumo usa `GetEnumerator()`.)
+- Juntar boots ficou de fora: cada sequencia sobe uma maquina diferente
+  (rede com hostfwd, grafico, discos extras, ISO, virtio, NVMe, USB sem PS/2),
+  e junta-las mudaria os nomes dos discos e exigiria reescrever verificacoes.
+
+## v2.4.0-a25 (etapa 5.7 parte 4: contexto de interrupcao e STALL com dados)
+
+- Contador de interrupcao por CPU (`irq_depth` no `percpu`). Toda entrada
+  passa pelo `isr_dispatch`: IRQ legada, timer do LAPIC, IPIs, MSI e MSI-X e
+  NMI sobem o contador em volta do handler; as outras excecoes nao sobem, mas
+  herdam o valor, entao um page fault dentro de um handler conta como
+  interrupcao, e o de um programa ou de uma syscall nao. O contador desce
+  antes do `sched_check_preempt`, e a troca de thread so acontece com o
+  contador em 0 (interrupcao mais de fora). O despachante do USB chamado pela
+  thread `usbd` roda com o contador em 0 e nao conta.
+- Aviso: `MIGHT_SLEEP` em `kmalloc`, `kzalloc`, `kcalloc`, `krealloc`,
+  `mutex_lock`, `wait_sleep*`, `thread_yield`, `thread_sleep_ms` e
+  `thread_block`. So o contador decide: interrupcoes desligadas com trava de
+  spin presa nao avisam. `mutex_trylock`, `kfree` e o resto que nao dorme nao
+  avisam. A mensagem "BUG: <funcao> dentro de interrupcao, chamado de
+  <endereco> (vetor, CPU)" sai uma vez por ponto de chamada: uma tabela fixa
+  de 64 enderecos preenchida com `cmpxchg`, sem trava e sem alocar memoria.
+  O `kmalloc` passou a ter um miolo interno (`alloc_raw`) para o endereco
+  apontar quem chamou o `kzalloc` ou o `krealloc`, e nao a funcao do meio.
+- O log ja usava trava de spin com interrupcoes desligadas e tolerava
+  reentrada na mesma CPU, entao pode ser chamado de IRQ. No NMI nada vai
+  direto ao log: o aviso fica num campo por CPU (sem trava) e sai no fim do
+  proximo `isr_dispatch` daquela CPU com o contador em 0.
+- Na regressao, panico: o `test.ps1` e o `qrun.py` passam
+  `-fw_cfg name=opt/orion/strict`; o kernel so le o fw_cfg quando o CPUID diz
+  que ha hypervisor e a assinatura "QEMU" confere. Num PC de verdade fica so o
+  aviso no log.
+- `irqtest` (shell do kernel) prova tudo isso com um vetor proprio mandado
+  para a mesma CPU: kmalloc duas vezes do mesmo ponto (um aviso), trylock (nenhum),
+  kmalloc com trava de spin fora de IRQ (nenhum), timer aninhado (o handler
+  de teste faz o EOI e reabre as interrupcoes, porque o LAPIC segura o timer,
+  vetor 0x40, enquanto um vetor de prioridade maior esta em servico; o tick
+  aninhado chega com profundidade 2 e a thread no fim e a mesma) e um NMI que
+  so anota. No Orion os handlers rodam com interrupcoes desligadas, entao
+  aninhamento so acontece se um handler reabrir as interrupcoes.
+- `usbstall`: le o setor 0 antes do STALL, recupera, zera o buffer de DMA e
+  le de novo; os 512 bytes tem de ser iguais. Roda no pendrive feito no
+  hospedeiro (setor 0 com conteudo conhecido e assinatura 55aa), o que prova
+  que a sequencia do endpoint foi zerada dos dois lados.
+- Ganchos de teste que quebram o estado do hardware de proposito (`usbstall`,
+  que manda um CBW invalido e provoca STALL; `usbtimeout`, que cala a
+  campainha e deixa o pendrive morto; `irqtest`, que reabre interrupcoes
+  dentro de um handler e manda NMI para a propria CPU) so funcionam no modo
+  estrito, ou seja, no QEMU de teste com `-fw_cfg name=opt/orion/strict`.
+  Fora dele respondem EPERM com uma mensagem, e a funcao de baixo (no C e no
+  Rust) recusa tambem, nao so o comando do shell. Decidido pelo dono em
+  2026-10-19: num PC de verdade um comando de teste digitado por engano nao
+  pode derrubar o pendrive nem mexer no controlador de interrupcoes. O
+  `tcploss` fica de fora da regra: descarta segmentos no software e volta ao
+  normal com `tcploss 0`, sem mexer em hardware.
+- Primeiro achado do aviso, na regressao: o botao de energia (SCI do ACPI,
+  IRQ 9) fazia `kmalloc` dentro da interrupcao, porque o uACPI mapeia a faixa
+  de I/O dos registradores de evento a cada leitura (`uacpi_kernel_io_map`) e
+  o mapa alocava um handle. O handle agora carrega base e tamanho no proprio
+  valor (bit 62 de marca, base nos 16 bits de baixo, tamanho nos 17
+  seguintes), sem alocar, e o `io_unmap` nao faz nada. De quebra, uma faixa
+  de 64 KiB a partir da porta 0 deixou de estourar o tamanho de 16 bits.
+- A sequencia F (os quatro boots da ISO, que e o que vai para o PC de
+  verdade) roda sem o fw_cfg (`-NoStrict`): confere que o modo estrito fica
+  desligado, que `irqtest`, `usbstall` e `usbtimeout` respondem EPERM e que
+  nenhum aviso de contexto de interrupcao aparece nos boots.
+- Segundo achado, no estresse (fork em massa): avisos falsos em contexto de
+  thread, com "vetor 0". O `in_interrupt()` lia o contador em duas etapas
+  (endereco da CPU pelo GS, depois o campo) com a thread preemptivel; se ela
+  migrasse entre as duas, lia o contador de outra CPU, que podia estar no
+  meio de uma interrupcao. Agora a leitura e o relatorio pegam CPU, vetor e
+  profundidade com interrupcoes desligadas, e a mensagem traz a
+  profundidade. Ficaram duas guardas baratas: troca de thread
+  (`schedule_locked`) com o contador acima de zero tambem avisa, e o contador
+  abaixo de zero e panico.
+- Auditoria do mesmo padrao (ponteiro da CPU atual e depois um campo, com a
+  thread preemptivel), pedida pelo dono em 2026-10-19. O per-CPU fica no GS
+  (`percpu.self` e os campos lidos com `mov %gs:offset`). Seguros, e por que:
+  - `thread_current()` e `percpu_cpu_id()`: uma instrucao so relativa ao GS;
+    o valor e o da CPU que executa naquele instante, sem janela para migrar.
+  - `percpu_get()` so aparece com interrupcoes desligadas: `isr_dispatch`
+    (porta de interrupcao), `sched_tick` e `smp_watchdog_tick` (timer),
+    `sched_make_ready`, `thread_unblock`, `thread_block`,
+    `sched_block_switch`, `schedule_locked` e `sched_post_switch` (todos com
+    `runq_lock`, pego com interrupcoes desligadas), `sched_check_preempt` (so
+    chamado do fim da interrupcao) e `sched_init`/`sched_init_ap` (boot da
+    CPU, antes de haver troca de thread).
+  - `gdt_set_kernel_stack` (chamado na troca de thread) e `gdt_in_ist` (no
+    tratamento de excecao): interrupcoes desligadas.
+  - `spin_set_owner`/`spin_held`: o dono e gravado com a trava ja pega; as
+    travas de spin sao pegas com interrupcoes desligadas, menos a `tlb_lock`
+    do `smp_tlb_shootdown_sync`, que fica com interrupcoes ligadas para a
+    propria CPU responder a IPI. Ali a thread pode migrar com a trava na mao e
+    o `owner_cpu` fica velho, mas ele so serve para o relatorio de deadlock e
+    ninguem faz `ASSERT_HELD` nela.
+  - `smp_report_cpu` compara a CPU alvo com a atual no caminho de deadlock,
+    que termina em panico; uma migracao ali so muda qual CPU recebe o NMI de
+    relatorio.
+  - `busy_cpu[]` do comando `preempt` do shell: so mostra em que CPU a thread
+    de teste estava, e a amostra pode ser de um instante antes da migracao.
+  Com risco, so o proprio `in_interrupt()`, que lia o ponteiro e depois o
+  campo; agora ele le `irq_depth` com um `mov %gs:offset` so, sem desligar
+  interrupcoes (o relatorio, que e raro, continua pegando CPU, vetor e
+  profundidade com interrupcoes desligadas).
+- Preempcao em modo kernel e travas de spin (comeco da 8.2, 2026-10-19). O
+  `sched_check_preempt` roda no fim de toda interrupcao, venha ela do usuario
+  ou do kernel, entao uma thread do kernel pode ser preemptada segurando uma
+  trava de spin pega com interrupcoes ligadas (a `tlb_lock`, por exemplo).
+  Agora cada thread conta as travas de spin que segura (`spin_count`): o
+  `spin_set_owner` (usado por `spin_lock`, `spin_try_lock` e
+  `spin_lock_irqsave`) sobe o contador do dono, e o `spin_unlock` desce o
+  contador do dono (`owner_thread`), e nao o da thread que estiver rodando.
+  Isso deixa certa a passagem da `runq_lock` na troca de thread: quem pega e
+  a thread que sai e quem solta e a que entra (`sched_post_switch`, inclusive
+  pelo `thread_trampoline` de uma thread nova); o -1 cai na que saiu, com a
+  `runq_lock` ainda presa, entao ela nao pode estar rodando em outra CPU.
+  Trava pega num handler de IRQ sobe e desce o contador da thread
+  interrompida antes do fim do handler. O `sched_check_preempt` nao troca de
+  thread com o contador acima de zero: conta um adiamento por CPU
+  (`preempt_deferred`) e deixa o pedido marcado para a proxima interrupcao.
+  Nenhum lugar solta trava sem o `spin_unlock` (conferido), senao o contador
+  ficaria preso e a thread nunca mais seria preemptada. A 8.2 (kernel
+  preemptivo com contagem de travas seguras) parte daqui.
+- `in_interrupt()` virou um `movl %gs:offsetof(irq_depth)` so.
+- `tmptest`: o teste de 1000 arquivos falhou pela terceira vez com a fila da
+  `kreclaim` ainda cheia (ate 268 paginas logo depois do ultimo `unlink`). Em
+  vez de subir a tolerancia, ele passou a medir de novo a cada 10 ms enquanto
+  as paginas livres ainda sobem, ate 1 s.

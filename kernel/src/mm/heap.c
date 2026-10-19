@@ -8,6 +8,7 @@
 #include <kernel/spinlock.h>
 #include <kernel/sched.h>
 #include <kernel/smp.h>
+#include <kernel/irqctx.h>
 
 #define SLAB_MAGIC   0x534C4142u
 #define SLAB_MAX_OBJ 2048
@@ -428,7 +429,7 @@ void heap_init(void)
              KERNEL_HEAP_BASE, KERNEL_HEAP_SIZE / MiB(1));
 }
 
-void *kmalloc(size_t size)
+static void *alloc_raw(size_t size)
 {
     if (size == 0)
         return NULL;
@@ -445,19 +446,32 @@ void *kmalloc(size_t size)
     return p;
 }
 
-void *kzalloc(size_t size)
+void *kmalloc(size_t size)
 {
-    void *p = kmalloc(size);
+    MIGHT_SLEEP("kmalloc");
+    return alloc_raw(size);
+}
+
+static void *zalloc_raw(size_t size)
+{
+    void *p = alloc_raw(size);
     if (p)
         memset(p, 0, size);
     return p;
 }
 
+void *kzalloc(size_t size)
+{
+    MIGHT_SLEEP("kzalloc");
+    return zalloc_raw(size);
+}
+
 void *kcalloc(size_t n, size_t size)
 {
+    MIGHT_SLEEP("kcalloc");
     if (n && size > SIZE_MAX / n)
         return NULL;
-    return kzalloc(n * size);
+    return zalloc_raw(n * size);
 }
 
 size_t kmalloc_size(const void *ptr)
@@ -493,8 +507,9 @@ void kfree(void *ptr)
 
 void *krealloc(void *ptr, size_t size)
 {
+    MIGHT_SLEEP("krealloc");
     if (!ptr)
-        return kmalloc(size);
+        return alloc_raw(size);
     if (size == 0) {
         kfree(ptr);
         return NULL;
@@ -503,7 +518,7 @@ void *krealloc(void *ptr, size_t size)
     if (size <= old && (old <= SLAB_MAX_OBJ || size > old / 2))
         return ptr;
 
-    void *np = kmalloc(size);
+    void *np = alloc_raw(size);
     if (!np)
         return NULL;
     memcpy(np, ptr, MIN(old, size));

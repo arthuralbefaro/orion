@@ -7,6 +7,7 @@
 #include <mm/heap.h>
 #include <mm/vmm.h>
 #include <lib/string.h>
+#include <kernel/irqctx.h>
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/gdt.h>
 #include <arch/x86_64/percpu.h>
@@ -281,6 +282,7 @@ void sched_post_switch(void)
 
 static void schedule_locked(void)
 {
+    MIGHT_SLEEP("troca de thread");
     struct percpu *cpu = percpu_get();
     struct thread *prev = cpu->current;
     struct thread *next = ready_dequeue();
@@ -370,6 +372,7 @@ bool sched_make_ready(struct thread *t)
 
 void thread_yield(void)
 {
+    MIGHT_SLEEP("thread_yield");
     uint64_t flags = irq_save();
     schedule();
     irq_restore(flags);
@@ -377,6 +380,7 @@ void thread_yield(void)
 
 void thread_sleep_ms(uint64_t ms)
 {
+    MIGHT_SLEEP("thread_sleep_ms");
     uint64_t flags = irq_save();
     spin_lock(&runq_lock);
     sched_block_switch(sched_deadline(ms));
@@ -385,6 +389,7 @@ void thread_sleep_ms(uint64_t ms)
 
 void thread_block(void)
 {
+    MIGHT_SLEEP("thread_block");
     uint64_t flags = irq_save();
     spin_lock(&runq_lock);
     percpu_get()->current->state = THREAD_BLOCKED;
@@ -511,8 +516,16 @@ void sched_tick(uint64_t now, bool user)
 
 void sched_check_preempt(void)
 {
-    if (enabled && percpu_ready() && percpu_get()->need_resched)
-        schedule();
+    if (!enabled || !percpu_ready())
+        return;
+    struct percpu *cpu = percpu_get();
+    if (!cpu->need_resched)
+        return;
+    if (cpu->current && __atomic_load_n(&cpu->current->spin_count, __ATOMIC_ACQUIRE)) {
+        cpu->preempt_deferred++;
+        return;
+    }
+    schedule();
 }
 
 void sched_dump(void)

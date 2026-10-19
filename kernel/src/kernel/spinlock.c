@@ -21,9 +21,18 @@ void spin_set_timeout(uint64_t tsc_hz)
 
 void spin_set_owner(spinlock_t *l, uint64_t pc)
 {
+    struct thread *t = current_or_null();
     l->owner_cpu = percpu_cpu_id() + 1;
     l->owner_pc = pc;
-    l->owner_thread = current_or_null();
+    l->owner_thread = t;
+    if (t)
+        __atomic_add_fetch(&t->spin_count, 1, __ATOMIC_ACQ_REL);
+}
+
+void spin_owner_release(void *thread)
+{
+    struct thread *t = thread;
+    __atomic_sub_fetch(&t->spin_count, 1, __ATOMIC_ACQ_REL);
 }
 
 bool spin_held(spinlock_t *l)

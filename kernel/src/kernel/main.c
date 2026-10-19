@@ -1,4 +1,5 @@
 #include <drivers/power.h>
+#include <kernel/irqctx.h>
 #include <kernel/version.h>
 #include <kernel/log.h>
 #include <kernel/shell.h>
@@ -120,6 +121,7 @@ void kmain(void)
     }
 
     percpu_init_bsp(lapic_id());
+    irqctx_init();
     time_init();
     rtc_init();
     keyboard_init();

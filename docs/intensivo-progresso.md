@@ -28,7 +28,7 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 18:20, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+Estado (2026-10-19, 20:50, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
 `v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.6 (apps `imgview`, `monitor`,
 `arquivos`, `editor`, `config` e `terminal`) e 6.7 (barra de tarefas,
 Alt+Tab, minimizar e maximizar, lancador de apps): Fase 6 inteira; e a
@@ -36,25 +36,19 @@ Alt+Tab, minimizar e maximizar, lancador de apps): Fase 6 inteira; e a
 virtio-net com MSI-X), a 5.4 (NVMe), a 5.5 (xHCI e `lsusb`, em Rust) e a
 5.6 (teclado e mouse USB, inclusive sem PS/2) e a 5.7 inteira
 (pendrive USB: Bulk-Only, despachante unico, prazos, recuperacao, remocao e
-segundo plug). Versao 2.4.0-a24. O
+segundo plug; parte 4: contexto de interrupcao vigiado). Versao 2.4.0-a25. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E,
 na ISO na F, no virtio (disco e rede) na V, no NVMe na N e com USB na U,
-com 565 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+com 585 verificacoes em ~18 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: a parte curta "regressao mais rapida"
-(pedida pelo dono, ate 45 min: medir o tempo de cada sequencia e de cada
-espera, trocar esperas fixas por `until:` com prazo maximo, juntar boots
-repetidos sem perder verificacao, nenhuma verificacao a menos, tempo antes e
-depois no diario); depois a 5.7 parte 4 (o `usbstall` confere os dados lidos
-depois da recuperacao, e aviso no log, panico na regressao, para `kmalloc` ou
-funcao que dorme chamados dentro de interrupcao; mexe no nucleo, entao roda a
-completa); depois 5.8 (requisitos abaixo), 5.9 e 5.10 (hub USB). Versao
-2.4.0-a25 em diante.
+Proxima etapa: 5.8, audio HDA (requisitos logo abaixo das regras), depois 5.9
+e 5.10 (hub USB 2); a regressao completa volta no fim da Fase 5. Versao
+2.4.0-a26 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -131,6 +125,39 @@ Requisitos da 5.7 parte 2 (pendrive robusto), decididos pelo dono em
    liberado; um segundo plug do mesmo pendrive (`device_add`) e reconhecido de
    novo.
 7. Atualizar no `DECISOES.md` a entrada da 5.7 (o que mudou e por que).
+
+Requisitos da 5.7 parte 4, decididos pelo dono em 2026-10-19:
+1. `usbstall`: forcar o STALL num bulk e conferir que a transferencia
+   seguinte a recuperacao le os dados certos (prova que a sequencia do
+   endpoint foi zerada dos dois lados).
+2. Marcador de contexto de interrupcao cobrindo todas as entradas: IRQ do
+   timer, IPIs entre CPUs, MSI e MSI-X, e as excecoes que chegam durante uma
+   interrupcao (page fault dentro de handler). O despachante do USB rodando
+   pela thread (sem MSI) nao conta como interrupcao.
+3. `kmalloc` ou funcao que dorme chamados dentro de interrupcao: mensagem
+   "BUG: ... dentro de interrupcao" com o endereco de quem chamou, no maximo
+   uma vez por ponto de chamada; na regressao, panico.
+4. So o contexto de interrupcao dispara o aviso: interrupcoes desligadas com
+   trava de spin presa sao normais e nao podem dar falso alarme.
+5. Conferir com isso o caminho do despachante (teclado, mouse, acordar).
+6. Interrupcao aninhada: depois de baixar o contador, o `sched_check_preempt`
+   so troca de thread se o contador da CPU voltou a 0 (interrupcao mais de
+   fora). Testar com o timer chegando dentro de outra IRQ, se der para
+   provocar.
+7. O aviso nao pode travar: o log tem de usar trava com interrupcoes
+   desligadas (irqsave) para poder ser chamado de IRQ. No NMI, nada de log
+   direto: anotar num buffer por CPU (sem trava) e imprimir no proximo ponto
+   seguro fora de interrupcao. A tabela de "ja avisou" e atualizada com
+   operacao atomica (cmpxchg em posicoes fixas), sem trava que durma e sem
+   alocar memoria.
+8. `mutex_trylock` e qualquer operacao que nao durma nao avisam.
+
+Requisitos da 8.2 (kernel preemptivo), anotados pelo dono em 2026-10-19 (o
+comeco, o contador de travas de spin por thread, ja entrou na 5.7 parte 4):
+1. Troca adiada por trava de spin presa marca `need_resched` (como hoje), e o
+   `spin_unlock`, ao zerar o `spin_count` com interrupcoes ligadas e a flag
+   marcada, chama o escalonador na hora, em vez de esperar a proxima
+   interrupcao.
 
 Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 1. Verificacao pelo WAV do QEMU (`-audiodev wav`): o `play` toca um sinal
@@ -224,7 +251,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 7.4 | Hardware real | [ ] | | | |
 | 7.5 | Pacotes | [ ] | | | |
 | 8.1 | Fila por CPU e nice | [ ] | | | |
-| 8.2 | Kernel preemptivo | [ ] | | | |
+| 8.2 | Kernel preemptivo (comeco: contador de travas de spin por thread, na 5.7 parte 4) | [ ] | | | |
 | 8.3 | Fuzzer de syscalls | [ ] | | | |
 | 8.4 | OOM | [ ] | | | |
 | 8.5 | Perfilador | [ ] | | | |
@@ -1657,6 +1684,70 @@ as partes anteriores ja tinham). RAM livre antes: 6,4 GB. Tempo por
 sequencia, pela hora de gravacao dos logs (inclui o build do comeco e o da
 imagem antes da F): A ~10,5 min (com o build), B ~5,5, C ~7, D ~3, F ~1,3,
 V ~1, N ~0,7, U ~2, E ~0,3; total ~32 min. A 5.7 recebe o `[x]`.
+
+#### Regressao mais rapida - 18:20 a 20:50 - FEITO
+Pedido do dono, ate 45 min de trabalho (passou: a rodada medida achou
+falhas de espera e o aviso da parte 4 achou um defeito no ACPI, e as duas
+coisas foram resolvidas antes do commit). `test.ps1` e `qrun.py`: o `cmd:`
+segue quando o prompt volta (1,5 s viraram teto); o `wait:N` depois de um
+comando sem `&` termina quando o prompt volta e a saida fica 0,4 s quieta
+(N vira teto); so conta prompt depois da quebra de linha do eco e so se a
+ultima linha for inteira um prompt; tempo de boot e de cada tipo de passo
+impresso por execucao, e o total da regressao no fim; o `Start-Sleep 2` do
+hostweb virou esperar a porta abrir. `-SlowWaits` / `--slow-waits` (tambem
+no `regressao.ps1` e no `regress.py`) volta as esperas fixas antigas: se uma
+verificacao comecar a falhar de vez em quando, o primeiro passo e rodar a
+sequencia com `-SlowWaits`; passou, a culpa e da espera. Nenhuma verificacao
+saiu; boots nao foram juntados (cada sequencia sobe uma maquina diferente;
+o porque esta no `docs/DECISOES.md`).
+Tempo: antes ~32 min (regressao completa das 17:44, 565 verificacoes);
+primeira rodada com a espera nova 17,4 min, com 3 falhas (o `ptytest` mostra
+o prompt do shell de dentro do pty e encerrava a espera cedo; virou `until:`);
+na rodada final, com a parte 4, 17,8 min, verde, 585 verificacoes, com o
+estresse repetido 3 vezes. Por sequencia nela: A 4,4 min, B 5,3, C 1,5,
+D 2,6, F 0,8, V 0,5, N 0,4, U 0,9, E 0,3 por rodada, mais os dois builds.
+Problema: o resumo de tempo saia errado quando havia passo `keys:`, porque
+`$tabela.Keys` no PowerShell devolve o valor da chave "keys"; virou
+`GetEnumerator()`.
+
+#### 5.7 parte 4 Contexto de interrupcao e STALL com dados - 18:40 a 20:50 - FEITO
+Requisitos 1 a 8 logo abaixo das regras, mais os pedidos do dono no meio do
+caminho (ganchos de teste so no modo estrito, auditoria do padrao per-CPU,
+contador de travas de spin por thread). `irqctx` (novo): contador de
+interrupcao por CPU em volta de todo handler (IRQ, timer, IPI, MSI, MSI-X,
+NMI; excecoes herdam), troca de thread so com o contador em 0, aviso
+"BUG: ... dentro de interrupcao" em `kmalloc`, `kzalloc`, `kcalloc`,
+`krealloc`, `mutex_lock`, `wait_sleep*`, `thread_yield`, `thread_sleep_ms` e
+`thread_block`, uma vez por ponto de chamada (tabela por cmpxchg), NMI so
+anota e o aviso sai depois. Modo estrito (panico) pelo fw_cfg do QEMU de
+teste (`fwcfg.c`, novo); `-NoStrict` sobe sem ele. Os ganchos de teste
+(`usbstall`, `usbtimeout`, `irqtest`) respondem EPERM fora do modo estrito.
+`irqtest` novo; `usbstall` confere os 512 bytes relidos depois da
+recuperacao, no pendrive feito no hospedeiro. Detalhes: `docs/DECISOES.md`,
+v2.4.0-a25.
+`in_interrupt()` le o contador com um `mov %gs:` so. Contador de travas de
+spin por thread (`spin_count`, contado no dono da trava) e o
+`sched_check_preempt` nao troca de thread com ele acima de zero: comeco da
+8.2, que parte daqui. Auditoria do padrao "ponteiro da CPU e depois o campo"
+no resto do kernel: nenhum outro ponto com risco (lista no DECISOES).
+`tmptest` mede de novo enquanto a `kreclaim` devolve paginas, ate 1 s.
+Achado do aviso: o botao de energia fazia `kmalloc` dentro do SCI
+(`uacpi_kernel_io_map`); o handle de I/O agora nao aloca. Conferido tambem
+que o SCI so reconhece o evento: o botao de energia e o AML dos GPEs
+(`_Lxx`/`_Exx`, Notify) vao para a thread `acpi-work`.
+Segundo achado, no estresse: avisos falsos em fork comum, com "vetor 0":
+o `in_interrupt()` lia o ponteiro da CPU e depois o campo com a thread
+preemptivel e, migrando no meio, lia o contador de outra CPU.
+Verificacao (mexe no nucleo: interrupcoes, memoria, travas): regressao
+completa final, 585 verificacoes, verde, 17,8 min, estresse 3 vezes, RAM
+livre antes 6,2 GB. Rodadas antes dela: 18:52, 6 falhas (5 falsos alarmes:
+a linha do modo estrito dizia "vira panico" e F, V, N, U e E procuravam
+"panic" sem diferenciar maiusculas; e o `kmalloc` do ACPI); 19:16, verde,
+578; rodada curta de F, V, N, U e E com o marcador exato do kernel
+(`*** KERNEL PANIC ***` e `*** EXCECAO NAO TRATADA`, pedido do dono), que
+mostrou o panico do estresse; 20:06, 584 com 2 falhas do `tmptest` (a fila
+da `kreclaim`, terceira vez) e o estresse 3 vezes verde.
+Versao 2.4.0-a25.
 
 ### Sessao 2 - 2026-10-17
 

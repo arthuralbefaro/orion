@@ -4,6 +4,7 @@
 #include <lib/string.h>
 #include <kernel/log.h>
 #include <kernel/signal.h>
+#include <kernel/irqctx.h>
 
 static void entry_attach(struct wait_entry *e, struct waitqueue *wq, struct thread *t)
 {
@@ -78,16 +79,19 @@ static bool sleep_on(struct waitqueue *wq, spinlock_t *lock, uint64_t ms, bool i
 
 bool wait_sleep_timeout(struct waitqueue *wq, spinlock_t *lock, uint64_t ms)
 {
+    MIGHT_SLEEP("wait_sleep_timeout");
     return sleep_on(wq, lock, ms, false);
 }
 
 bool wait_sleep(struct waitqueue *wq, spinlock_t *lock)
 {
+    MIGHT_SLEEP("wait_sleep");
     return sleep_on(wq, lock, 0, false);
 }
 
 bool wait_sleep_intr(struct waitqueue *wq, spinlock_t *lock, uint64_t ms)
 {
+    MIGHT_SLEEP("wait_sleep_intr");
     return sleep_on(wq, lock, ms, true);
 }
 

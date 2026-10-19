@@ -3,6 +3,7 @@
 #include <kernel/time.h>
 #include <kernel/log.h>
 #include <arch/x86_64/cpu.h>
+#include <kernel/irqctx.h>
 
 #define MUTEX_WARN_MS 5000
 #define BOOT_OWNER ((struct thread *)1)
@@ -75,6 +76,7 @@ void mutex_init_private(struct mutex *m, const char *name)
 
 void mutex_lock(struct mutex *m)
 {
+    MIGHT_SLEEP("mutex_lock");
     uint64_t pc = (uint64_t)__builtin_return_address(0);
     struct thread *me = me_or_boot();
     uint64_t flags = spin_lock_irqsave(&m->lock);

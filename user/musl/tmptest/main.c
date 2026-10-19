@@ -27,6 +27,19 @@ static long free_pages(void)
     return orion_free_or_cached_pages();
 }
 
+static long settled_pages(void)
+{
+    long best = free_pages();
+    for (int i = 0; i < 100; i++) {
+        usleep(10000);
+        long now = free_pages();
+        if (now <= best)
+            break;
+        best = now;
+    }
+    return best;
+}
+
 static const char *P(const char *rel)
 {
     static char bufs[4][512];
@@ -98,14 +111,14 @@ static void test_thousand(void)
     snprintf(nm, sizeof(nm), "%s/f0500", sub);
     check("conteudo de um deles confere", file_has(nm, 'a', 3000));
     check("apagou os 1000", remove_files(sub, 1000));
-    long base = free_pages();
+    long base = settled_pages();
     check("as paginas voltaram", f0 - base < 256);
 
     char m0[1024], m1[1024];
     orion_read_text("/proc/meminfo", m0, sizeof(m0));
     check("criou mais 1000", make_files(sub, 1000, 'b'));
     check("apagou de novo", remove_files(sub, 1000));
-    long after = free_pages();
+    long after = settled_pages();
     orion_read_text("/proc/meminfo", m1, sizeof(m1));
     long diff = base - after;
     printf("  paginas livres: %ld antes, %ld depois da segunda rodada\n", base, after);

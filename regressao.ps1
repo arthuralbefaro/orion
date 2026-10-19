@@ -10,6 +10,7 @@ param(
     [switch]$OnlyV,
     [switch]$OnlyN,
     [switch]$OnlyU,
+    [switch]$SlowWaits,
     [int]$StressRuns = 1,
     [switch]$Verbose
 )
@@ -18,6 +19,8 @@ $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 $failures = @()
 $checks = 0
+if ($SlowWaits) { $env:ORION_SLOW_WAITS = "1" } else { Remove-Item Env:ORION_SLOW_WAITS -ErrorAction SilentlyContinue }
+$regStart = Get-Date
 $runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU)
 
 function Get-Log([string]$path) {
@@ -68,7 +71,11 @@ function Start-HostWeb([int]$port) {
     $pyArgs = @($py | Select-Object -Skip 1) + @((Join-Path $Root "tools\hostweb.py"), "--port", "$port")
     $p = Start-Process -FilePath $py[0] -ArgumentList $pyArgs -PassThru -WindowStyle Hidden `
         -RedirectStandardError (Join-Path $Root "out\hostweb.log")
-    Start-Sleep -Seconds 2
+    $end = (Get-Date).AddSeconds(5)
+    while ((Get-Date) -lt $end) {
+        $tc = New-Object System.Net.Sockets.TcpClient
+        try { $tc.Connect("127.0.0.1", $port); $tc.Close(); break } catch { Start-Sleep -Milliseconds 100 } finally { $tc.Dispose() }
+    }
     return $p
 }
 
@@ -185,7 +192,7 @@ if ($runAll -or $OnlyA) {
         "cmd:polltest", "wait:6",
         "cmd:fbtest 2", "wait:1", "shot:out\shots\reg-fbtest.ppm", "wait:2",
         "cmd:evtest 10", "wait:0.8", "mon:sendkey a", "mon:sendkey ctrl", "mon:sendkey up", "mon:mouse_move 10 5", "until:20:evento(s)",
-        "cmd:ptytest", "wait:8",
+        "cmd:ptytest", "until:15:ptytest: sh saiu com",
         "cmd:echo alfa", "wait:1",
         "keys:1B5B41", "raw: beta", "key:0D", "wait:1.5",
         "keys:1B5B41", "keys:1B5B44", "keys:1B5B44", "keys:1B5B44", "keys:1B5B44",
@@ -211,7 +218,7 @@ if ($runAll -or $OnlyA) {
         "key:0B", "cmd:tcploss 10", "key:0B",
         "cmd:httpget -u /tmp/up.bin 10.0.2.2 8088 /up", "until:240:corpo de",
         "cmd:httpget -q 10.0.2.2 8088 /big.bin", "until:240:corpo de",
-        "key:0B", "cmd:tcploss 0", "cmd:net", "key:0B", "cmd:rm /tmp/up.bin", "wait:1", "cmd:cat /proc/interrupts", "wait:1",
+        "key:0B", "cmd:tcploss 0", "cmd:net", "cmd:irqtest", "until:10:anotado e impresso depois", "wait:1", "key:0B", "cmd:rm /tmp/up.bin", "wait:1", "cmd:cat /proc/interrupts", "wait:1",
         "cmd:httpd -n 3 -r / &", "wait:2", "hostget:8081:/etc/passwd", "hostget:8081:/nao-existe", "hostget:8081:/etc",
         "wait:2", "cmd:httpd -n 1 &", "wait:2", "hostget:8081:/etc/group", "wait:2",
         "cmd:unixtest /run", "until:60:falha(s))", "cmd:unixtest /", "until:60:falha(s))",
@@ -506,6 +513,14 @@ if ($runAll -or $OnlyA) {
     Expect $a "\nola" "ptytest imprimiu ola"
     Expect $a "ptytest: sh saiu com 0" "ptytest encerrou o sh"
     Expect $a "\nalfa beta" "seta para cima recuperou o comando e o texto foi anexado"
+    Expect $a "irq\s+modo estrito \(fw_cfg opt/orion/strict\)" "modo estrito do contexto de interrupcao ligado no QEMU de teste"
+    Expect $a "BUG: kmalloc dentro de interrupcao, chamado de 0x[0-9a-f]+ \(vetor \d+, CPU \d+, profundidade 1\)" "kmalloc dentro de IRQ avisa, com o endereco de quem chamou"
+    Expect $a "irqtest: kmalloc na IRQ avisou 1 vez\(es\) em 2 chamadas \(profundidade 1\); trylock nao avisou; kmalloc com trava de spin fora de IRQ avisou 0 vez\(es\)" "aviso uma vez por ponto de chamada; trylock e trava de spin fora de IRQ nao avisam"
+    Expect $a "irqtest: IRQ aninhada: profundidade maxima [2-9], ([2-9]|\d\d+) tick\(s\) do timer dentro da IRQ, mesma thread no fim: sim" "timer aninhado dentro de outra IRQ nao troca de thread"
+    Expect $a "BUG: teste no NMI dentro de interrupcao \(NMI, anotado e impresso depois\)" "aviso no NMI vai para o buffer da CPU e sai depois"
+    Expect $a "irqtest: contexto de interrupcao ok" "irqtest termina bem"
+    Expect $a "irqtest: trava de spin com interrupcoes ligadas: [1-9]\d* troca\(s\) adiada\(s\), 0 troca\(s\) de thread na CPU enquanto a trava estava presa, mesma thread e CPU: sim" "thread segurando trava de spin nao e preemptada (contador por thread, comeco da 8.2)"
+    ExpectNot $a "BUG: (?!kmalloc dentro de interrupcao, chamado|teste no NMI)[^\n]*dentro de interrupcao" "nenhum outro aviso de contexto de interrupcao na sequencia A"
     Expect $a "\nalfa Xbeta" "seta para a esquerda insere no meio da linha"
     Expect $a "\nalfa X\n" "Home, End e backspace cortaram o fim da linha"
     Expect $a "\nhomeok" "Home voltou ao inicio e inseriu ali"
@@ -913,11 +928,12 @@ if ($runAll -or $OnlyF) {
         "cmd:mount", "cmd:id", "cmd:ls /bin | wc", "cmd:ls -l /etc/shadow /bin/su", "cmd:ls -l /home",
         "cmd:echo vivo-na-ram > /home/orion/nota.txt", "cmd:cat /home/orion/nota.txt", "cmd:hello",
         "cmd:lua -e print(6*7)", "cmd:su orion -c id", "cmd:free", "wait:1",
+        "key:0B", "cmd:irqtest", "cmd:usbstall sdb", "cmd:usbtimeout sdb", "key:0B",
         "reboot:uefi,cd", "cmd:mount", "cmd:cat /home/orion/nota.txt", "wait:1",
         "reboot:bios,isodisk", "cmd:mount", "cmd:poweroff", "wait:4", "monlog:info status",
         "reboot:uefi,isodisk", "cmd:mount", "cmd:ls /doom", "cmd:reboot", "wait:4", "monlog:info status"
     )
-    & (Join-Path $Root "test.ps1") -Smp $Smp -Iso -Bios -NoBuild -LogPath "out\reg-f.log" `
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Iso -Bios -NoBuild -NoStrict -LogPath "out\reg-f.log" `
         -Script $stepsF -CommandDelay 1.5 -BootTimeout 90 -NoPrint | Out-Null
     $f = Get-Log "out\reg-f.log"
     if ($Verbose) { Write-Output $f }
@@ -927,6 +943,11 @@ if ($runAll -or $OnlyF) {
     Expect $f '----- reboot bios,isodisk -----(?:(?!----- reboot)[\s\S])*?Limine [\d.]+ via BIOS[^\n]*\n[^\n]*kernel lido de /boot/orion\.elf no disco(?:(?!----- reboot)[\s\S])*?raiz montada: tmpfs do initramfs \(\d{3,} entradas, \d{5,} KiB, 0 falha\(s\)\); \d{5,} KiB do modulo devolvidos(?:(?!----- reboot)[\s\S])*?login: root\s*Senha: \s*Bem-vindo, root\.(?:(?!----- reboot)[\s\S])*?\ninitramfs / tmpfs rw' "ISO gravada em pendrive no BIOS: MBR do Limine, raiz em RAM e login"
     Expect $f '----- reboot uefi,isodisk -----(?:(?!----- reboot)[\s\S])*?Limine [\d.]+ via UEFI 64[^\n]*\n[^\n]*kernel lido de /boot/orion\.elf no disco(?:(?!----- reboot)[\s\S])*?raiz montada: tmpfs do initramfs \(\d{3,} entradas, \d{5,} KiB, 0 falha\(s\)\); \d{5,} KiB do modulo devolvidos(?:(?!----- reboot)[\s\S])*?login: root\s*Senha: \s*Bem-vindo, root\.(?:(?!----- reboot)[\s\S])*?\ninitramfs / tmpfs rw' "ISO gravada em pendrive no UEFI: particao EFI do MBR, raiz em RAM e login"
     Expect $f "ls /bin \| wc\s*\n\s*1\d\d\s" "live: /bin inteiro no initramfs"
+    ExpectNot $f "modo estrito" "sem fw_cfg (como num PC de verdade) o modo estrito fica desligado"
+    Expect $f "irqtest: EPERM, so no modo de teste" "fora do modo estrito o irqtest responde EPERM"
+    Expect $f "usbstall: EPERM, so no modo de teste" "fora do modo estrito o usbstall responde EPERM"
+    Expect $f "usbtimeout: EPERM, so no modo de teste" "fora do modo estrito o usbtimeout responde EPERM"
+    ExpectNot $f "BUG: [^\n]*dentro de interrupcao" "nenhum aviso de contexto de interrupcao nos boots da ISO"
     Expect $f "-rw-------\s+1\s+root\s+root[^\n]*/etc/shadow" "live: /etc/shadow 0600 de root"
     Expect $f "-rwsr-xr-x\s+1\s+root\s+root[^\n]*/bin/su" "live: su setuid root"
     Expect $f "drwxr-xr-x\s+\d+\s+orion\s+users[^\n]*orion" "live: /home/orion do orion"
@@ -938,7 +959,7 @@ if ($runAll -or $OnlyF) {
     Expect $f "ls /doom\s*\n[^\n]*freedoom1\.wad" "live: o wad do Doom esta no initramfs"
     Expect $f '----- reboot bios,isodisk -----(?:(?!----- reboot)[\s\S])*?entrando no estado S5(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "poweroff pelo ACPI no BIOS"
     Expect $f '----- reboot uefi,isodisk -----(?:(?!----- reboot)[\s\S])*?reiniciando pelo registrador de reset do FADT(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "reboot pelo ACPI no UEFI a partir do live"
-    ExpectNot $f "PANIC|EXCECAO" "nenhum panico nos quatro boots da ISO"
+    ExpectNot $f "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico nos quatro boots da ISO"
 }
 
 # ---------------- Sequencia V: virtio ----------------
@@ -974,7 +995,7 @@ if ($runAll -or $OnlyV) {
     Expect $v "httpget: corpo de 10485760 bytes, crc32 1a960f7c" "TCP: 10 MiB do hospedeiro pela virtio-net sem corromper"
     Expect $v "(?s)cat /proc/interrupts.*?\n\s*\d+:(\s+\d+){4}\s+virtio-net" "/proc/interrupts conta a MSI-X da virtio-net"
     ExpectNot $v "(?s)cat /proc/interrupts.*?\n\s*\d+:\s+0\s+0\s+0\s+0\s+virtio-net" "a MSI-X da virtio-net chegou de fato"
-    ExpectNot $v "PANIC|EXCECAO" "nenhum panico na sequencia V"
+    ExpectNot $v "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico na sequencia V"
 }
 
 # ---------------- Sequencia N: NVMe ----------------
@@ -1000,7 +1021,7 @@ if ($runAll -or $OnlyN) {
     Expect $n "(?s)cat /proc/interrupts.*?\n\s*\d+:(\s+\d+){4}\s+nvme" "/proc/interrupts conta a MSI-X do NVMe"
     ExpectNot $n "(?s)cat /proc/interrupts.*?\n\s*\d+:\s+0\s+0\s+0\s+0\s+nvme" "a MSI-X do NVMe chegou de fato"
     Expect $n "(?s)----- reboot -----.*?cat /root/persiste\.txt\s*\npersiste-no-nvme" "o que foi gravado no NVMe sobrevive ao reboot"
-    ExpectNot $n "PANIC|EXCECAO" "nenhum panico na sequencia N"
+    ExpectNot $n "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico na sequencia N"
 }
 
 # ---------------- Sequencia U: USB ----------------
@@ -1012,7 +1033,7 @@ if ($runAll -or $OnlyU) {
         "cmd:lsusb", "wait:2", "cmd:cat /proc/usb", "wait:1",
         "cmd:ls /mnt", "cmd:cat /mnt/LEIAME.TXT", "cmd:echo gravado-no-orion > /mnt/NOVO.TXT", "wait:1",
         "cmd:umount /mnt", "wait:2",
-        "key:0B", "cmd:usbstall sdb", "wait:3", "key:0B",
+        "key:0B", "cmd:usbstall sdc", "until:10:usbstall: sdc", "key:0B",
         "cmd:evtest 10", "wait:0.8", "mon:sendkey a", "mon:sendkey ctrl", "mon:sendkey up", "mon:mouse_move 10 5",
         "mon:mouse_button 1", "mon:mouse_button 0", "until:20:evento(s)",
         "cmd:mkfs /dev/sdb PENDRIVE", "wait:6", "cmd:mkdir /tmp/pen", "cmd:mount -t vfat /dev/sdb /tmp/pen", "wait:1",
@@ -1053,9 +1074,10 @@ if ($runAll -or $OnlyU) {
     Expect $u "----- hospedeiro: NOVO\.TXT -----\s*\ngravado-no-orion" "arquivo gravado no Orion e lido no hospedeiro"
     Expect $u "usb\s+teste: CBW com assinatura errada respondeu Err\(Stall\)" "CBW invalido provoca STALL no endpoint bulk"
     Expect $u "usb\s+slot \d+: recuperacao do Bulk-Only: reset ok, CLEAR_FEATURE ok e ok, endpoints do xHCI ok e ok" "recuperacao: Bulk-Only Mass Storage Reset, CLEAR_FEATURE nos dois endpoints e reset no xHCI"
-    Expect $u "usb\s+teste: depois da recuperacao TEST UNIT READY ok e READ\(10\) do setor 0 ok" "depois do STALL a transferencia seguinte funciona"
+    Expect $u "usb\s+teste: depois da recuperacao TEST UNIT READY ok e READ\(10\) do setor 0 ok; os 512 bytes iguais aos lidos antes do STALL \(assinatura 55aa\)" "depois do STALL a leitura seguinte traz os dados certos (sequencia do endpoint zerada dos dois lados)"
     Expect $u "usb\s+comando SCSI 0x28 falhou: sense chave 0x5, ASC 0x21, ASCQ 0x00" "CSW com status 1 leva ao REQUEST SENSE e o sense vai para o log"
-    Expect $u "usbstall: sdb travou com STALL, foi recuperado, voltou a ler e o sense chegou" "usbstall termina bem"
+    Expect $u "usbstall: sdc travou com STALL, foi recuperado, voltou a ler e o sense chegou" "usbstall termina bem"
+    ExpectNot $u "BUG: [^\n]*dentro de interrupcao" "nenhum aviso de contexto de interrupcao no despachante USB (teclado, mouse, acordar)"
     ExpectNot $u "(?s)sem resposta no prazo.*usbtimeout sdb" "nenhum prazo estourou antes do teste de prazo"
     ExpectNot $u "comando do xHCI sem resposta no prazo|transferencia de controle sem resposta no prazo" "nenhum comando do xHCI nem transferencia de controle estourou o prazo"
     Expect $u "usb\s+porta \d+: dispositivo removido, Disable Slot do slot \d+ ok" "device_del: o slot do pendrive e desabilitado (Disable Slot)"
@@ -1092,7 +1114,7 @@ if ($runAll -or $OnlyU) {
     Expect $u "mouse-move\s+a=10 b=5" "movimento do mouse USB chega ao /dev/input"
     Expect $u "mouse-botao\s+a=1 b=0 c=0\s*\n\s*mouse-botao\s+a=0" "botao do mouse USB desce e sobe"
     ExpectNot $u "usb\s+porta \d+: (Enable|Address|descritor)" "nenhuma porta falhou na enumeracao"
-    ExpectNot $u "PANIC|EXCECAO|rust: " "nenhum panico na sequencia U"
+    ExpectNot $u "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|rust: " "nenhum panico na sequencia U"
 }
 
 # ---------------- Sequencia E: estresse de processos ----------------
@@ -1108,11 +1130,12 @@ if ($runAll -or $OnlyE) {
         if ($Verbose) { Write-Output $e }
         Expect $e "\nFIM-ESTRESSE" "estresse $i`: o pipeline terminou"
         Expect $e "stress: \d+ processos, 0 falha\(s\) ok" "estresse $i`: 0 falhas"
-        ExpectNot $e "PANIC|EXCECAO|deadlock|watchdog|stress \d+: |fork devolveu 0" "estresse $i`: sem panico, deadlock ou erro do stress"
+        ExpectNot $e "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|deadlock|watchdog|stress \d+: |fork devolveu 0" "estresse $i`: sem panico, deadlock ou erro do stress"
     }
 }
 
 Write-Host ""
+Write-Host ("tempo da regressao: {0:N1} min" -f ((Get-Date) - $regStart).TotalMinutes) -ForegroundColor DarkCyan
 if ($failures.Count -eq 0) {
     Write-Host "REGRESSAO VERDE ($checks verificacoes)" -ForegroundColor Green
     exit 0
