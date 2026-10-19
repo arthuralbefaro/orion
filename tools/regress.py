@@ -51,6 +51,8 @@ def parse_sequences():
             seq["iso"] = bool(re.search(r"-Iso\b", c))
             seq["iso_disk"] = "-IsoDisk" in c
             seq["bios"] = bool(re.search(r"-Bios\b", c))
+            nic = re.search(r"-Nic\s+(\S+)", c)
+            seq["nic"] = nic.group(1) if nic else "e1000e"
             hf = re.search(r"-HostFwd\s+@\(([^)]*)\)", c)
             if hf:
                 seq["hostfwd"] = [ps_string(s) for s in STRING.finditer(hf.group(1))]
@@ -233,7 +235,7 @@ def main():
                               no_build=no_build, image=seq["image"], hostfwd=seq["hostfwd"],
                               boot_timeout=seq["boot"], command_delay=seq["delay"], log_path=seq["log"],
                               iso=seq.get("iso", False), iso_disk=seq.get("iso_disk", False),
-                              bios=seq.get("bios", False))
+                              bios=seq.get("bios", False), nic=seq.get("nic", "e1000e"))
         finally:
             if web:
                 web.kill()

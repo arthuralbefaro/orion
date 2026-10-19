@@ -2893,3 +2893,19 @@ Uma linha por decisao, na ordem em que foram tomadas.
   sequencia A ja chegava a 50 antes do `history`; um comando a mais antes dele
   empurra para fora o `ls /bin | wc`, que a verificacao procura na linha 1.
   Comando novo na A antes do `history` precisa levar isso em conta.
+
+## v2.4.0-a16 (etapa 5.2 parte 2: rede por MSI)
+
+- O driver da `e1000` tenta MSI antes da GSI do `_PRT` e da IRQ legada:
+  aloca um vetor, programa a MSI na proxima CPU do rodizio e, se a placa nao
+  tiver a capacidade, devolve o vetor e segue como antes. Assim o mesmo
+  driver serve a `e1000` (82540EM, sem MSI no QEMU) e a `e1000e` (82574L,
+  `8086:10d3`), que aceita os descritores legados e o MAC em RAL/RAH do
+  jeito que o driver ja usa.
+- O QEMU dos testes passou a usar a `e1000e` por padrao (`test.ps1 -Nic`,
+  `qrun.py --nic`, e o `regress.py` le o `-Nic` de cada sequencia). A
+  sequencia D roda com `-Nic e1000` para a placa antiga continuar coberta: o
+  DHCP do autostart passa por ela, pela GSI do `_PRT`.
+- Com a AHCI na CPU 1 e a rede na CPU 2, as IRQs de dispositivo saem da CPU 0;
+  a sequencia A confere no `/proc/interrupts`, depois do trafego de rede, a
+  linha da `e1000` so na CPU 2.

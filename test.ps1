@@ -22,6 +22,7 @@ param(
     [switch]$IsoDisk,
     [switch]$Bios,
     [string[]]$HostFwd = @(),
+    [string]$Nic = "e1000e",
     [string]$LoginUser = "root",
     [string]$LoginPassword = "orion"
 )
@@ -105,7 +106,7 @@ function Get-QemuArgs {
             "-no-reboot", "-no-shutdown")
     $netdev = "user,id=n0"
     foreach ($fwd in $HostFwd) { $netdev += ",hostfwd=$fwd" }
-    $a += @("-netdev", $netdev, "-device", "e1000,netdev=n0",
+    $a += @("-netdev", $netdev, "-device", "$Nic,netdev=n0",
             "-object", "filter-dump,id=d0,netdev=n0,file=out/net.pcap")
     if ($Disk) { $a += @("-drive", "format=raw,file=out/disk.img") }
     foreach ($extra in $ExtraDisks) { $a += @("-drive", "format=raw,file=$extra") }

@@ -218,7 +218,15 @@ bool e1000_init(void)
     uint8_t pin = (uint8_t)((line >> 8) & 0xFF);
     char how[48];
     struct pci_irq_route route;
-    if (dev->bus == 0 && power_pci_route(dev->slot, pin, &route) &&
+    int vector = interrupts_alloc_vector(e1000_irq, NULL, "e1000");
+    uint32_t cpu = irq_next_cpu();
+    bool msi = vector >= 0 && pci_enable_msi(dev, (uint8_t)vector, cpu);
+    if (!msi && vector >= 0)
+        interrupts_unregister((uint8_t)vector);
+    if (msi) {
+        ksnprintf(how, sizeof(how), "MSI no vetor %d, CPU %u", vector, cpu);
+        wr(REG_IMS, ICR_RXT0 | ICR_RXDMT0 | ICR_LSC);
+    } else if (dev->bus == 0 && power_pci_route(dev->slot, pin, &route) &&
         irq_attach_gsi(route.gsi, route.active_low, route.level, e1000_irq, NULL)) {
         ksnprintf(how, sizeof(how), "GSI %u pelo _PRT", route.gsi);
         wr(REG_IMS, ICR_RXT0 | ICR_RXDMT0 | ICR_LSC);

@@ -208,7 +208,7 @@ if ($runAll -or $OnlyA) {
         "key:0B", "cmd:tcploss 10", "key:0B",
         "cmd:httpget -u /tmp/up.bin 10.0.2.2 8088 /up", "until:240:corpo de",
         "cmd:httpget -q 10.0.2.2 8088 /big.bin", "until:240:corpo de",
-        "key:0B", "cmd:tcploss 0", "cmd:net", "key:0B", "cmd:rm /tmp/up.bin", "wait:1",
+        "key:0B", "cmd:tcploss 0", "cmd:net", "key:0B", "cmd:rm /tmp/up.bin", "wait:1", "cmd:cat /proc/interrupts", "wait:1",
         "cmd:httpd -n 3 -r / &", "wait:2", "hostget:8081:/etc/passwd", "hostget:8081:/nao-existe", "hostget:8081:/etc",
         "wait:2", "cmd:httpd -n 1 &", "wait:2", "hostget:8081:/etc/group", "wait:2",
         "cmd:unixtest /run", "until:60:falha(s))", "cmd:unixtest /", "until:60:falha(s))",
@@ -277,7 +277,8 @@ if ($runAll -or $OnlyA) {
     Expect $a "Orion sh \(pid \d+\)" "shell de usuario subiu"
     Expect $a "\[info\] cpu\s+SMEP ligado, SMAP ligado" "SMEP e SMAP ligados em todas as copias de memoria de usuario"
     Expect $a "\[info\] acpi\s+uACPI pronto em \d+ ms: namespace carregado, botao de energia ligado, _PRT com \d+ rota" "uACPI carrega o namespace, o botao de energia e o _PRT"
-    Expect $a "e1000\s+8086:100e[^\n]*GSI (1[6-9]|2[0-3]) pelo _PRT, link up" "e1000 usa a GSI que o _PRT da (rede funciona por ela)"
+    Expect $a "e1000\s+8086:10d3[^\n]*MSI no vetor 129, CPU 2, link up" "e1000e (82574L) liga a MSI e manda a IRQ para a CPU 2"
+    Expect $a "(?s)cat /proc/interrupts.*?\n\s*129:\s+0\s+0\s+[1-9]\d*\s+0\s+e1000" "/proc/interrupts: rede por MSI so na CPU 2, depois do trafego"
     Expect $a "su orion -c poweroff\s*poweroff: gravando os discos e desligando\s*poweroff: Operation not permitted" "usuario comum nao desliga a maquina (EPERM do kernel)"
     Expect $a "ls /bin \| wc[\s\S]{0,80}?\d+\s+\d+\s+\d+" "ls /bin | wc produziu contagem"
     Expect $a "resultado: TUDO OK" "memtest TUDO OK"
@@ -513,7 +514,7 @@ if ($runAll -or $OnlyA) {
     Expect $a "COW: \d{2,} pagina\(s\) compartilhada\(s\)" "paginas compartilhadas enquanto os filhos vivem"
     Expect $a "filhos so de leitura terminaram ok" "filho so de leitura nao copiou nada"
     Expect $a "COW: 0 pagina\(s\) compartilhada\(s\), \d{3,} falta" "compartilhamento volta a zero no fim"
-    Expect $a "e1000\s+8086:100e.*link up" "placa de rede detectada com link up"
+    Expect $a "e1000\s+8086:10d3.*link up" "placa de rede detectada com link up"
     Expect $a "ip 10\.0\.2\.15  mascara 255\.255\.255\.0" "dhcp pegou endereco, mascara e rotas"
     Expect $a "init: autostart: /bin/netup" "init roda o netup no boot"
     Expect $a "(?s)netup: eth0 por DHCP.*?dhcp: ip 10\.0\.2\.15 mascara 255\.255\.255\.0 gateway 10\.0\.2\.2 dns 10\.0\.2\.3 \(servidor 10\.0\.2\.2" "boot pega IP pelo DHCP de usuario, lendo o /etc/network"
@@ -842,7 +843,7 @@ if ($runAll -or $OnlyD) {
         "wait:4", "shot:out\shots\reg-gui-12-tres-apps.ppm",
         "mon:sendkey ctrl-alt-x", "wait:6"
     )
-    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -Gui -LogPath "out\reg-d.log" `
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -Gui -Nic e1000 -LogPath "out\reg-d.log" `
         -Script $stepsD -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $d = Get-Log "out\reg-d.log"
     if ($Verbose) { Write-Output $d }
@@ -851,6 +852,7 @@ if ($runAll -or $OnlyD) {
     Expect $d "init: autostart: /bin/netup" "init executou o autostart"
     Expect $d "dhcp: ip 10\.0\.2\.15" "netup do autostart configurou a rede pelo dhcp de usuario"
     Expect $d "init: iniciando /bin/wm" "init subiu direto na interface grafica"
+    Expect $d "e1000\s+8086:100e[^\n]*GSI (1[6-9]|2[0-3]) pelo _PRT, link up" "e1000 antiga (sem MSI) segue pela GSI do _PRT"
     Expect $d "wm: \d+x\d+, celula" "wm abriu o framebuffer sem passar pelo sh"
     Expect $d "wm: terminal 0 -> sh pid \d+" "wm abriu um terminal com o sh dentro"
     Expect $d "wm: lancou monitor \(pid \d+\)[\s\S]*?wm: app abriu a janela \d+ \(640x470, 'monitor'\)" "Ctrl\+P abre o monitor (app)"

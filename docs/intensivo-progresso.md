@@ -28,22 +28,22 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 05:40, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+Estado (2026-10-19, 06:15, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
 `v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.6 (apps `imgview`, `monitor`,
 `arquivos`, `editor`, `config` e `terminal`) e 6.7 (barra de tarefas,
 Alt+Tab, minimizar e maximizar, lancador de apps): Fase 6 inteira; e a
-parte 1 da 5.2 (MSI, AHCI por interrupcao). Versao 2.4.0-a15. O
+5.2 (MSI: AHCI na CPU 1, rede `e1000e` na CPU 2). Versao 2.4.0-a16. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e
-na ISO na F, com 484 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+na ISO na F, com 486 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.2 parte 2, rede por MSI (`e1000e`, 82574L, no mesmo driver
-da `e1000`, com a IRQ em outra CPU); depois 5.3 a 5.9. Versao 2.4.0-a16 em
-diante.
+Proxima etapa: 5.3, virtio-blk e virtio-net (transporte PCI moderno, filas,
+MSI-X), em partes; criterio: a regressao roda nos dois modos. Depois 5.4 a
+5.9. Versao 2.4.0-a17 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -106,7 +106,7 @@ mandar o resultado do teste.
 | 4.3 | SMEP e SMAP | [x] | 05:28 | 05:55 | ver `git log` |
 | 4.4 | ASLR basico | [x] | 05:55 | 06:26 | ver `git log` (tag `v2.3`) |
 | 5.1 | uACPI | [x] | 10:14 | 11:05 | ver `git log` |
-| 5.2 | MSI/MSI-X | [~] | 04:20 | | |
+| 5.2 | MSI/MSI-X | [x] | 04:20 | 06:15 | ver `git log` (2 partes) |
 | 5.3 | virtio-blk e virtio-net | [ ] | | | |
 | 5.4 | NVMe | [ ] | | | |
 | 5.5 | xHCI | [ ] | | | |
@@ -1344,6 +1344,21 @@ anotado: o teste mede logo depois do ultimo `unlink`, sem esperar a
 `kreclaim`.
 Ficou de fora: MSI-X (vem com o virtio da 5.3), mais de uma mensagem MSI por
 dispositivo, afinidade de IRQ configuravel.
+
+#### 5.2 parte 2 Rede por MSI - 05:40 a 06:15 - FEITO (fecha a 5.2)
+O driver da `e1000` tenta MSI antes da GSI do `_PRT`; a `e1000e` (82574L,
+`8086:10d3`) funciona com o mesmo driver (descritores legados, MAC em
+RAL/RAH) e tem MSI. O QEMU dos testes passou a usar a `e1000e` (`-Nic` no
+`test.ps1`, `--nic` no `qrun.py`, lido por sequencia no `regress.py`); a
+sequencia D roda com a `e1000` antiga para ela continuar coberta pela GSI do
+`_PRT`. Criterio: a rede liga a MSI no vetor 129 entregue na CPU 2 e, depois
+do trafego da sequencia A, o `/proc/interrupts` tem a `e1000` so na CPU 2 (a
+AHCI segue na CPU 1); a D faz o DHCP pela `e1000` sem MSI. Regressao 484 ->
+486, verde na primeira rodada completa (28 minutos); estresse 5x verde.
+Versao 2.4.0-a16. RAM livre antes da regressao: 6,3 GB.
+Problemas: nenhum; a `e1000e` funcionou de primeira com o driver da `e1000`.
+Ficou de fora: recursos proprios da 82574L (descritores estendidos, MSI-X
+com uma fila por causa, checksum na placa).
 
 ### Sessao 2 - 2026-10-17
 
