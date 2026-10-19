@@ -20,17 +20,20 @@
 int32_t xhci_start(uint8_t *mmio, bool irq);
 void xhci_irq(void);
 int32_t xhci_msc_test_stall(uint32_t disk);
+int32_t xhci_msc_test_timeout(uint32_t disk);
+void xhci_msc_release(uint32_t disk);
 size_t xhci_report(uint8_t *buf, size_t cap);
 int32_t xhci_hid_count(void);
 void xhci_poll(void);
 bool xhci_msc_read(uint32_t disk, uint64_t lba, uint32_t count, uint8_t *buf);
 bool xhci_msc_write(uint32_t disk, uint64_t lba, uint32_t count, const uint8_t *buf);
 
-#define USB_DISKS 4
+#define USB_DISKS 16
 
 struct usb_disk {
     uint32_t index;
     bool used;
+    struct blockdev *dev;
     char name[BLOCK_NAME_MAX];
     struct mutex lock;
     char lock_name[12];
@@ -55,6 +58,11 @@ void *usb_dma_alloc(size_t pages, uint64_t *phys)
     memset(v, 0, pages * PAGE_SIZE);
     *phys = p;
     return v;
+}
+
+void usb_dma_free(uint64_t phys, size_t pages)
+{
+    pmm_free_pages(phys, pages);
 }
 
 uint64_t usb_now_us(void)
@@ -148,10 +156,29 @@ static bool msc_write(struct blockdev *dev, uint64_t lba, uint32_t count, const 
     return ok;
 }
 
+static void msc_release(struct blockdev *dev)
+{
+    struct usb_disk *d = dev->priv;
+    xhci_msc_release(d->index);
+    d->dev = NULL;
+}
+
+void usb_disk_gone(uint32_t index)
+{
+    if (index >= USB_DISKS || !disks[index].dev)
+        return;
+    struct usb_disk *d = &disks[index];
+    d->used = false;
+    log_warn("usb", "%s: pendrive desconectado; leitura e escrita passam a dar EIO", d->name);
+    blockdev_remove(d->dev);
+}
+
 void usb_disk_add(uint32_t index, uint64_t blocks, const uint8_t *name, size_t len)
 {
-    if (index >= USB_DISKS)
+    if (index >= USB_DISKS) {
+        log_warn("usb", "pendrive %u ignorado: so cabem %u registros de pendrive por boot", index, USB_DISKS);
         return;
+    }
     char dev_name[BLOCK_NAME_MAX];
     for (char c = 'a'; c <= 'z'; c++) {
         ksnprintf(dev_name, sizeof(dev_name), "sd%c", c);
@@ -165,6 +192,8 @@ void usb_disk_add(uint32_t index, uint64_t blocks, const uint8_t *name, size_t l
     struct blockdev *dev = blockdev_register(dev_name, 512, blocks, msc_read, msc_write, d);
     if (!dev)
         return;
+    dev->release = msc_release;
+    d->dev = dev;
     d->used = true;
     ksnprintf(d->name, sizeof(d->name), "%s", dev_name);
     log_info("usb", "%s: pendrive '%.*s', %lu setores (%lu MiB)", dev_name, (int)len, (const char *)name, blocks,
@@ -172,18 +201,28 @@ void usb_disk_add(uint32_t index, uint64_t blocks, const uint8_t *name, size_t l
     blockdev_scan_partitions(dev);
 }
 
-int usb_test_stall(const char *name)
+static int run_test(const char *name, int32_t (*test)(uint32_t))
 {
     for (uint32_t i = 0; i < USB_DISKS; i++) {
         struct usb_disk *d = &disks[i];
         if (!d->used || strcmp(d->name, name) != 0)
             continue;
         mutex_lock(&d->lock);
-        int r = xhci_msc_test_stall(d->index);
+        int r = test(d->index);
         mutex_unlock(&d->lock);
         return r;
     }
     return -1;
+}
+
+int usb_test_stall(const char *name)
+{
+    return run_test(name, xhci_msc_test_stall);
+}
+
+int usb_test_timeout(const char *name)
+{
+    return run_test(name, xhci_msc_test_timeout);
 }
 
 static void xhci_irq_handler(struct interrupt_frame *frame, void *ctx)
@@ -238,7 +277,7 @@ bool usb_init(void)
     present = n >= 0;
     if (present)
         log_info("usb", "%d dispositivo(s) USB", n);
-    if (present && (xhci_hid_count() > 0 || !irq_on))
+    if (present)
         thread_create("usbd", poll_thread, NULL);
     return present;
 }

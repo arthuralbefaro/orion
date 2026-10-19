@@ -94,6 +94,11 @@ static uint32_t fat_next(struct fat_fs *fs, uint32_t cluster)
     }
 }
 
+static int no_space(struct fat_fs *f)
+{
+    return blockdev_is_gone(f->dev) ? -EIO : -ENOSPC;
+}
+
 static bool cluster_ok(struct fat_fs *f, uint32_t c)
 {
     return c >= 2 && c < f->total_clusters + 2;
@@ -381,6 +386,8 @@ static int fat_lookup(struct vnode *dir, const char *name, struct vnode **out)
     int r = -ENOENT;
     if (!dir->unlinked && find_entry(f, dn->first, name, &l))
         r = vnode_for_entry(dir->mnt, f, dn->first, &l, dotdot, out);
+    else if (blockdev_is_gone(f->dev))
+        r = -EIO;
     mutex_unlock(&f->lock);
     return r;
 }
@@ -1024,7 +1031,7 @@ static int64_t write_locked(struct fat_fs *f, struct vnode *v, uint64_t offset, 
         if (!cluster_ok(f, n->first)) {
             uint32_t head = chain_extend(f, 0);
             if (!head) {
-                err = -ENOSPC;
+                err = no_space(f);
                 break;
             }
             n->first = head;
@@ -1042,7 +1049,7 @@ static int64_t write_locked(struct fat_fs *f, struct vnode *v, uint64_t offset, 
             c = chain_nth(f, n->first, index, true);
         }
         if (!c) {
-            err = -ENOSPC;
+            err = no_space(f);
             break;
         }
         cur = c;
@@ -1107,7 +1114,7 @@ static int64_t fat_write(struct vnode *v, uint64_t *offp, const void *buf, uint6
         uint64_t gap = offset - v->size;
         int64_t z = write_locked(f, v, v->size, NULL, gap);
         if (z < (int64_t)gap)
-            r = z < 0 ? z : -ENOSPC;
+            r = z < 0 ? z : no_space(f);
     }
     if (r == 0)
         r = write_locked(f, v, offset, buf, len);
@@ -1134,7 +1141,7 @@ static int fat_truncate(struct vnode *v, uint64_t size)
         uint64_t gap = size - v->size;
         int64_t w = write_locked(f, v, v->size, NULL, gap);
         if (w < (int64_t)gap)
-            r = w < 0 ? (int)w : -ENOSPC;
+            r = w < 0 ? (int)w : no_space(f);
     } else if (size == 0) {
         if (cluster_ok(f, n->first))
             fat_free_chain(f, n->first);
@@ -1317,7 +1324,7 @@ static int fat_create(struct vnode *dir, const char *name, uint32_t mode, struct
         cluster = chain_extend(f, 0);
         if (!cluster) {
             mutex_unlock(&f->lock);
-            return -ENOSPC;
+            return no_space(f);
         }
         struct fat_dirent dot;
         dirent_now(&dot, ATTR_DIR, cluster);
@@ -1342,7 +1349,7 @@ static int fat_create(struct vnode *dir, const char *name, uint32_t mode, struct
             fat_free_chain(f, cluster);
         fat_flush(f);
         mutex_unlock(&f->lock);
-        return -ENOSPC;
+        return no_space(f);
     }
     bool flushed = fat_flush(f);
     int r = is_dir ? make_vnode(dir->mnt, dir_key(cluster), S_IFDIR | 0755, 0, cluster, dn->first, off, true, out)

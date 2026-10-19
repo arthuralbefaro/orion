@@ -28,14 +28,14 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 17:25, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+Estado (2026-10-19, 17:55, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
 `v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.6 (apps `imgview`, `monitor`,
 `arquivos`, `editor`, `config` e `terminal`) e 6.7 (barra de tarefas,
 Alt+Tab, minimizar e maximizar, lancador de apps): Fase 6 inteira; e a
 5.2 (MSI: AHCI na CPU 1, rede `e1000e` na CPU 2), a 5.3 (virtio-blk e
 virtio-net com MSI-X), a 5.4 (NVMe), a 5.5 (xHCI e `lsusb`, em Rust) e a
-5.6 (teclado e mouse USB, inclusive sem PS/2) e as partes 1 e 2 da 5.7
-(pendrive USB). Versao 2.4.0-a23. O
+5.6 (teclado e mouse USB, inclusive sem PS/2) e as partes 1 a 3 da 5.7
+(pendrive USB). Versao 2.4.0-a24. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
@@ -45,11 +45,11 @@ na ISO na F, no virtio (disco e rede) na V, no NVMe na N e com USB na U,
 com 526 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.7 parte 3, remocao do pendrive (requisito 6 logo abaixo
-das regras: disco morto com contagem de referencias, umount sem panico,
-Disable Slot, segundo plug por device_add, e o teste do prazo pelo
-device_del com o disco montado), e no fim dela a regressao completa da
-etapa 5.7; depois 5.8 (requisitos tambem abaixo) e 5.9. Versao 2.4.0-a24 em
+Proxima etapa: terminar a regressao completa da etapa 5.7 (comecada as
+17:44) e marcar o `[x]`; depois a 5.7 parte 4 (pedida pelo dono: o
+`usbstall` confere os dados lidos depois da recuperacao, e aviso no log,
+panico na regressao, para `kmalloc` ou funcao que dorme chamados dentro de
+interrupcao); depois 5.8 (requisitos abaixo) e 5.9. Versao 2.4.0-a25 em
 diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
@@ -1612,6 +1612,35 @@ mao e o resto feito pelo Edit.
 Nao exercitado por teste: a recusa de bloco de 4096 (o `usb-storage` do QEMU
 so tem 512) e o caminho do prazo estourado (vem na parte 3, pelo
 device_del).
+
+#### 5.7 parte 3 Remocao e segundo plug - 17:26 a 17:55 - FEITO
+Camada de blocos: contagem de referencias (montagem e arquivo aberto de
+`/dev/sdX`), `blockdev_remove` (marca disco e particoes, descarta o cache de
+setores dele, leitura e escrita falham antes do driver) e liberacao quando o
+ultimo usuario solta, com aviso ao driver. O FAT devolve EIO quando a falha
+vem de disco removido. xHCI: evento Port Status Change, tratado na thread
+`usbd`; na desconexao, disco morto, esperas do slot concluidas na hora,
+pipes HID retirados, `Disable Slot`, DCBAA zerada e memoria devolvida (a do
+pendrive so quando a camada de blocos libera); na conexao, a mesma
+enumeracao do boot. Comando `usbtimeout sdX` (cala a campainha de uma
+transferencia) para exercitar o prazo estourado. O despachante, que roda na
+interrupcao, deixou de alocar memoria no caminho do teclado (vetor reservado
+no pipe HID); isso devia ter vindo na parte 2. Detalhes:
+`docs/DECISOES.md`, v2.4.0-a24.
+Verificacao: sequencia U, 54 verificacoes, verde (eram 38): `device_del` do
+pendrive montado (EIO na leitura e na escrita, `lsusb` sem ele, `umount` sem
+panico liberando o disco, shell respondendo), `device_add` (volta como `sdc`
+e monta com os dois arquivos), prazo de 5 s estourado com EIO imediato
+depois e teclado USB funcionando em seguida. Versao 2.4.0-a24. RAM livre
+antes da sequencia U: 6,3 GB. A regressao completa da etapa (fecho da 5.7)
+comecou as 17:44, com 6,4 GB livres; o commit desta parte saiu antes dela
+terminar, a pedido do dono, porque o commit nao mexe nos arquivos de
+trabalho.
+Problemas: (1) no QEMU o `device_del` e percebido pela porta antes do prazo,
+entao o prazo estourado e exercitado pelo `usbtimeout`, e nao pela remocao.
+(2) O QEMU apaga o `-drive` junto com o dispositivo no `device_del`; o
+segundo pendrive passou a usar `-blockdev`, que sobrevive, para o
+`device_add` ter o que ligar.
 
 ### Sessao 2 - 2026-10-17
 

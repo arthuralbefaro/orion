@@ -184,13 +184,13 @@ class Machine:
             if not stick.exists():
                 with open(stick, "wb") as f:
                     f.truncate(16 * 1024 * 1024)
-            args += ["-drive", "if=none,id=stick,format=raw,file=out/stick.img", "-device", "usb-storage,bus=xhci.0,drive=stick"]
+            args += ["-drive", "if=none,id=stick,format=raw,file=out/stick.img", "-device", "usb-storage,bus=xhci.0,drive=stick,id=pen1"]
         if self.usb and self.usb_fat:
             if not (OUT / "stick2.img").exists():
                 subprocess.run([sys.executable, str(ROOT / "tools" / "mkfat.py"), "cria", str(OUT / "stick2.img"),
                                 "--tamanho", "16", "--rotulo", "HOSPEDE", "--texto", "LEIAME.TXT=criado-no-hospedeiro"],
                                check=True, stdout=subprocess.DEVNULL)
-            args += ["-drive", "if=none,id=stick2,format=raw,file=out/stick2.img", "-device", "usb-storage,bus=xhci.0,drive=stick2"]
+            args += ["-blockdev", "driver=raw,node-name=stick2,file.driver=file,file.filename=out/stick2.img", "-device", "usb-storage,bus=xhci.0,drive=stick2,id=pen2"]
         if self.disk:
             args += ["-drive", "format=raw,file=out/disk.img"]
         for extra in self.extra_disks:

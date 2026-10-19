@@ -3141,3 +3141,56 @@ O que mudou na 5.7 e por que:
   arquivo de volta com o mesmo `mkfat.py`. O xHCI do QEMU passou a ter 8
   portas USB 2 e 8 USB 3 (`p2=8,p3=8`): com 4 portas, o quarto dispositivo
   faz o QEMU pendurar um hub automatico, e hub ainda nao tem driver.
+
+## v2.4.0-a24 (etapa 5.7 parte 3: remocao e segundo plug)
+
+- Disco que some. A camada de blocos ganhou contagem de referencias
+  (`blockdev_get`/`blockdev_put`): cada montagem e cada arquivo aberto de
+  `/dev/sdX` seguram o disco (ou a particao). `blockdev_remove` marca o disco
+  e as particoes como removidos, descarta o cache de setores dele (contando os
+  setores sujos perdidos, porque nao ha mais onde grava-los) e, dali em diante,
+  toda leitura e escrita falha antes de chegar ao driver. O disco removido some
+  do `/dev`, do `/proc/diskstats` e da busca da raiz, mas a entrada continua
+  existindo, com o nome reservado, ate o ultimo usuario soltar; ai ela e dada
+  como liberada, o nome fica livre e o driver e avisado (`release`) para soltar
+  a memoria dele. Como o `umount` ja ignorava erro de sincronizacao, desmontar
+  o pendrive removido funciona: as escritas pendentes falham e a montagem sai.
+- As entradas da tabela de discos nao sao reaproveitadas (o indice vira o
+  inode no `/dev`, e uma entrada nova com o mesmo inode poderia casar com um
+  vnode velho no cache); o limite subiu de 16 para 32 entradas, o que da para
+  varios plugs por boot. Do lado do USB cabem 16 registros de pendrive por
+  boot.
+- O FAT devolve EIO, e nao "sem espaco" nem "inexistente", quando a falha
+  vem de disco removido (`blockdev_is_gone`).
+- Remocao no xHCI. O evento Port Status Change acende um bit no despachante;
+  a thread `usbd` (que agora sempre roda) le os bits, reconhece a mudanca de
+  conexao, confirma os bits de mudanca da porta e, com a trava do controlador:
+  marca o dispositivo como removido, o disco como morto, conclui com "sumiu"
+  as esperas daquele slot (quem esperava acorda na hora, sem esperar o prazo),
+  tira os pipes HID do despachante, manda `Disable Slot`, zera a entrada do
+  DCBAA e devolve a memoria do endpoint 0, dos contextos e dos pipes HID. A
+  memoria do pendrive (aneis bulk e buffers) so volta quando a camada de
+  blocos libera o disco, porque ate la pode haver uma leitura em andamento
+  usando o buffer. O aviso a camada de blocos (`usb_disk_gone`) vem depois de
+  soltar a trava do controlador: quem segura o cache de setores pode estar
+  esperando essa trava, e a remocao precisa do cache.
+- Conexao nova (o mesmo caminho do boot: reset da porta, Enable Slot, Address
+  Device, descritores, HID ou Bulk-Only) roda na thread `usbd`. No boot, os
+  bits de mudanca de todas as portas sao confirmados depois da enumeracao;
+  senao uma porta vazia com o bit de conexao ja aceso nunca mais gera evento.
+- Teste do prazo: o comando `usbtimeout sdX` do shell do kernel enfileira a
+  proxima transferencia sem tocar a campainha, o que simula um pendrive que
+  nao responde. No QEMU o `device_del` e percebido pela porta antes do prazo
+  (as esperas do slot terminam como "sumiu"), entao o caminho do prazo
+  estourado so e exercitado assim.
+- Interrupcao sem alocacao: os eventos de tecla agora vao para um vetor
+  reservado no pipe HID, porque o despachante roda na interrupcao e nao deve
+  chamar o alocador do kernel ali.
+- Teste: na sequencia U o pendrive do hospedeiro e montado, removido com
+  `device_del` (leitura e escrita dao EIO, o `lsusb` perde o dispositivo, o
+  `umount` funciona e libera o disco, o shell segue respondendo), ligado de
+  novo com `device_add` (volta como `sdc` e monta com os dois arquivos), e o
+  `usbtimeout` estoura o prazo de 5 s com o teclado funcionando depois. O
+  segundo pendrive usa `-blockdev` em vez de `-drive`, porque o QEMU apaga o
+  `-drive` junto com o dispositivo no `device_del` e o `device_add` nao teria
+  o que ligar.

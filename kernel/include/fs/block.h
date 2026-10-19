@@ -3,7 +3,7 @@
 #include <kernel/compiler.h>
 
 #define BLOCK_NAME_MAX 16
-#define BLOCK_MAX_DEVICES 16
+#define BLOCK_MAX_DEVICES 32
 #define BLOCK_CACHE_ENTRIES 256
 #define BLOCK_SECTOR 512
 
@@ -28,6 +28,10 @@ struct blockdev {
     uint64_t rd_sectors;
     uint64_t wr_ios;
     uint64_t wr_sectors;
+    uint32_t refs;
+    bool gone;
+    bool released;
+    void (*release)(struct blockdev *dev);
 };
 
 #define PART_OTHER 0
@@ -44,6 +48,11 @@ bool blockdev_write(struct blockdev *dev, uint64_t lba, uint32_t count, const vo
 bool blockdev_sync(void);
 bool blockdev_writable(const struct blockdev *dev);
 void blockdev_cache_init(void);
+
+void blockdev_get(struct blockdev *dev);
+void blockdev_put(struct blockdev *dev);
+void blockdev_remove(struct blockdev *disk);
+bool blockdev_is_gone(struct blockdev *dev);
 
 struct blockdev *blockdev_find(const char *name);
 struct blockdev *blockdev_at(uint32_t index);

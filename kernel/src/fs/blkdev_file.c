@@ -64,9 +64,15 @@ static int64_t blk_write(struct file *f, const void *buf, uint64_t len)
     return ret;
 }
 
+static void blk_close(struct file *f)
+{
+    blockdev_put(f->priv);
+}
+
 static const struct file_ops blk_ops = {
     .read = blk_read,
     .write = blk_write,
+    .close = blk_close,
 };
 
 struct file *blkdev_file_open(struct blockdev *dev)
@@ -74,6 +80,7 @@ struct file *blkdev_file_open(struct blockdev *dev)
     struct file *f = file_alloc(&blk_ops, dev);
     if (!f)
         return NULL;
+    blockdev_get(dev);
     f->mode = S_IFBLK | 0600;
     return f;
 }

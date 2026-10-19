@@ -1019,7 +1019,16 @@ if ($runAll -or $OnlyU) {
         "cmd:echo ola-do-pendrive > /tmp/pen/nota.txt", "cmd:cp /bin/hello /tmp/pen/h", "wait:2",
         "cmd:umount /tmp/pen", "wait:1", "cmd:mount -t vfat /dev/sdb /tmp/pen", "wait:1",
         "cmd:cat /tmp/pen/nota.txt", "cmd:/tmp/pen/h pendrive", "wait:2", "cmd:cat /proc/mounts", "wait:1",
-        "cmd:umount /tmp/pen", "wait:1", "cmd:cat /proc/interrupts", "wait:1"
+        "cmd:umount /tmp/pen", "wait:1",
+        "cmd:mkdir /tmp/fat", "cmd:mount -t vfat /dev/sdc /tmp/fat", "wait:1", "cmd:cat /tmp/fat/NOVO.TXT",
+        "mon:device_del pen2", "wait:3",
+        "cmd:cat /tmp/fat/LEIAME.TXT", "cmd:echo depois > /tmp/fat/DEPOIS.TXT", "wait:1", "cmd:lsusb", "wait:1",
+        "cmd:umount /tmp/fat", "wait:2", "cmd:echo shell-vivo",
+        "mon:device_add usb-storage,bus=xhci.0,drive=stick2,id=pen2", "until:20:conectado 46f4", "wait:3",
+        "cmd:mount -t vfat /dev/sdc /tmp/fat", "wait:1", "cmd:ls /tmp/fat", "cmd:umount /tmp/fat", "wait:1",
+        "key:0B", "cmd:usbtimeout sdb", "until:15:usbtimeout: sdb", "key:0B",
+        "cmd:evtest 5", "wait:0.8", "mon:sendkey b", "until:10:evento(s)",
+        "cmd:cat /proc/interrupts", "wait:1"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Usb -UsbDisk -UsbFat -NoPs2 -LogPath "out\reg-u.log" `
         -Script $stepsU -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
@@ -1047,7 +1056,23 @@ if ($runAll -or $OnlyU) {
     Expect $u "usb\s+teste: depois da recuperacao TEST UNIT READY ok e READ\(10\) do setor 0 ok" "depois do STALL a transferencia seguinte funciona"
     Expect $u "usb\s+comando SCSI 0x28 falhou: sense chave 0x5, ASC 0x21, ASCQ 0x00" "CSW com status 1 leva ao REQUEST SENSE e o sense vai para o log"
     Expect $u "usbstall: sdb travou com STALL, foi recuperado, voltou a ler e o sense chegou" "usbstall termina bem"
-    ExpectNot $u "usb\s+.*sem resposta no prazo" "nenhuma transferencia ou comando do xHCI estourou o prazo"
+    ExpectNot $u "(?s)sem resposta no prazo.*usbtimeout sdb" "nenhum prazo estourou antes do teste de prazo"
+    ExpectNot $u "comando do xHCI sem resposta no prazo|transferencia de controle sem resposta no prazo" "nenhum comando do xHCI nem transferencia de controle estourou o prazo"
+    Expect $u "usb\s+porta \d+: dispositivo removido, Disable Slot do slot \d+ ok" "device_del: o slot do pendrive e desabilitado (Disable Slot)"
+    Expect $u "usb\s+sdc: pendrive desconectado" "device_del: o pendrive montado e dado como desconectado"
+    Expect $u "block\s+sdc: disco removido, \d+ setor\(es\) sujo\(s\) descartado\(s\), 1 usuario\(s\) ainda com ele" "o disco removido continua existindo enquanto esta montado"
+    Expect $u "cat /tmp/fat/LEIAME\.TXT\s*\ncat: /tmp/fat/LEIAME\.TXT: Erro de entrada/saida" "leitura no pendrive removido devolve EIO"
+    Expect $u "echo depois > /tmp/fat/DEPOIS\.TXT\s*\nsh: /tmp/fat/DEPOIS\.TXT: Erro de entrada/saida" "escrita no pendrive removido devolve EIO"
+    Expect $u "(?s)DEPOIS\.TXT.*?\$ lsusb\s*\n(Porta[^\n]*\n){3}eventos" "lsusb sem o pendrive removido"
+    Expect $u "(?s)vfs\s+/dev/sdc desmontado de /tmp/fat.{0,300}?block\s+sdc: disco removido liberado, ninguem mais o usa" "umount do pendrive removido funciona e libera o disco"
+    Expect $u "(?s)disco removido liberado.*?\nshell-vivo" "o shell continua respondendo depois da remocao"
+    Expect $u "usb\s+porta \d+: conectado 46f4:0001 QEMU USB HARDDRIVE" "device_add: o segundo plug e reconhecido"
+    Expect $u "(?s)conectado 46f4:0001.*?usb\s+sdc: pendrive 'QEMU QEMU HARDDISK', 32768 setores" "o pendrive ligado de novo volta como sdc"
+    Expect $u "(?s)conectado 46f4:0001.*?ls /tmp/fat\s*\n[^\$]*LEIAME\.TXT[^\$]*NOVO\.TXT" "o pendrive ligado de novo monta com os arquivos"
+    Expect $u "usb\s+slot \d+: transferencia sem resposta no prazo, endpoint \d+ parado e fila avancada; o disco passa a responder EIO" "prazo estourado: Stop Endpoint e Set TR Dequeue"
+    Expect $u "usb\s+teste: com a campainha calada a leitura falhou em (4[5-9]\d\d|5\d\d\d) ms; a seguinte falhou em \d{1,2} ms" "prazo de 5 s e EIO imediato dali em diante"
+    Expect $u "usbtimeout: sdb estourou o prazo, foi cancelado e agora responde EIO" "usbtimeout termina bem"
+    Expect $u "(?s)usbtimeout: sdb estourou.*?tecla-desce\s+scancode=30 ascii=98" "o teclado USB segue funcionando depois do prazo estourado"
     Expect $u "(?s)\$ lsusb.*?ID 0627:0001 QEMU QEMU USB Keyboard \(USB 2\.00, [a-z ]+speed, classe hid\)" "lsusb mostra o teclado USB com as strings do dispositivo"
     Expect $u "(?s)\$ lsusb.*?ID 0627:0001 QEMU QEMU USB Mouse \(USB 2\.00, [a-z ]+speed, classe hid\)" "lsusb mostra o mouse USB"
     Expect $u "kbd\s+sem controlador PS/2" "a maquina sobe sem o controlador PS/2"

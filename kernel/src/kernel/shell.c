@@ -557,6 +557,23 @@ static void cmd_usbstall(const char *args)
         kprintf("usbstall: %s nao se recuperou (codigo %d)\n", args, r);
 }
 
+static void cmd_usbtimeout(const char *args)
+{
+    while (args && *args == ' ')
+        args++;
+    if (!args || !*args) {
+        kprintf("uso: usbtimeout sdX\n");
+        return;
+    }
+    int r = usb_test_timeout(args);
+    if (r == 0)
+        kprintf("usbtimeout: %s estourou o prazo, foi cancelado e agora responde EIO\n", args);
+    else if (r == -1)
+        kprintf("usbtimeout: %s nao e um pendrive USB\n", args);
+    else
+        kprintf("usbtimeout: %s nao se comportou como esperado (codigo %d)\n", args, r);
+}
+
 static void cmd_arp(const char *args)
 {
     (void)args;
@@ -632,6 +649,7 @@ static const struct command commands[] = {
     { "net",    "estado da rede",                       cmd_net },
     { "tcploss", "descarta 1 em N segmentos TCP (teste)", cmd_tcploss },
     { "usbstall", "forca um STALL no pendrive e recupera (teste)", cmd_usbstall },
+    { "usbtimeout", "cala a campainha de uma transferencia do pendrive (teste)", cmd_usbtimeout },
     { "arp",    "cache ARP",                            cmd_arp },
     { "ifconfig", "configura a rede a mao",             cmd_ifconfig },
     { "lsblk",  "discos e particoes",                   cmd_lsblk },

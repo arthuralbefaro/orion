@@ -127,7 +127,7 @@ static int devfs_lookup(struct vnode *dir, const char *name, struct vnode **out)
                                (void *)&devices[i], out);
     for (uint32_t i = 0; i < blockdev_count(); i++) {
         struct blockdev *b = blockdev_at(i);
-        if (strcmp(b->name, name) == 0)
+        if (b && strcmp(b->name, name) == 0)
             return devfs_vnode(dir->mnt, DEVFS_BLOCK_INO + i, S_IFBLK | 0600, blkdev_file_size(b), b,
                                out);
     }
@@ -148,6 +148,8 @@ static int devfs_readdir(struct vnode *dir, uint64_t *pos, vfs_dir_cb cb, void *
         } else {
             uint32_t bi = (uint32_t)(i - ARRAY_SIZE(devices));
             struct blockdev *b = blockdev_at(bi);
+            if (!b)
+                continue;
             strlcpy(e.name, b->name, sizeof(e.name));
             e.ino = DEVFS_BLOCK_INO + bi;
             e.mode = S_IFBLK | 0600;

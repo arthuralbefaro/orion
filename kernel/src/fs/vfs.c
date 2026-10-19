@@ -1358,6 +1358,8 @@ static void mount_free(struct mount *m)
     vnode_put(m->root);
     if (m->type->unmount)
         m->type->unmount(m);
+    if (m->dev)
+        blockdev_put(m->dev);
     mutex_deinit(&m->ns_lock);
     kfree(m);
 }
@@ -1397,6 +1399,8 @@ int vfs_mount(const struct fs_type *type, struct blockdev *dev, const char *sour
             mutex_deinit(&m->ns_lock);
             kfree(m);
             m = NULL;
+        } else if (m->dev) {
+            blockdev_get(m->dev);
         }
     }
     if (r == 0 && target) {
@@ -1536,7 +1540,7 @@ bool vfs_mount_extra(void)
     struct blockdev *root_dev = root_mount ? root_mount->dev : NULL;
     for (uint32_t i = 0; i < blockdev_count(); i++) {
         struct blockdev *dev = blockdev_at(i);
-        if (dev == root_dev || (root_dev && dev == root_dev->parent))
+        if (!dev || dev == root_dev || (root_dev && dev == root_dev->parent))
             continue;
         if (root_dev && dev->parent && dev->parent == root_dev->parent)
             continue;
@@ -1565,7 +1569,7 @@ void vfs_init(void)
         return;
     for (uint32_t i = 0; i < blockdev_count() && !root_mount; i++) {
         struct blockdev *dev = blockdev_at(i);
-        if (!dev->parent || dev->part_kind != PART_ROOT)
+        if (!dev || !dev->parent || dev->part_kind != PART_ROOT)
             continue;
         char src[VFS_SOURCE_MAX];
         ksnprintf(src, sizeof(src), "/dev/%s", dev->name);
@@ -1576,7 +1580,7 @@ void vfs_init(void)
     }
     for (uint32_t i = 0; i < blockdev_count() && !root_mount; i++) {
         struct blockdev *dev = blockdev_at(i);
-        if (!dev->parent)
+        if (!dev || !dev->parent)
             continue;
         char src[VFS_SOURCE_MAX];
         ksnprintf(src, sizeof(src), "/dev/%s", dev->name);
@@ -1591,7 +1595,7 @@ void vfs_init(void)
         return;
     for (uint32_t i = 0; i < blockdev_count(); i++) {
         struct blockdev *dev = blockdev_at(i);
-        if (dev->part_kind != PART_ESP || dev->parent != root_mount->dev->parent)
+        if (!dev || dev->part_kind != PART_ESP || dev->parent != root_mount->dev->parent)
             continue;
         char src[VFS_SOURCE_MAX];
         ksnprintf(src, sizeof(src), "/dev/%s", dev->name);

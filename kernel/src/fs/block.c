@@ -2,12 +2,14 @@
 #include <kernel/log.h>
 #include <kernel/sched.h>
 #include <kernel/mutex.h>
+#include <kernel/spinlock.h>
 #include <mm/heap.h>
 #include <lib/string.h>
 #include <lib/crc32.h>
 
 static struct blockdev devices[BLOCK_MAX_DEVICES];
 static uint32_t device_count;
+static spinlock_t reg_lock = SPINLOCK_INIT;
 
 struct cache_entry {
     struct blockdev *dev;
@@ -26,9 +28,12 @@ static uint64_t stat_hits, stat_misses, stat_writes;
 struct blockdev *blockdev_register(const char *name, uint32_t sector_size, uint64_t sector_count,
                                    blockdev_read_fn read, blockdev_write_fn write, void *priv)
 {
-    if (device_count >= BLOCK_MAX_DEVICES)
+    uint64_t flags = spin_lock_irqsave(&reg_lock);
+    if (device_count >= BLOCK_MAX_DEVICES) {
+        spin_unlock_irqrestore(&reg_lock, flags);
         return NULL;
-    struct blockdev *d = &devices[device_count++];
+    }
+    struct blockdev *d = &devices[device_count];
     memset(d, 0, sizeof(*d));
     strlcpy(d->name, name, sizeof(d->name));
     d->sector_size = sector_size;
@@ -36,7 +41,82 @@ struct blockdev *blockdev_register(const char *name, uint32_t sector_size, uint6
     d->read = read;
     d->write = write;
     d->priv = priv;
+    __atomic_store_n(&device_count, device_count + 1, __ATOMIC_RELEASE);
+    spin_unlock_irqrestore(&reg_lock, flags);
     return d;
+}
+
+static struct blockdev *base_of(struct blockdev *dev)
+{
+    while (dev->parent)
+        dev = dev->parent;
+    return dev;
+}
+
+static bool idle_locked(const struct blockdev *base)
+{
+    if (!base->gone || base->released || base->refs)
+        return false;
+    for (uint32_t i = 0; i < device_count; i++)
+        if (devices[i].parent == base && devices[i].refs)
+            return false;
+    return true;
+}
+
+static uint32_t cache_drop(struct blockdev *base);
+
+static void release_if_idle(struct blockdev *base)
+{
+    uint64_t flags = spin_lock_irqsave(&reg_lock);
+    bool idle = idle_locked(base);
+    if (idle) {
+        base->released = true;
+        for (uint32_t i = 0; i < device_count; i++)
+            if (devices[i].parent == base)
+                devices[i].released = true;
+    }
+    spin_unlock_irqrestore(&reg_lock, flags);
+    if (!idle)
+        return;
+    cache_drop(base);
+    log_info("block", "%s: disco removido liberado, ninguem mais o usa", base->name);
+    if (base->release)
+        base->release(base);
+}
+
+bool blockdev_is_gone(struct blockdev *dev)
+{
+    return base_of(dev)->gone;
+}
+
+void blockdev_get(struct blockdev *dev)
+{
+    __atomic_add_fetch(&dev->refs, 1, __ATOMIC_ACQ_REL);
+}
+
+void blockdev_put(struct blockdev *dev)
+{
+    __atomic_sub_fetch(&dev->refs, 1, __ATOMIC_ACQ_REL);
+    release_if_idle(base_of(dev));
+}
+
+void blockdev_remove(struct blockdev *disk)
+{
+    uint32_t users = 0;
+    uint64_t flags = spin_lock_irqsave(&reg_lock);
+    disk->gone = true;
+    users += disk->refs;
+    for (uint32_t i = 0; i < device_count; i++) {
+        if (devices[i].parent == disk) {
+            devices[i].gone = true;
+            users += devices[i].refs;
+        }
+    }
+    spin_unlock_irqrestore(&reg_lock, flags);
+    uint32_t dirty = cache_drop(disk);
+    log_warn("block", "%s: disco removido, %u setor(es) sujo(s) descartado(s), %u usuario(s) ainda com ele", disk->name,
+             dirty, users);
+    release_if_idle(disk);
 }
 
 bool blockdev_writable(const struct blockdev *dev)
@@ -57,6 +137,8 @@ static struct blockdev *resolve(struct blockdev *dev, uint64_t *lba)
 
 static bool raw_read(struct blockdev *base, uint64_t lba, uint32_t count, void *buf)
 {
+    if (base->gone)
+        return false;
     __atomic_add_fetch(&base->rd_ios, 1, __ATOMIC_RELAXED);
     __atomic_add_fetch(&base->rd_sectors, count, __ATOMIC_RELAXED);
     return base->read && base->read(base, lba, count, buf);
@@ -64,6 +146,8 @@ static bool raw_read(struct blockdev *base, uint64_t lba, uint32_t count, void *
 
 static bool raw_write(struct blockdev *base, uint64_t lba, uint32_t count, const void *buf)
 {
+    if (base->gone)
+        return false;
     __atomic_add_fetch(&base->wr_ios, 1, __ATOMIC_RELAXED);
     __atomic_add_fetch(&base->wr_sectors, count, __ATOMIC_RELAXED);
     return base->write && base->write(base, lba, count, buf);
@@ -92,6 +176,24 @@ static struct cache_entry *cache_victim(void)
         best->dirty = false;
     }
     return best;
+}
+
+static uint32_t cache_drop(struct blockdev *base)
+{
+    uint32_t dirty = 0;
+    if (!cache)
+        return 0;
+    mutex_lock(&cache_lock);
+    for (uint32_t i = 0; i < BLOCK_CACHE_ENTRIES; i++) {
+        if (!cache[i].valid || cache[i].dev != base)
+            continue;
+        if (cache[i].dirty)
+            dirty++;
+        cache[i].valid = false;
+        cache[i].dirty = false;
+    }
+    mutex_unlock(&cache_lock);
+    return dirty;
 }
 
 static bool range_has_dirty(struct blockdev *base, uint64_t lba, uint32_t count)
@@ -172,7 +274,7 @@ bool blockdev_write(struct blockdev *dev, uint64_t lba, uint32_t count, const vo
         return false;
     uint64_t abs = lba;
     struct blockdev *base = resolve(dev, &abs);
-    if (!base->write)
+    if (!base->write || base->gone)
         return false;
     if (base->sector_size != BLOCK_SECTOR || !cache)
         return raw_write(base, abs, count, buf);
@@ -241,20 +343,24 @@ void blockdev_cache_init(void)
 
 struct blockdev *blockdev_find(const char *name)
 {
-    for (uint32_t i = 0; i < device_count; i++)
-        if (strcmp(devices[i].name, name) == 0)
+    uint32_t n = __atomic_load_n(&device_count, __ATOMIC_ACQUIRE);
+    for (uint32_t i = 0; i < n; i++)
+        if (!devices[i].released && strcmp(devices[i].name, name) == 0)
             return &devices[i];
     return NULL;
 }
 
 struct blockdev *blockdev_at(uint32_t index)
 {
-    return index < device_count ? &devices[index] : NULL;
+    if (index >= __atomic_load_n(&device_count, __ATOMIC_ACQUIRE))
+        return NULL;
+    struct blockdev *d = &devices[index];
+    return d->gone || d->released ? NULL : d;
 }
 
 uint32_t blockdev_count(void)
 {
-    return device_count;
+    return __atomic_load_n(&device_count, __ATOMIC_ACQUIRE);
 }
 
 #define GPT_MAX_ENTRY_BYTES (256u * 1024)
@@ -446,6 +552,8 @@ void blockdev_dump(void)
     kprintf("  nome    setores      tamanho    tipo\n");
     for (uint32_t i = 0; i < device_count; i++) {
         struct blockdev *d = &devices[i];
+        if (d->gone || d->released)
+            continue;
         if (d->parent && d->part_type == PART_GPT) {
             kprintf("  %-6s  %10lu  %7lu MiB  gpt %s\n", d->name, d->sector_count,
                     d->sector_count * d->sector_size / MiB(1), kind_name(d->part_kind));
