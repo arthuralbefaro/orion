@@ -138,6 +138,7 @@ Fecha o que ficou aberto e tira os riscos que derrubam o kernel hoje.
 | 5.7 | USB parte 3: armazenamento em massa (pendrive) | M | montar um pendrive FAT |
 | 5.8 | **Audio HDA** + `/dev/dsp`; `play` toca um WAV; Doom ganha som | M | `play` no QEMU com `-device intel-hda` |
 | 5.9 | Video: **Bochs/BGA** e **virtio-gpu** para trocar de resolucao | M | `fbset 1920x1080` muda a tela |
+| 5.10 | USB parte 4 (extra, decidido em 2026-10-19): **hub USB 2** basico (descritor do hub, energia, reset e estado das portas, endpoint de mudanca de estado, contexto do slot com Hub, numero de portas, route string e TT para dispositivos full/low speed atras de hub high speed); hub USB 3 fica para depois | M | teclado e pendrive atras de `-device usb-hub` no QEMU funcionam |
 
 ## Fase 6 - Desktop (v2.5) -> marco M4
 

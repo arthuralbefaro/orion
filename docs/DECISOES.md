@@ -3194,3 +3194,13 @@ O que mudou na 5.7 e por que:
   segundo pendrive usa `-blockdev` em vez de `-drive`, porque o QEMU apaga o
   `-drive` junto com o dispositivo no `device_del` e o `device_add` nao teria
   o que ligar.
+- Sem suporte a hub USB (registrado em 2026-10-19). Dispositivo atras de um
+  hub nao e visto: o hub aparece no `lsusb` com a classe "hub", mas as portas
+  dele nao sao ligadas nem enumeradas. Isso inclui hub externo, teclado ou
+  monitor com hub embutido e o hub interno de muitos notebooks (webcam,
+  Bluetooth e leitor de cartao costumam ficar atras dele; as portas externas
+  em geral vao direto no xHCI). Decisao: suporte basico a hub USB 2 entra como
+  parte extra da Fase 5 (5.10, depois da 5.9 e antes da 7.3), porque o teste
+  em hardware real (7.4) depende de teclado, e teclado atras de hub e comum;
+  hub USB 3 (o lado SuperSpeed) fica para depois. Ate la, o roteiro do teste
+  em hardware real manda ligar teclado e pendrive direto numa porta do PC.

@@ -46,11 +46,15 @@ com 526 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
 Proxima etapa: terminar a regressao completa da etapa 5.7 (comecada as
-17:44) e marcar o `[x]`; depois a 5.7 parte 4 (pedida pelo dono: o
-`usbstall` confere os dados lidos depois da recuperacao, e aviso no log,
-panico na regressao, para `kmalloc` ou funcao que dorme chamados dentro de
-interrupcao); depois 5.8 (requisitos abaixo) e 5.9. Versao 2.4.0-a25 em
-diante.
+17:44) e marcar o `[x]`; depois a parte curta "regressao mais rapida"
+(pedida pelo dono, ate 45 min: medir o tempo de cada sequencia e de cada
+espera, trocar esperas fixas por `until:` com prazo maximo, juntar boots
+repetidos sem perder verificacao, nenhuma verificacao a menos, tempo antes e
+depois no diario); depois a 5.7 parte 4 (o `usbstall` confere os dados lidos
+depois da recuperacao, e aviso no log, panico na regressao, para `kmalloc` ou
+funcao que dorme chamados dentro de interrupcao; mexe no nucleo, entao roda a
+completa); depois 5.8 (requisitos abaixo), 5.9 e 5.10 (hub USB). Versao
+2.4.0-a25 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -68,24 +72,27 @@ da tela, ultimo texto que apareceu, modelo da placa-mae); marcar a 7.4 como
 `[!]` no checklist com a nota "aguardando teste do usuario em hardware real,
 roteiro em docs/teste-hardware-real.md" e repetir isso no paragrafo do
 Estado. Depois seguir direto para a 7.5 e a Fase 8; a 7.4 volta quando o dono
-mandar o resultado do teste.
+mandar o resultado do teste. O roteiro tem de dizer que nao ha suporte a hub
+USB enquanto a 5.10 nao estiver feita (a secao "Limitacoes conhecidas" do
+`docs/teste-hardware-real.md` ja existe desde 2026-10-19).
 
-Criterio de verificacao (decidido pelo dono em 2026-10-19, para poupar tempo
-e o notebook, que vem caindo com tela azul):
-- Fim de cada PARTE: `.\check.ps1` sem warnings, `.\build.ps1` OK e so as
-  sequencias da regressao que cobrem o que mudou (`-OnlyX`): rede ou
-  programas de texto -> A; grafico, framebuffer ou Doom -> B; disco, ext2 ou
-  armazenamento -> C; `wm` ou apps -> D; travas, processos, threads ou sinais
-  -> E; ISO ou boot -> F; virtio -> V; NVMe -> N. Na duvida, inclui a
-  sequencia.
-- Fim de cada ETAPA (todas as partes feitas): regressao completa, uma vez,
-  antes de marcar `[x]`.
-- Excecao: parte que mexe no nucleo do kernel (interrupcoes, MSI, memoria,
-  paginacao, escalonador, preempcao, travas, syscalls de uso geral) roda a
-  regressao completa mesmo sendo parte; isso cobre quase toda a Fase 8.
-- Se a regressao completa do fim da etapa falhar, achar pelos commits em que
-  parte o erro entrou, corrigir num commit novo e rodar de novo, sem
-  reescrever historico.
+Criterio de verificacao (decidido pelo dono em 2026-10-19, 17:55; substitui
+o anterior, da mesma tarde, porque a regressao completa pesa demais no
+notebook, que vem caindo com tela azul):
+- Fim de cada PARTE e de cada ETAPA: `.\check.ps1` sem warnings,
+  `.\build.ps1` OK e so as sequencias da regressao que cobrem o que mudou
+  (`-OnlyX`): rede ou programas de texto -> A; grafico, framebuffer ou Doom
+  -> B; disco, ext2 ou armazenamento -> C; `wm` ou apps -> D; travas,
+  processos, threads ou sinais -> E; ISO ou boot -> F; virtio -> V; NVMe -> N;
+  USB -> U. Na duvida, inclui a sequencia. A etapa recebe o `[x]` com isso.
+- Regressao completa so no fim de cada FASE (fim da Fase 5, fim da 7.3 e da
+  7.5, antes de cada tag) e em parte que mexe no nucleo do kernel
+  (interrupcoes, memoria, escalonador, preempcao, travas, syscalls de uso
+  geral), o que inclui quase toda a Fase 8.
+- Se a regressao completa do fim da fase falhar, achar pelos commits em que
+  parte o erro entrou e corrigir num commit novo, sem reescrever historico.
+- A regressao completa da 5.7 comecada as 17:44 termina; nao roda outra antes
+  da 5.8.
 - No diario, cada parte registra quais sequencias rodou e com quantas
   verificacoes.
 - Continuam: RAM livre medida antes de rodar QEMU (2 GB; entre 1 e 2 GB roda e
@@ -203,6 +210,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 5.7 | USB armazenamento | [~] | 15:55 | | |
 | 5.8 | Audio HDA | [ ] | | | |
 | 5.9 | Video BGA e virtio-gpu | [ ] | | | |
+| 5.10 | Hub USB 2 basico (extra, decidido em 2026-10-19) | [ ] | | | |
 | 6.1 | Protocolo de janelas | [x] | 11:06 | 11:47 | ver `git log` |
 | 6.2 | libgui | [x] | 11:48 | 12:27 | ver `git log` |
 | 6.3 | Fontes TrueType | [x] | 12:27 | 13:05 | ver `git log` |

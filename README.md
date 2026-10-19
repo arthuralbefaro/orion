@@ -143,6 +143,11 @@ de fechar o QEMU). Cada `.\build.ps1 -Image` gera a imagem de novo, a partir do
     .\test.ps1 -NoBuild -Image -Commands @("cat /nota.txt")   # boota a mesma imagem
 
 ### Disco de escrita
+Na partida, o kernel monta sozinho em `/mnt` o primeiro FAT que nao seja do
+disco da raiz (um disco extra ou um pendrive ja formatado); isso so acontece no
+boot, nao num pendrive ligado depois. Se `/mnt` ja estiver ocupado, desmonte
+(`umount /mnt`) antes de montar outro disco ali.
+
 Para exercitar o FAT de verdade use um disco cru:
 
     .\build.ps1 -Run -Smp 4 -Disk    # cria out\disk.img (64 MiB, zerado)
