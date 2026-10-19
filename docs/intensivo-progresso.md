@@ -28,22 +28,23 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 06:15, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+Estado (2026-10-19, 12:45, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
 `v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.6 (apps `imgview`, `monitor`,
 `arquivos`, `editor`, `config` e `terminal`) e 6.7 (barra de tarefas,
 Alt+Tab, minimizar e maximizar, lancador de apps): Fase 6 inteira; e a
-5.2 (MSI: AHCI na CPU 1, rede `e1000e` na CPU 2). Versao 2.4.0-a16. O
+5.2 (MSI: AHCI na CPU 1, rede `e1000e` na CPU 2) e a parte 1 da 5.3
+(transporte virtio e virtio-blk). Versao 2.4.0-a17. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
-regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e
-na ISO na F, com 486 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E,
+na ISO na F e no virtio-blk na V, com 495 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.3, virtio-blk e virtio-net (transporte PCI moderno, filas,
-MSI-X), em partes; criterio: a regressao roda nos dois modos. Depois 5.4 a
-5.9. Versao 2.4.0-a17 em diante.
+Proxima etapa: 5.3 parte 2, virtio-net (com uma camada `nic_*` entre a pilha
+de rede e o driver) e a sequencia V com rede pelo virtio; depois 5.4 a 5.9.
+Versao 2.4.0-a18 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -107,7 +108,7 @@ mandar o resultado do teste.
 | 4.4 | ASLR basico | [x] | 05:55 | 06:26 | ver `git log` (tag `v2.3`) |
 | 5.1 | uACPI | [x] | 10:14 | 11:05 | ver `git log` |
 | 5.2 | MSI/MSI-X | [x] | 04:20 | 06:15 | ver `git log` (2 partes) |
-| 5.3 | virtio-blk e virtio-net | [ ] | | | |
+| 5.3 | virtio-blk e virtio-net | [~] | 06:15 | | |
 | 5.4 | NVMe | [ ] | | | |
 | 5.5 | xHCI | [ ] | | | |
 | 5.6 | USB HID | [ ] | | | |
@@ -1359,6 +1360,28 @@ Versao 2.4.0-a16. RAM livre antes da regressao: 6,3 GB.
 Problemas: nenhum; a `e1000e` funcionou de primeira com o driver da `e1000`.
 Ficou de fora: recursos proprios da 82574L (descritores estendidos, MSI-X
 com uma fila por causa, checksum na placa).
+
+#### 5.3 parte 1 Transporte virtio e virtio-blk - 06:15 a 12:45 - FEITO
+Transporte PCI moderno (virtio 1.0) em `drivers/virtio.c`: capacidades de
+fornecedor, negociacao so com `VIRTIO_F_VERSION_1`, filas em paginas
+contiguas e notificacao; MSI-X no PCI (`pci_enable_msix`, tabela na BAR) e
+BAR de 64 bits (`pci_bar_address`). `drivers/virtio_blk.c`: disco `vdX` com um
+pedido por vez (cabecalho, dados, status) sob mutex, acordado pela MSI-X como
+a AHCI. O OVMF boota pelo virtio-blk e a raiz monta em `vda2` sem mudanca no
+VFS. `test.ps1 -Bus virtio` e `qrun.py --bus` ligam a imagem como
+`virtio-blk-pci`. Criterio: sequencia V nova (imagem no virtio-blk): MSI-X
+fora da CPU 0, particoes GPT e raiz em `vda2`, `fstest -a` na raiz, a MSI-X
+contada no `/proc/interrupts` (9470 interrupcoes so na CPU 2 numa rodada) e um
+arquivo gravado que sobrevive ao reboot. Regressao 486 -> 495, verde na
+primeira rodada completa. Versao 2.4.0-a17. RAM livre antes da regressao:
+5,9 GB.
+Problemas: nenhum de codigo; o virtio-blk funcionou de primeira. A rodada
+completa comecou as 06:21 e so terminou as 11:48: o Windows parou entre a
+sequencia A (06:32) e a B (11:33), e todas as sequencias rodaram inteiras
+depois; os fontes eram todos de antes do comeco. O Windows reiniciou as 11:51
+(evento 1074), ja com a regressao terminada.
+Ficou de fora: varios pedidos ao mesmo tempo na fila, `VIRTIO_BLK_F_FLUSH`,
+virtio legado por portas de I/O.
 
 ### Sessao 2 - 2026-10-17
 

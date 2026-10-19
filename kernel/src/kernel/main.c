@@ -10,6 +10,7 @@
 #include <drivers/e1000.h>
 #include <net/net.h>
 #include <drivers/ahci.h>
+#include <drivers/virtio.h>
 #include <fs/vfs.h>
 #include <fs/block.h>
 #include <fs/devfs.h>
@@ -133,6 +134,7 @@ void kmain(void)
     pci_init();
     power_init();
     ahci_init();
+    virtio_blk_init();
     e1000_init();
     net_init();
     blockdev_cache_init();

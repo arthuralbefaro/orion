@@ -23,6 +23,7 @@ param(
     [switch]$Bios,
     [string[]]$HostFwd = @(),
     [string]$Nic = "e1000e",
+    [string]$Bus = "ahci",
     [string]$LoginUser = "root",
     [string]$LoginPassword = "orion"
 )
@@ -97,7 +98,10 @@ function Get-QemuArgs {
     switch ($script:bootMedia) {
         "cd"      { $a += @("-cdrom", "out/orion.iso") }
         "isodisk" { $a += @("-drive", "format=raw,file=out/orion.iso") }
-        "image"   { $a += @("-drive", "format=raw,file=out/orion.img") }
+        "image"   {
+            if ($Bus -eq "virtio") { $a += @("-drive", "if=none,id=d0,format=raw,file=out/orion.img", "-device", "virtio-blk-pci,drive=d0") }
+            else { $a += @("-drive", "format=raw,file=out/orion.img") }
+        }
         default   { $a += @("-drive", "format=raw,file=fat:rw:out/esp") }
     }
     $a += @("-display", "none",

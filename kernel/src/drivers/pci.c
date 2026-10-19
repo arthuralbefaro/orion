@@ -1,6 +1,7 @@
 #include <drivers/pci.h>
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/percpu.h>
+#include <mm/vmm.h>
 #include <kernel/log.h>
 
 #define PCI_CONFIG_ADDR 0xCF8
@@ -117,6 +118,60 @@ bool pci_enable_msi(const struct pci_device *dev, uint8_t vector, uint32_t cpu)
     uint32_t data = pci_read32(dev->bus, dev->slot, dev->func, data_off);
     pci_write32(dev->bus, dev->slot, dev->func, data_off, (data & 0xFFFF0000u) | vector);
     ctl = (ctl & ~(7u << 4)) | 1u;
+    pci_write32(dev->bus, dev->slot, dev->func, off, (head & 0xFFFF) | (ctl << 16));
+    uint32_t cmd = pci_read32(dev->bus, dev->slot, dev->func, 0x04) & 0xFFFF;
+    pci_write32(dev->bus, dev->slot, dev->func, 0x04, cmd | (1u << 10) | (1u << 2) | (1u << 1));
+    return true;
+}
+
+const struct pci_device *pci_find_id(uint16_t vendor, uint16_t device, uint32_t index)
+{
+    for (uint32_t i = 0; i < device_count; i++) {
+        struct pci_device *d = &devices[i];
+        if (d->vendor == vendor && d->device == device) {
+            if (index == 0)
+                return d;
+            index--;
+        }
+    }
+    return NULL;
+}
+
+uint64_t pci_bar_address(const struct pci_device *dev, uint8_t bar)
+{
+    if (bar > 5)
+        return 0;
+    uint32_t lo = dev->bar[bar];
+    if (lo & 1)
+        return 0;
+    uint64_t addr = lo & ~0xFull;
+    if (((lo >> 1) & 3) == 2 && bar < 5)
+        addr |= (uint64_t)dev->bar[bar + 1] << 32;
+    return addr;
+}
+
+bool pci_enable_msix(const struct pci_device *dev, uint16_t entry, uint8_t vector, uint32_t cpu)
+{
+    uint8_t off = pci_find_cap(dev, 0x11);
+    struct percpu *c = percpu_by_index(cpu);
+    if (!off || !c)
+        return false;
+    uint32_t head = pci_read32(dev->bus, dev->slot, dev->func, off);
+    uint32_t ctl = head >> 16;
+    uint32_t size = (ctl & 0x7FF) + 1;
+    if (entry >= size)
+        return false;
+    uint32_t table = pci_read32(dev->bus, dev->slot, dev->func, off + 4);
+    uint64_t base = pci_bar_address(dev, (uint8_t)(table & 7));
+    if (!base)
+        return false;
+    volatile uint32_t *e = vmm_map_mmio(base + (table & ~7u) + (uint64_t)entry * 16, 16);
+    pci_write32(dev->bus, dev->slot, dev->func, off, (head & 0xFFFF) | ((ctl | (1u << 14) | (1u << 15)) << 16));
+    e[0] = 0xFEE00000u | (c->lapic_id << 12);
+    e[1] = 0;
+    e[2] = vector;
+    e[3] = 0;
+    ctl = (ctl | (1u << 15)) & ~(1u << 14);
     pci_write32(dev->bus, dev->slot, dev->func, off, (head & 0xFFFF) | (ctl << 16));
     uint32_t cmd = pci_read32(dev->bus, dev->slot, dev->func, 0x04) & 0xFFFF;
     pci_write32(dev->bus, dev->slot, dev->func, 0x04, cmd | (1u << 10) | (1u << 2) | (1u << 1));

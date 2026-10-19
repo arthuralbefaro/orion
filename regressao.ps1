@@ -7,6 +7,7 @@ param(
     [switch]$OnlyD,
     [switch]$OnlyE,
     [switch]$OnlyF,
+    [switch]$OnlyV,
     [int]$StressRuns = 1,
     [switch]$Verbose
 )
@@ -15,7 +16,7 @@ $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 $failures = @()
 $checks = 0
-$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF)
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -936,6 +937,32 @@ if ($runAll -or $OnlyF) {
     Expect $f '----- reboot bios,isodisk -----(?:(?!----- reboot)[\s\S])*?entrando no estado S5(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "poweroff pelo ACPI no BIOS"
     Expect $f '----- reboot uefi,isodisk -----(?:(?!----- reboot)[\s\S])*?reiniciando pelo registrador de reset do FADT(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "reboot pelo ACPI no UEFI a partir do live"
     ExpectNot $f "PANIC|EXCECAO" "nenhum panico nos quatro boots da ISO"
+}
+
+# ---------------- Sequencia V: virtio ----------------
+if ($runAll -or $OnlyV) {
+    Write-Host "== Sequencia V (virtio-blk) ==" -ForegroundColor Cyan
+    $stepsV = @(
+        "cmd:cat /proc/mounts", "wait:1",
+        "cmd:mkdir /root/vt", "cmd:fstest -a /root/vt", 'cmd:echo FIM$X-VFSTEST', "until:600:FIM-VFSTEST",
+        "cmd:rmdir /root/vt", "cmd:echo persiste-no-virtio > /root/persiste.txt", "cmd:sync", "wait:2",
+        "cmd:cat /proc/interrupts", "wait:1",
+        "reboot:", "cmd:cat /root/persiste.txt", "cmd:rm /root/persiste.txt", "cmd:sync", "wait:1"
+    )
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Bus virtio -LogPath "out\reg-v.log" `
+        -Script $stepsV -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
+    $v = Get-Log "out\reg-v.log"
+    if ($Verbose) { Write-Output $v }
+
+    Expect $v "virtio\s+vda: virtio-blk 1af4:(1001|1042) [^\n]*MSI-X no vetor \d+, CPU [1-9]" "virtio-blk liga a MSI-X fora da CPU 0"
+    Expect $v "vda2: GPT, LBA \d+, \d+ setores \(256 MiB\), raiz Linux x86-64" "particoes GPT do disco virtio"
+    Expect $v "vfs\s+raiz montada: ext2 em vda2" "raiz ext2 no disco virtio"
+    Expect $v "/dev/vda2 / ext2 rw 0 0" "/proc/mounts mostra a raiz em vda2"
+    Expect $v "(?s)fstest -a /root/vt.*?fstest: TUDO OK.*?FIM-VFSTEST" "fstest -a na raiz pelo virtio-blk"
+    Expect $v "(?s)cat /proc/interrupts.*?\n\s*\d+:(\s+\d+){4}\s+virtio-blk" "/proc/interrupts conta a MSI-X do virtio-blk"
+    ExpectNot $v "(?s)cat /proc/interrupts.*?\n\s*\d+:\s+0\s+0\s+0\s+0\s+virtio-blk" "a MSI-X do virtio-blk chegou de fato"
+    Expect $v "(?s)----- reboot -----.*?cat /root/persiste\.txt\s*\npersiste-no-virtio" "o que foi gravado pelo virtio-blk sobrevive ao reboot"
+    ExpectNot $v "PANIC|EXCECAO" "nenhum panico na sequencia V"
 }
 
 # ---------------- Sequencia E: estresse de processos ----------------

@@ -2909,3 +2909,30 @@ Uma linha por decisao, na ordem em que foram tomadas.
 - Com a AHCI na CPU 1 e a rede na CPU 2, as IRQs de dispositivo saem da CPU 0;
   a sequencia A confere no `/proc/interrupts`, depois do trafego de rede, a
   linha da `e1000` so na CPU 2.
+
+## v2.4.0-a17 (etapa 5.3 parte 1: transporte virtio e virtio-blk)
+
+- A 5.3 vai em partes: transporte e virtio-blk (esta), virtio-net, e a
+  sequencia V da regressao rodando disco e rede pelo virtio.
+- Transporte PCI moderno (virtio 1.0) so, sem o legado por portas de I/O: as
+  capacidades de fornecedor (0x09) dao comum, notificacao, ISR e configuracao
+  do dispositivo, cada uma numa regiao de BAR (o `pci_bar_address` entende BAR
+  de 64 bits). O driver aceita so `VIRTIO_F_VERSION_1`, e a placa transicional
+  (`1af4:1001`, a que o QEMU poe no q35) e a so-moderna (`1af4:1042`) passam
+  pelo mesmo caminho.
+- Fila: descritores, anel do driver e anel do dispositivo numa area contigua
+  de paginas, ate 128 entradas; o virtio-blk manda um pedido por vez (cabecalho,
+  dados, status, tres descritores fixos) sob um mutex, como a AHCI, com um
+  buffer de 64 KiB.
+- MSI-X (`pci_enable_msix`): a tabela fica numa BAR; programa a entrada com
+  o mesmo endereco e dado da MSI, desmascara e liga a MSI-X com a mascara da
+  funcao ligada durante a escrita. A fila usa a entrada 0; a configuracao
+  fica sem vetor. Sem MSI-X, a espera vira laco com `thread_yield`.
+- A espera do pedido e a da AHCI: dorme na fila de espera acordada pela
+  interrupcao, com a mesma trava, e prazo de 10 ms como rede de seguranca.
+- Disco `vdX` registrado como bloco comum: as particoes GPT e a busca da raiz
+  ja eram por tipo, entao o boot pelo virtio (OVMF le o virtio-blk) monta a
+  raiz em `vda2` sem mudanca no VFS.
+- Regressao: sequencia V nova, com a imagem no virtio-blk (`-Bus virtio` no
+  `test.ps1`, `--bus` no `qrun.py`): `fstest -a` na raiz, a MSI-X contada no
+  `/proc/interrupts` e um arquivo gravado que sobrevive ao reboot.

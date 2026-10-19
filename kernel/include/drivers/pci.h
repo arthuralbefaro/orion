@@ -18,4 +18,7 @@ const struct pci_device *pci_find_class(uint8_t class_code, uint8_t subclass, ui
 void pci_enable_bus_master(const struct pci_device *dev);
 uint8_t pci_find_cap(const struct pci_device *dev, uint8_t id);
 bool pci_enable_msi(const struct pci_device *dev, uint8_t vector, uint32_t cpu);
+bool pci_enable_msix(const struct pci_device *dev, uint16_t entry, uint8_t vector, uint32_t cpu);
+const struct pci_device *pci_find_id(uint16_t vendor, uint16_t device, uint32_t index);
+uint64_t pci_bar_address(const struct pci_device *dev, uint8_t bar);
 void pci_dump(void);
