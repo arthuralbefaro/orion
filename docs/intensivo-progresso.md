@@ -28,14 +28,14 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 17:05, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+Estado (2026-10-19, 17:25, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
 `v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.6 (apps `imgview`, `monitor`,
 `arquivos`, `editor`, `config` e `terminal`) e 6.7 (barra de tarefas,
 Alt+Tab, minimizar e maximizar, lancador de apps): Fase 6 inteira; e a
 5.2 (MSI: AHCI na CPU 1, rede `e1000e` na CPU 2), a 5.3 (virtio-blk e
 virtio-net com MSI-X), a 5.4 (NVMe), a 5.5 (xHCI e `lsusb`, em Rust) e a
-5.6 (teclado e mouse USB, inclusive sem PS/2) e a parte 1 da 5.7 (pendrive
-USB). Versao 2.4.0-a22. O
+5.6 (teclado e mouse USB, inclusive sem PS/2) e as partes 1 e 2 da 5.7
+(pendrive USB). Versao 2.4.0-a23. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
@@ -45,10 +45,11 @@ na ISO na F, no virtio (disco e rede) na V, no NVMe na N e com USB na U,
 com 526 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.7 parte 2, pendrive robusto (requisitos logo abaixo das
-regras: despachante unico, prazos, recuperacao do Bulk-Only, remocao e
-segundo plug, imagem FAT de fora), e no fim dela a regressao completa da
-etapa 5.7; depois 5.8 (requisitos tambem abaixo) e 5.9. Versao 2.4.0-a23 em
+Proxima etapa: 5.7 parte 3, remocao do pendrive (requisito 6 logo abaixo
+das regras: disco morto com contagem de referencias, umount sem panico,
+Disable Slot, segundo plug por device_add, e o teste do prazo pelo
+device_del com o disco montado), e no fim dela a regressao completa da
+etapa 5.7; depois 5.8 (requisitos tambem abaixo) e 5.9. Versao 2.4.0-a24 em
 diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
@@ -1574,6 +1575,43 @@ regressao completa fica para o fim dela, como no criterio novo.
 Ficou de fora nesta parte (vai para a parte 2): prazo com cancelamento,
 despachante unico com interrupcao, REQUEST SENSE e recuperacao do Bulk-Only,
 remocao e segundo plug, imagem FAT criada fora do Orion.
+
+#### 5.7 parte 2 Pendrive robusto - 17:01 a 17:25 - FEITO
+O pedido de parte 2 da 5.7 foi dividido em duas, para perder no maximo uma
+se o PC cair: esta (itens 1 a 5 e 7 dos requisitos, menos o teste do prazo
+pelo device_del) e a parte 3 (remocao, item 6, e o teste do prazo).
+`xhci.rs`: despachante unico do anel de eventos, rodando na interrupcao
+(MSI-X do xHCI, alocada pelo `usb.c`; MSI ou consulta se faltar) e em quem
+espera, com spin lock de interrupcoes desligadas e conclusoes entregues pelo
+endereco do TRB; teclado e mouse so no despachante. Prazos em comando,
+controle e bulk, com `Stop Endpoint` + `Set TR Dequeue` e disco morto (EIO)
+no prazo estourado, e conclusoes tardias ignoradas e contadas. O disco espera
+sem a trava do controlador. CSW com status 1 leva ao REQUEST SENSE (sense no
+log); CSW invalido, erro de fase ou STALL levam a recuperacao do Bulk-Only
+(reset, CLEAR_FEATURE nos dois endpoints, `Reset Endpoint` ou parar e
+reconfigurar no xHCI) e a uma repeticao. Bloco diferente de 512 recusado com
+mensagem clara. `msc.rs` ganhou REQUEST SENSE e a leitura do sense (fixo e
+descritor), com teste no hospedeiro. Comando `usbstall sdX` no shell do
+kernel. `tools/mkfat.py` (novo) cria um FAT16 no hospedeiro e le um arquivo
+dele; `test.ps1 -UsbFat` (e `qrun.py --usb-fat`) liga esse segundo pendrive.
+Ordem das travas e o porque de cada mudanca: `docs/DECISOES.md`, v2.4.0-a23.
+Verificacao: sequencia U, 38 verificacoes, verde (eram 23): MSI-X do xHCI
+chegando, os dois pendrives, `LEIAME.TXT` feito no hospedeiro lido no Orion,
+`NOVO.TXT` gravado no Orion lido no hospedeiro depois de o QEMU sair, STALL
+provocado e recuperado com a leitura seguinte boa, REQUEST SENSE com chave 5
+e ASC 0x21 no READ(10) fora do disco, nenhum prazo estourado. Versao
+2.4.0-a23. RAM livre antes da sequencia U: 5,6 GB.
+Problemas: (1) com quatro dispositivos o QEMU pendurou um hub automatico no
+xHCI de 4 portas e o segundo pendrive ficou atras dele (hub nao tem driver);
+o xHCI do teste passou a 8 portas USB 2 e 8 USB 3 (`p2=8,p3=8`). (2) O
+pendrive FAT de fora ja e montado sozinho em `/mnt` na partida, entao o teste
+usa `/mnt`. (3) O TEST UNIT READY do QEMU nao volta com UNIT ATTENTION, por
+isso o REQUEST SENSE e provocado pelo READ(10) fora do disco. (4) O heredoc
+do Bash estragou de novo barras invertidas num script de remendo; corrigido a
+mao e o resto feito pelo Edit.
+Nao exercitado por teste: a recusa de bloco de 4096 (o `usb-storage` do QEMU
+so tem 512) e o caminho do prazo estourado (vem na parte 3, pelo
+device_del).
 
 ### Sessao 2 - 2026-10-17
 

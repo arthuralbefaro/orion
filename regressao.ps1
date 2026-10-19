@@ -1007,24 +1007,47 @@ if ($runAll -or $OnlyN) {
 if ($runAll -or $OnlyU) {
     Write-Host "== Sequencia U (USB pelo xHCI, sem PS/2) ==" -ForegroundColor Cyan
     Remove-Item (Join-Path $Root "out\stick.img") -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $Root "out\stick2.img") -ErrorAction SilentlyContinue
     $stepsU = @(
         "cmd:lsusb", "wait:2", "cmd:cat /proc/usb", "wait:1",
+        "cmd:ls /mnt", "cmd:cat /mnt/LEIAME.TXT", "cmd:echo gravado-no-orion > /mnt/NOVO.TXT", "wait:1",
+        "cmd:umount /mnt", "wait:2",
+        "key:0B", "cmd:usbstall sdb", "wait:3", "key:0B",
         "cmd:evtest 10", "wait:0.8", "mon:sendkey a", "mon:sendkey ctrl", "mon:sendkey up", "mon:mouse_move 10 5",
         "mon:mouse_button 1", "mon:mouse_button 0", "until:20:evento(s)",
         "cmd:mkfs /dev/sdb PENDRIVE", "wait:6", "cmd:mkdir /tmp/pen", "cmd:mount -t vfat /dev/sdb /tmp/pen", "wait:1",
         "cmd:echo ola-do-pendrive > /tmp/pen/nota.txt", "cmd:cp /bin/hello /tmp/pen/h", "wait:2",
         "cmd:umount /tmp/pen", "wait:1", "cmd:mount -t vfat /dev/sdb /tmp/pen", "wait:1",
         "cmd:cat /tmp/pen/nota.txt", "cmd:/tmp/pen/h pendrive", "wait:2", "cmd:cat /proc/mounts", "wait:1",
-        "cmd:umount /tmp/pen", "wait:1"
+        "cmd:umount /tmp/pen", "wait:1", "cmd:cat /proc/interrupts", "wait:1"
     )
-    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Usb -UsbDisk -NoPs2 -LogPath "out\reg-u.log" `
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Usb -UsbDisk -UsbFat -NoPs2 -LogPath "out\reg-u.log" `
         -Script $stepsU -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $u = Get-Log "out\reg-u.log"
+    $py = & (Join-Path $Root "tools\python.ps1")
+    $pyArgs = @($py | Select-Object -Skip 1)
+    $novo = & $py[0] @pyArgs (Join-Path $Root "tools\mkfat.py") le out/stick2.img NOVO.TXT
+    $u += "`n----- hospedeiro: NOVO.TXT -----`n" + ($novo -join "`n")
     if ($Verbose) { Write-Output $u }
 
     Expect $u "usb\s+controlador xHCI 1b36:000d em " "xHCI achado no PCI"
-    Expect $u "usb\s+xHCI 1\.\d\d, 8 porta\(s\)" "xHCI reiniciado e ligado, com a versao e as portas"
-    Expect $u "usb\s+3 dispositivo\(s\) USB" "tres dispositivos enumerados (Enable Slot e Address Device)"
+    Expect $u "usb\s+xHCI 1\.\d\d, 16 porta\(s\), eventos por interrupcao" "xHCI reiniciado e ligado, com a versao, as portas e eventos por interrupcao"
+    Expect $u "usb\s+xHCI por MSI-X no vetor \d+, CPU \d+" "xHCI com MSI-X"
+    Expect $u "(?s)cat /proc/interrupts.*?\n\s*\d+:(\s+\d+){4}\s+xhci" "/proc/interrupts conta a MSI-X do xHCI"
+    ExpectNot $u "(?s)cat /proc/interrupts.*?\n\s*\d+:\s+0\s+0\s+0\s+0\s+xhci" "a MSI-X do xHCI chegou de fato"
+    Expect $u "usb\s+4 dispositivo\(s\) USB" "quatro dispositivos enumerados (Enable Slot e Address Device)"
+    Expect $u "(?s)\$ lsusb.*?ID 46f4:0001 QEMU QEMU USB HARDDRIVE.*?ID 46f4:0001 QEMU QEMU USB HARDDRIVE" "lsusb mostra os dois pendrives"
+    Expect $u "usb\s+sdc: pendrive 'QEMU QEMU HARDDISK', 32768 setores" "o pendrive feito no hospedeiro vira sdc"
+    Expect $u "fat\s+FAT16 em sdc: 512 bytes/setor, .*label 'HOSPEDE'" "FAT16 criado fora do Orion (mkfat.py) e reconhecido"
+    Expect $u "cat /mnt/LEIAME\.TXT\s*\ncriado-no-hospedeiro" "arquivo criado no hospedeiro e lido no Orion"
+    Expect $u "vfs\s+/dev/sdc desmontado de /mnt" "o pendrive do hospedeiro e desmontado"
+    Expect $u "----- hospedeiro: NOVO\.TXT -----\s*\ngravado-no-orion" "arquivo gravado no Orion e lido no hospedeiro"
+    Expect $u "usb\s+teste: CBW com assinatura errada respondeu Err\(Stall\)" "CBW invalido provoca STALL no endpoint bulk"
+    Expect $u "usb\s+slot \d+: recuperacao do Bulk-Only: reset ok, CLEAR_FEATURE ok e ok, endpoints do xHCI ok e ok" "recuperacao: Bulk-Only Mass Storage Reset, CLEAR_FEATURE nos dois endpoints e reset no xHCI"
+    Expect $u "usb\s+teste: depois da recuperacao TEST UNIT READY ok e READ\(10\) do setor 0 ok" "depois do STALL a transferencia seguinte funciona"
+    Expect $u "usb\s+comando SCSI 0x28 falhou: sense chave 0x5, ASC 0x21, ASCQ 0x00" "CSW com status 1 leva ao REQUEST SENSE e o sense vai para o log"
+    Expect $u "usbstall: sdb travou com STALL, foi recuperado, voltou a ler e o sense chegou" "usbstall termina bem"
+    ExpectNot $u "usb\s+.*sem resposta no prazo" "nenhuma transferencia ou comando do xHCI estourou o prazo"
     Expect $u "(?s)\$ lsusb.*?ID 0627:0001 QEMU QEMU USB Keyboard \(USB 2\.00, [a-z ]+speed, classe hid\)" "lsusb mostra o teclado USB com as strings do dispositivo"
     Expect $u "(?s)\$ lsusb.*?ID 0627:0001 QEMU QEMU USB Mouse \(USB 2\.00, [a-z ]+speed, classe hid\)" "lsusb mostra o mouse USB"
     Expect $u "kbd\s+sem controlador PS/2" "a maquina sobe sem o controlador PS/2"

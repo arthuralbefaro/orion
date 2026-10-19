@@ -58,6 +58,7 @@ def parse_sequences():
             seq["usb"] = bool(re.search(r"-Usb\b", c))
             seq["no_ps2"] = bool(re.search(r"-NoPs2\b", c))
             seq["usb_disk"] = bool(re.search(r"-UsbDisk\b", c))
+            seq["usb_fat"] = bool(re.search(r"-UsbFat\b", c))
             hf = re.search(r"-HostFwd\s+@\(([^)]*)\)", c)
             if hf:
                 seq["hostfwd"] = [ps_string(s) for s in STRING.finditer(hf.group(1))]
@@ -74,6 +75,8 @@ def parse_sequences():
             seq["prep"].append([ps_string(s) if s.group(0).startswith(('"', "'")) else s.group(0)
                                 for s in re.finditer(r'"(?:[^"`]|`.)*"|\'(?:[^\']|\'\')*\'|\S+', mk.group(1))])
         seq["remove_disk"] = bool(re.search(r'Remove-Item \(Join-Path \$Root "out\\disk\.img"\)', body))
+        seq["remove"] = re.findall(r'Remove-Item \(Join-Path \$Root "out\\(stick\d*\.img)"\)', body)
+        seq["hostfat"] = re.findall(r'tools\\mkfat\.py"\) le (\S+) (\S+)', body)
         for e in re.finditer(r'^\s*(Expect|ExpectNot) \$\w+ ("(?:[^"`]|`.)*"|\'(?:[^\']|\'\')*\') ("(?:[^"`]|`.)*"|\'(?:[^\']|\'\')*\')\s*$',
                              body, flags=re.M):
             pat = ps_string(STRING.match(e.group(2)))
@@ -221,6 +224,8 @@ def main():
             continue
         if seq["remove_disk"]:
             (ROOT / "out" / "disk.img").unlink(missing_ok=True)
+        for name in seq["remove"]:
+            (ROOT / "out" / name).unlink(missing_ok=True)
         if seq["prep"] and not built:
             qrun.build(False, image)
             built = True
@@ -242,10 +247,15 @@ def main():
                               iso=seq.get("iso", False), iso_disk=seq.get("iso_disk", False),
                               bios=seq.get("bios", False), nic=seq.get("nic", "e1000e"),
                               bus=seq.get("bus", "ahci"), usb=seq.get("usb", False),
-                              no_ps2=seq.get("no_ps2", False), usb_disk=seq.get("usb_disk", False))
+                              no_ps2=seq.get("no_ps2", False), usb_disk=seq.get("usb_disk", False),
+                              usb_fat=seq.get("usb_fat", False))
         finally:
             if web:
                 web.kill()
+        for image_path, name in seq["hostfat"]:
+            got = subprocess.run([sys.executable, str(ROOT / "tools" / "mkfat.py"), "le", image_path, name],
+                                 cwd=ROOT, capture_output=True, text=True, encoding="latin-1")
+            log += f"\n----- hospedeiro: {name} -----\n" + got.stdout
         built = built or not seq["gui"]
         if seq["gui"]:
             qrun.write_autostart(False)

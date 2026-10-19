@@ -3057,11 +3057,11 @@ Uma linha por decisao, na ordem em que foram tomadas.
 - `Configure Endpoint` ficou geral (varios endpoints num comando so: os dois
   bulk aqui, o de interrupcao no HID) e o numero de contextos do slot vira o
   maior DCI configurado.
-- Um pedido SCSI e tres transferencias bulk sincronas (CBW, dados, CSW) com
-  um buffer de 64 KiB; leitura e escrita maiores vao em pedaços de 128 blocos.
-  Tudo roda com a trava do controlador; a espera de uma transferencia trata,
-  em vez de descartar, os eventos de teclado e mouse que chegarem no meio.
-  Erro ou STALL falham o pedido (sem a recuperacao de reset do Bulk-Only).
+- Um pedido SCSI e tres transferencias bulk (CBW, dados, CSW) com um buffer
+  de 64 KiB; leitura e escrita maiores vao em pedaços de 128 blocos. Na parte
+  1 tudo rodava com a trava do controlador e a espera tratava no meio os
+  eventos de teclado e mouse, e erro ou STALL so falhavam o pedido; a parte 2
+  (abaixo) trocou isso.
 - O disco so e registrado depois que o controlador fica publicado, porque o
   registro ja le a tabela de particoes, e essa leitura passa pela trava do
   controlador. O nome e o primeiro `sdX` livre, como o Linux faz com pendrive;
@@ -3071,3 +3071,73 @@ Uma linha por decisao, na ordem em que foram tomadas.
   desmontado e montado de novo, e um programa copiado para ele roda de la. O
   pendrive do QEMU e USB 3, entao a enumeracao numa porta USB 3 tambem ficou
   coberta.
+
+## v2.4.0-a23 (etapa 5.7 parte 2: despachante unico, prazos e recuperacao)
+
+O que mudou na 5.7 e por que:
+
+- Despachante unico do anel de eventos. Antes, quem esperava (comando,
+  transferencia de controle, bulk do disco) lia o anel de eventos por conta
+  propria e tratava ali dentro o que fosse de teclado e mouse; com o disco
+  esperando 5 s por uma transferencia, o teclado ficava preso a essa espera.
+  Agora so o despachante le o anel: ele roda na interrupcao (MSI-X, MSI se nao
+  houver, e por consulta a cada 4 ms na thread `usbd` se nenhuma das duas
+  existir) e tambem quando quem espera chama `pump()`, o que cobre o boot,
+  antes das interrupcoes. Cada conclusao vai para o dono pelo endereco do TRB
+  (o evento traz o endereco do TRB que terminou), nao so por slot e endpoint:
+  quem envia registra o endereco do TRB com IOC antes de escrever o bit de
+  ciclo e tocar a campainha, e o despachante marca aquele registro como
+  pronto e acorda quem espera. Os relatorios HID nao tem registro: o
+  despachante os reconhece pelo anel do endpoint, entrega ao teclado ou mouse
+  e recoloca o TRB.
+- Travas. O estado do despachante fica atras de um spin lock com
+  interrupcoes desligadas (`EVLOCK`, com `usb_irq_save`/`usb_irq_restore`),
+  nunca um mutex, porque ele roda na interrupcao. Ordem: trava do controlador
+  (`BUSY`) antes de `EVLOCK`, e `EVLOCK` antes das travas de teclado, mouse e
+  `/dev/input` (o despachante chama `keyboard_feed` e `mouse_inject`, que ja
+  eram seguras para interrupcao porque o PS/2 as chama dali). Nada dentro de
+  `EVLOCK` pega `BUSY`, nem dorme, nem acorda alguem com a trava na mao: o
+  `usb_wake` (fila de espera com spin lock proprio, chamavel da interrupcao)
+  vem depois de soltar `EVLOCK`. `BUSY` nao e mais spin puro: quem a disputa
+  cede a CPU (`usb_yield`).
+- O disco dorme sem a trava do controlador. Comando do xHCI e transferencia de
+  controle esperam com `BUSY` na mao (sao curtos e mexem no estado do
+  controlador); a transferencia bulk e enfileirada com `BUSY` e esperada sem
+  ela, na fila de espera do USB. O mutex por disco do C continua
+  serializando os pedidos de um mesmo pendrive.
+- Prazos. Comando 2 s, controle 2 s, bulk 5 s. No prazo estourado sem DMA
+  pendente esquecido: o registro vira "cancelado", o endpoint leva `Stop
+  Endpoint` e `Set TR Dequeue Pointer` para depois do TRB cancelado, o pedido
+  devolve erro (EIO no bloco) e o disco passa a responder EIO dali em diante
+  (marcado morto), sem prender teclado e mouse, que nao dependem dele. Uma
+  conclusao que chegue depois para um registro cancelado e ignorada e contada
+  (`/proc/usb`: "conclusao(oes) tardia(s) ignorada(s)"); registro cancelado
+  sem conclusao e liberado depois de 10 s. O mesmo vale para o endpoint 0: no
+  prazo estourado ele e parado e a fila avancada; num STALL leva `Reset
+  Endpoint` e `Set TR Dequeue`, porque senao o endpoint 0 ficava parado para
+  sempre depois de um descritor recusado.
+- REQUEST SENSE e recuperacao do Bulk-Only. CSW com status 1 leva a um REQUEST
+  SENSE e a chave, o ASC e o ASCQ vao para o log (formato fixo e descritor);
+  o pedido falha sem repetir, porque o erro e do comando. CSW invalido,
+  status 2 (erro de fase), STALL ou outro erro levam a recuperacao de reset
+  da especificacao: Bulk-Only Mass Storage Reset na interface,
+  `CLEAR_FEATURE(ENDPOINT_HALT)` nos dois endpoints bulk e, do lado do xHCI,
+  `Reset Endpoint` + `Set TR Dequeue` no endpoint que ficou parado (estado 2 no
+  contexto de saida) ou, se ele nao parou, `Stop Endpoint` e um `Configure
+  Endpoint` que tira e poe o endpoint de volta (zera o toggle do lado do
+  hospedeiro, como o `CLEAR_FEATURE` zera do lado do pendrive). Depois disso o
+  comando e repetido uma vez.
+- Bloco diferente de 512 e recusado com mensagem clara ("pendrive com blocos
+  de N bytes recusado; so 512 e suportado"). Aceitar 4096 mexe no cache de
+  paginas, no FAT e no ext2 de uma vez; fica para quando houver um pendrive
+  assim para testar.
+- Teste. O comando `usbstall sdX` do shell do kernel manda um CBW com
+  assinatura errada (o `usb-storage` do QEMU responde com STALL), faz a
+  recuperacao, confere TEST UNIT READY e READ(10) e, por fim, um READ(10) fora
+  do disco, que volta com status 1 e passa pelo REQUEST SENSE (chave 5, ASC
+  0x21). A sequencia U ganhou um segundo pendrive, criado no hospedeiro pelo
+  `tools/mkfat.py` (FAT16 sem particoes, rotulo HOSPEDE, com `LEIAME.TXT`): o
+  Orion o le e grava `NOVO.TXT`, e depois de o QEMU sair o hospedeiro le o
+  arquivo de volta com o mesmo `mkfat.py`. O xHCI do QEMU passou a ter 8
+  portas USB 2 e 8 USB 3 (`p2=8,p3=8`): com 4 portas, o quarto dispositivo
+  faz o QEMU pendurar um hub automatico, e hub ainda nao tem driver.

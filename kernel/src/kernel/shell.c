@@ -19,6 +19,7 @@
 #include <kernel/process.h>
 #include <kernel/smp.h>
 #include <drivers/pci.h>
+#include <drivers/usb.h>
 #include <fs/block.h>
 #include <fs/vfs.h>
 #include <arch/x86_64/percpu.h>
@@ -539,6 +540,23 @@ static void cmd_tcploss(const char *args)
         kprintf("tcploss: desligado\n");
 }
 
+static void cmd_usbstall(const char *args)
+{
+    while (args && *args == ' ')
+        args++;
+    if (!args || !*args) {
+        kprintf("uso: usbstall sdX\n");
+        return;
+    }
+    int r = usb_test_stall(args);
+    if (r == 0)
+        kprintf("usbstall: %s travou com STALL, foi recuperado, voltou a ler e o sense chegou\n", args);
+    else if (r == -1)
+        kprintf("usbstall: %s nao e um pendrive USB\n", args);
+    else
+        kprintf("usbstall: %s nao se recuperou (codigo %d)\n", args, r);
+}
+
 static void cmd_arp(const char *args)
 {
     (void)args;
@@ -613,6 +631,7 @@ static const struct command commands[] = {
     { "pci",    "dispositivos PCI",                     cmd_pci },
     { "net",    "estado da rede",                       cmd_net },
     { "tcploss", "descarta 1 em N segmentos TCP (teste)", cmd_tcploss },
+    { "usbstall", "forca um STALL no pendrive e recupera (teste)", cmd_usbstall },
     { "arp",    "cache ARP",                            cmd_arp },
     { "ifconfig", "configura a rede a mao",             cmd_ifconfig },
     { "lsblk",  "discos e particoes",                   cmd_lsblk },

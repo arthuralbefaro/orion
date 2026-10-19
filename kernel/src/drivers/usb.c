@@ -6,15 +6,20 @@
 #include <kernel/mutex.h>
 #include <lib/printf.h>
 #include <arch/x86_64/cpu.h>
+#include <arch/x86_64/interrupts.h>
 #include <kernel/log.h>
 #include <kernel/sched.h>
+#include <kernel/spinlock.h>
 #include <kernel/time.h>
+#include <kernel/wait.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
 #include <mm/memory.h>
 #include <lib/string.h>
 
-int32_t xhci_start(uint8_t *mmio);
+int32_t xhci_start(uint8_t *mmio, bool irq);
+void xhci_irq(void);
+int32_t xhci_msc_test_stall(uint32_t disk);
 size_t xhci_report(uint8_t *buf, size_t cap);
 int32_t xhci_hid_count(void);
 void xhci_poll(void);
@@ -25,11 +30,21 @@ bool xhci_msc_write(uint32_t disk, uint64_t lba, uint32_t count, const uint8_t *
 
 struct usb_disk {
     uint32_t index;
+    bool used;
+    char name[BLOCK_NAME_MAX];
     struct mutex lock;
     char lock_name[12];
 };
 
 static struct usb_disk disks[USB_DISKS];
+static spinlock_t wq_lock = SPINLOCK_INIT;
+static struct waitqueue wq = WAITQUEUE_INIT;
+static bool irq_on;
+
+static bool can_sleep(void)
+{
+    return interrupts_enabled() && sched_enabled();
+}
 
 void *usb_dma_alloc(size_t pages, uint64_t *phys)
 {
@@ -49,12 +64,48 @@ uint64_t usb_now_us(void)
 
 void usb_sleep_ms(uint64_t ms)
 {
-    if (interrupts_enabled() && sched_enabled()) {
+    if (can_sleep()) {
         thread_sleep_ms(ms);
         return;
     }
     uint64_t end = time_now_us() + ms * 1000;
     while (time_now_us() < end)
+        pause();
+}
+
+uint64_t usb_irq_save(void)
+{
+    return irq_save();
+}
+
+void usb_irq_restore(uint64_t flags)
+{
+    irq_restore(flags);
+}
+
+void usb_wait_ms(uint64_t ms)
+{
+    if (!can_sleep()) {
+        pause();
+        return;
+    }
+    uint64_t flags = spin_lock_irqsave(&wq_lock);
+    wait_sleep_timeout(&wq, &wq_lock, ms);
+    spin_unlock_irqrestore(&wq_lock, flags);
+}
+
+void usb_wake(void)
+{
+    uint64_t flags = spin_lock_irqsave(&wq_lock);
+    wake_up_all(&wq);
+    spin_unlock_irqrestore(&wq_lock, flags);
+}
+
+void usb_yield(void)
+{
+    if (can_sleep())
+        thread_yield();
+    else
         pause();
 }
 
@@ -114,9 +165,32 @@ void usb_disk_add(uint32_t index, uint64_t blocks, const uint8_t *name, size_t l
     struct blockdev *dev = blockdev_register(dev_name, 512, blocks, msc_read, msc_write, d);
     if (!dev)
         return;
+    d->used = true;
+    ksnprintf(d->name, sizeof(d->name), "%s", dev_name);
     log_info("usb", "%s: pendrive '%.*s', %lu setores (%lu MiB)", dev_name, (int)len, (const char *)name, blocks,
              blocks / 2048);
     blockdev_scan_partitions(dev);
+}
+
+int usb_test_stall(const char *name)
+{
+    for (uint32_t i = 0; i < USB_DISKS; i++) {
+        struct usb_disk *d = &disks[i];
+        if (!d->used || strcmp(d->name, name) != 0)
+            continue;
+        mutex_lock(&d->lock);
+        int r = xhci_msc_test_stall(d->index);
+        mutex_unlock(&d->lock);
+        return r;
+    }
+    return -1;
+}
+
+static void xhci_irq_handler(struct interrupt_frame *frame, void *ctx)
+{
+    (void)frame;
+    (void)ctx;
+    xhci_irq();
 }
 
 static void poll_thread(void *arg)
@@ -124,7 +198,7 @@ static void poll_thread(void *arg)
     (void)arg;
     for (;;) {
         xhci_poll();
-        thread_sleep_ms(4);
+        thread_sleep_ms(irq_on ? 100 : 4);
     }
 }
 
@@ -146,11 +220,25 @@ bool usb_init(void)
     uint8_t *mmio = vmm_map_mmio(base, 0x10000);
     log_info("usb", "controlador xHCI %04x:%04x em %02x:%02x.%u", dev->vendor, dev->device, dev->bus, dev->slot,
              dev->func);
-    int32_t n = xhci_start(mmio);
+    int vector = interrupts_alloc_vector(xhci_irq_handler, NULL, "xhci");
+    uint32_t cpu = irq_next_cpu();
+    const char *how = "MSI-X";
+    irq_on = vector >= 0 && pci_enable_msix(dev, 0, (uint8_t)vector, cpu);
+    if (!irq_on && vector >= 0) {
+        how = "MSI";
+        irq_on = pci_enable_msi(dev, (uint8_t)vector, cpu);
+    }
+    if (!irq_on && vector >= 0)
+        interrupts_unregister((uint8_t)vector);
+    if (irq_on)
+        log_info("usb", "xHCI por %s no vetor %d, CPU %u", how, vector, cpu);
+    else
+        log_warn("usb", "xHCI sem MSI nem MSI-X; os eventos vem por consulta");
+    int32_t n = xhci_start(mmio, irq_on);
     present = n >= 0;
     if (present)
         log_info("usb", "%d dispositivo(s) USB", n);
-    if (present && xhci_hid_count() > 0)
+    if (present && (xhci_hid_count() > 0 || !irq_on))
         thread_create("usbd", poll_thread, NULL);
     return present;
 }

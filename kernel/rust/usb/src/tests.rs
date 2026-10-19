@@ -239,3 +239,16 @@ fn inquiry_names() {
     assert_eq!(p, "QEMU HARDDISK ?");
     assert!(msc::inquiry_name(&b[..20]).is_none());
 }
+#[test]
+fn sense_fixed_and_descriptor() {
+    assert_eq!(msc::request_sense(18), [0x03, 0, 0, 0, 18, 0]);
+    let mut fixed = [0u8; 18];
+    fixed[0] = 0xF0;
+    fixed[2] = 0x26;
+    fixed[12] = 0x29;
+    fixed[13] = 0x01;
+    assert_eq!(msc::parse_sense(&fixed), Some(msc::Sense { key: 6, asc: 0x29, ascq: 1 }));
+    assert_eq!(msc::parse_sense(&[0x72, 0x05, 0x24, 0x00]), Some(msc::Sense { key: 5, asc: 0x24, ascq: 0 }));
+    assert_eq!(msc::parse_sense(&fixed[..10]), None);
+    assert_eq!(msc::parse_sense(&[0u8; 18]), None);
+}

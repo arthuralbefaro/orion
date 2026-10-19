@@ -88,3 +88,22 @@ pub fn inquiry_name(b: &[u8]) -> Option<(alloc::string::String, alloc::string::S
     };
     Some((text(&b[8..16]), text(&b[16..32])))
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sense {
+    pub key: u8,
+    pub asc: u8,
+    pub ascq: u8,
+}
+
+pub fn request_sense(len: u8) -> [u8; 6] {
+    [0x03, 0, 0, 0, len, 0]
+}
+
+pub fn parse_sense(b: &[u8]) -> Option<Sense> {
+    match b.first().map(|c| c & 0x7F) {
+        Some(0x70) | Some(0x71) if b.len() >= 14 => Some(Sense { key: b[2] & 0x0F, asc: b[12], ascq: b[13] }),
+        Some(0x72) | Some(0x73) if b.len() >= 4 => Some(Sense { key: b[1] & 0x0F, asc: b[2], ascq: b[3] }),
+        _ => None,
+    }
+}

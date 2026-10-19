@@ -27,6 +27,7 @@ param(
     [switch]$Usb,
     [switch]$NoPs2,
     [switch]$UsbDisk,
+    [switch]$UsbFat,
     [string]$LoginUser = "root",
     [string]$LoginPassword = "orion"
 )
@@ -65,6 +66,12 @@ if ($UsbDisk) {
         $fs.SetLength(16MB)
         $fs.Close()
     }
+}
+if ($UsbFat -and -not (Test-Path (Join-Path $OutDir "stick2.img"))) {
+    $py = & (Join-Path $Root "tools\python.ps1")
+    $pyArgs = @($py | Select-Object -Skip 1)
+    & $py[0] @pyArgs (Join-Path $Root "tools\mkfat.py") cria (Join-Path $OutDir "stick2.img") --tamanho 16 --rotulo HOSPEDE --texto "LEIAME.TXT=criado-no-hospedeiro" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "mkfat falhou" }
 }
 if ($Disk) {
     $img = Join-Path $OutDir "disk.img"
@@ -125,8 +132,9 @@ function Get-QemuArgs {
     foreach ($fwd in $HostFwd) { $netdev += ",hostfwd=$fwd" }
     $a += @("-netdev", $netdev, "-device", "$Nic,netdev=n0",
             "-object", "filter-dump,id=d0,netdev=n0,file=out/net.pcap")
-    if ($Usb) { $a += @("-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0", "-device", "usb-mouse,bus=xhci.0") }
+    if ($Usb) { $a += @("-device", "qemu-xhci,id=xhci,p2=8,p3=8", "-device", "usb-kbd,bus=xhci.0", "-device", "usb-mouse,bus=xhci.0") }
     if ($Usb -and $UsbDisk) { $a += @("-drive", "if=none,id=stick,format=raw,file=out/stick.img", "-device", "usb-storage,bus=xhci.0,drive=stick") }
+    if ($Usb -and $UsbFat) { $a += @("-drive", "if=none,id=stick2,format=raw,file=out/stick2.img", "-device", "usb-storage,bus=xhci.0,drive=stick2") }
     if ($Disk) { $a += @("-drive", "format=raw,file=out/disk.img") }
     foreach ($extra in $ExtraDisks) { $a += @("-drive", "format=raw,file=$extra") }
     return $a | Where-Object { $_ } | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
