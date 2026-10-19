@@ -1,6 +1,6 @@
 #include <net/net.h>
 #include <net/tcp.h>
-#include <drivers/e1000.h>
+#include <drivers/nic.h>
 #include <kernel/log.h>
 #include <kernel/mutex.h>
 #include <kernel/sched.h>
@@ -126,7 +126,7 @@ static int loop_send(uint32_t dst, uint8_t proto, const void *payload, int len)
         kfree(pkt);
         return -ENOBUFS;
     }
-    wake_up_all(e1000_rx_queue());
+    wake_up_all(nic_rx_queue());
     return 0;
 }
 
@@ -239,7 +239,7 @@ static int send_frame(const uint8_t *dst_mac, uint16_t type, const void *payload
     int total = (int)sizeof(*eh) + len;
     if (total < 60)
         total = 60;
-    int r = e1000_send(frame, total);
+    int r = nic_send(frame, total);
     if (r == 0)
         stats.tx_frames++;
     return r;
@@ -359,7 +359,7 @@ int net_send_ip(uint32_t dst, uint8_t proto, const void *payload, int len)
         return -EMSGSIZE;
     if (net_is_local(dst))
         return loop_send(dst, proto, payload, len);
-    if (!e1000_present())
+    if (!nic_present())
         return -ENODEV;
 
     uint8_t mac[ETH_ALEN];
@@ -624,12 +624,12 @@ static void rx_thread(void *arg)
             kfree(pkt);
             continue;
         }
-        int len = e1000_receive(frame, (int)sizeof(frame));
+        int len = nic_receive(frame, (int)sizeof(frame));
         if (len > 0) {
             handle_frame(frame, len);
             continue;
         }
-        wait_sleep_timeout(e1000_rx_queue(), NULL, 20);
+        wait_sleep_timeout(nic_rx_queue(), NULL, 20);
     }
 }
 
@@ -663,7 +663,7 @@ struct netif *net_interface(void)
 
 bool net_available(void)
 {
-    return e1000_present();
+    return nic_present();
 }
 
 void net_get_stats(struct net_stats *out)
@@ -699,9 +699,9 @@ static void tcp_timer_thread(void *arg)
 
 void net_init(void)
 {
-    if (!e1000_present())
+    if (!nic_present())
         return;
-    memcpy(netif.mac, e1000_mac(), ETH_ALEN);
+    memcpy(netif.mac, nic_mac(), ETH_ALEN);
     tcp = tcp_stack_new(random_u64());
     if (!tcp)
         log_warn("net", "sem memoria para a tabela do TCP");
@@ -734,7 +734,7 @@ void net_arp_dump(void)
 
 void net_dump(void)
 {
-    if (!e1000_present()) {
+    if (!nic_present()) {
         kprintf("sem placa de rede\n");
         return;
     }
@@ -745,11 +745,11 @@ void net_dump(void)
     net_format_ip(netif.dns, dns, sizeof(dns));
     kprintf("eth0: %02x:%02x:%02x:%02x:%02x:%02x, link %s\n",
             netif.mac[0], netif.mac[1], netif.mac[2], netif.mac[3], netif.mac[4], netif.mac[5],
-            e1000_link_up() ? "up" : "down");
+            nic_link_up() ? "up" : "down");
     kprintf("  ip %s  mascara %s  gateway %s  dns %s\n", ip, mask, gw, dns);
 
-    struct e1000_stats es;
-    e1000_get_stats(&es);
+    struct nic_stats es;
+    nic_get_stats(&es);
     kprintf("  placa: %lu rx, %lu tx, %lu descartado(s), %lu interrupcao(oes)\n",
             es.rx_packets, es.tx_packets, es.rx_dropped, es.irqs);
     kprintf("  pilha: %lu quadro(s), %lu arp, %lu ip, %lu icmp, %lu udp, %lu ignorado(s)\n",

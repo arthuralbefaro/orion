@@ -2936,3 +2936,28 @@ Uma linha por decisao, na ordem em que foram tomadas.
 - Regressao: sequencia V nova, com a imagem no virtio-blk (`-Bus virtio` no
   `test.ps1`, `--bus` no `qrun.py`): `fstest -a` na raiz, a MSI-X contada no
   `/proc/interrupts` e um arquivo gravado que sobrevive ao reboot.
+
+## v2.4.0-a18 (etapa 5.3 parte 2: virtio-net)
+
+- Camada `nic_*` (`drivers/nic.c`) entre a pilha de rede e o driver: o
+  driver que acha a placa registra um `struct nic_ops` (MAC, link, receber,
+  enviar, contadores, fila de espera da recepcao) e a pilha (`net.c`,
+  `socket.c`) so chama `nic_*`. A primeira placa registrada vale; sem placa, a
+  fila de espera e uma de reserva, para a thread da rede dormir do mesmo jeito.
+  A `e1000` passou a procurar so placa Intel entre as de rede, em vez de
+  reclamar da primeira que nao for.
+- virtio-net: fila 0 de recepcao com 64 buffers de 2 KiB postados depois do
+  `DRIVER_OK` (o virtio proibe notificar antes), cada um repostado ao ser lido;
+  fila 1 de transmissao, sem interrupcao, com os buffers liberados no proprio
+  envio seguinte. Todo quadro leva o cabecalho de 12 bytes do virtio 1.0
+  (zerado: sem checksum nem segmentacao na placa). MAC e estado do link vem da
+  configuracao do dispositivo (`VIRTIO_NET_F_MAC` e `F_STATUS`). A MSI-X da
+  fila de recepcao acorda a thread da rede, como a IRQ da `e1000`.
+- Sequencia V: disco e rede pelo virtio (`-Bus virtio -Nic virtio-net-pci`),
+  com o servidor do hospedeiro: DHCP, ping, 10 MiB por TCP conferidos por
+  crc32 e as duas MSI-X contadas no `/proc/interrupts`. Com isso a regressao
+  roda nos dois modos (AHCI e `e1000e` de A a F, virtio na V), que e o
+  criterio da 5.3.
+- A sessao caiu no meio da escrita desta parte (Windows desligou sem aviso,
+  sem QEMU rodando): os fontes gravados no ultimo minuto ficaram so com bytes
+  nulos e foram refeitos a partir do commit da parte 1, que estava integro.

@@ -941,16 +941,19 @@ if ($runAll -or $OnlyF) {
 
 # ---------------- Sequencia V: virtio ----------------
 if ($runAll -or $OnlyV) {
-    Write-Host "== Sequencia V (virtio-blk) ==" -ForegroundColor Cyan
+    Write-Host "== Sequencia V (virtio-blk e virtio-net) ==" -ForegroundColor Cyan
     $stepsV = @(
         "cmd:cat /proc/mounts", "wait:1",
         "cmd:mkdir /root/vt", "cmd:fstest -a /root/vt", 'cmd:echo FIM$X-VFSTEST', "until:600:FIM-VFSTEST",
         "cmd:rmdir /root/vt", "cmd:echo persiste-no-virtio > /root/persiste.txt", "cmd:sync", "wait:2",
-        "cmd:cat /proc/interrupts", "wait:1",
+        "cmd:ping 10.0.2.2 3", "wait:8", "cmd:httpget -q 10.0.2.2 8088 /big10.bin", "until:120:corpo de",
+        "cmd:ifconfig", "wait:1", "cmd:cat /proc/interrupts", "wait:1",
         "reboot:", "cmd:cat /root/persiste.txt", "cmd:rm /root/persiste.txt", "cmd:sync", "wait:1"
     )
-    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Bus virtio -LogPath "out\reg-v.log" `
+    $web = Start-HostWeb 8088
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Bus virtio -Nic virtio-net-pci -LogPath "out\reg-v.log" `
         -Script $stepsV -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
+    Stop-Process -Id $web.Id -Force -ErrorAction SilentlyContinue
     $v = Get-Log "out\reg-v.log"
     if ($Verbose) { Write-Output $v }
 
@@ -962,6 +965,13 @@ if ($runAll -or $OnlyV) {
     Expect $v "(?s)cat /proc/interrupts.*?\n\s*\d+:(\s+\d+){4}\s+virtio-blk" "/proc/interrupts conta a MSI-X do virtio-blk"
     ExpectNot $v "(?s)cat /proc/interrupts.*?\n\s*\d+:\s+0\s+0\s+0\s+0\s+virtio-blk" "a MSI-X do virtio-blk chegou de fato"
     Expect $v "(?s)----- reboot -----.*?cat /root/persiste\.txt\s*\npersiste-no-virtio" "o que foi gravado pelo virtio-blk sobrevive ao reboot"
+    Expect $v "virtio\s+virtio-net 1af4:(1000|1041) [^\n]*MSI-X no vetor \d+, CPU [1-9], link up" "virtio-net liga a MSI-X fora da CPU 0"
+    ExpectNot $v "placa 1af4:1000 nao suportada" "o driver da e1000 nao reclama da placa virtio"
+    Expect $v "dhcp: ip 10\.0\.2\.15" "DHCP pela virtio-net"
+    Expect $v "3 enviado\(s\), 3 recebido\(s\), 0% de perda" "ping pela virtio-net sem perda"
+    Expect $v "httpget: corpo de 10485760 bytes, crc32 1a960f7c" "TCP: 10 MiB do hospedeiro pela virtio-net sem corromper"
+    Expect $v "(?s)cat /proc/interrupts.*?\n\s*\d+:(\s+\d+){4}\s+virtio-net" "/proc/interrupts conta a MSI-X da virtio-net"
+    ExpectNot $v "(?s)cat /proc/interrupts.*?\n\s*\d+:\s+0\s+0\s+0\s+0\s+virtio-net" "a MSI-X da virtio-net chegou de fato"
     ExpectNot $v "PANIC|EXCECAO" "nenhum panico na sequencia V"
 }
 

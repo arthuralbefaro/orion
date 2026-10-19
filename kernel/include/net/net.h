@@ -1,7 +1,7 @@
 #pragma once
 
 #include <kernel/compiler.h>
-#include <drivers/e1000.h>
+#include <drivers/nic.h>
 
 #define IPPROTO_ICMP 1
 #define IPPROTO_TCP  6

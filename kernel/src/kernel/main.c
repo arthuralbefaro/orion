@@ -136,6 +136,7 @@ void kmain(void)
     ahci_init();
     virtio_blk_init();
     e1000_init();
+    virtio_net_init();
     net_init();
     blockdev_cache_init();
     vfs_init();

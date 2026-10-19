@@ -296,9 +296,10 @@ trafego em `out\net.pcap`.
     /proc/meminfo cpuinfo uptime loadavg mounts version diskstats stat interrupts
     (AHCI e rede por MSI, cada uma numa CPU; a placa padrao dos testes e a e1000e)
 
-Disco virtio: `test.ps1 -Image -Bus virtio` liga a imagem como `virtio-blk-pci`;
-o kernel acha o disco (`vda`), monta a raiz em `vda2` e usa MSI-X. A sequencia V
-da regressao roda assim.
+Virtio: `test.ps1 -Image -Bus virtio` liga a imagem como `virtio-blk-pci` e
+`-Nic virtio-net-pci` troca a placa de rede; o kernel acha o disco (`vda`),
+monta a raiz em `vda2`, sobe a rede pela virtio-net e usa MSI-X nos dois. A
+sequencia V da regressao roda assim.
 O `ps`, o `top`, o `free`, o `uptime` e a janela de processos do `wm` leem
 daqui. `/proc/<pid>/fd/N` ainda e um arquivo com o caminho (vira link
 simbolico na 2.7).

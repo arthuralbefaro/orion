@@ -54,3 +54,4 @@ void virtq_push(struct virtq *q, uint16_t head);
 bool virtq_pop(struct virtq *q, uint16_t *head, uint32_t *len);
 
 bool virtio_blk_init(void);
+bool virtio_net_init(void);

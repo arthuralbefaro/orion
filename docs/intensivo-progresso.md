@@ -28,23 +28,22 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 12:45, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+Estado (2026-10-19, 13:35, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
 `v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.6 (apps `imgview`, `monitor`,
 `arquivos`, `editor`, `config` e `terminal`) e 6.7 (barra de tarefas,
 Alt+Tab, minimizar e maximizar, lancador de apps): Fase 6 inteira; e a
-5.2 (MSI: AHCI na CPU 1, rede `e1000e` na CPU 2) e a parte 1 da 5.3
-(transporte virtio e virtio-blk). Versao 2.4.0-a17. O
+5.2 (MSI: AHCI na CPU 1, rede `e1000e` na CPU 2) e a 5.3 (virtio-blk e
+virtio-net com MSI-X). Versao 2.4.0-a18. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E,
-na ISO na F e no virtio-blk na V, com 495 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+na ISO na F e no virtio (disco e rede) na V, com 502 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.3 parte 2, virtio-net (com uma camada `nic_*` entre a pilha
-de rede e o driver) e a sequencia V com rede pelo virtio; depois 5.4 a 5.9.
-Versao 2.4.0-a18 em diante.
+Proxima etapa: 5.4, NVMe (criterio: boot com a raiz num disco NVMe do
+QEMU); depois 5.5 a 5.9. Versao 2.4.0-a19 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -108,7 +107,7 @@ mandar o resultado do teste.
 | 4.4 | ASLR basico | [x] | 05:55 | 06:26 | ver `git log` (tag `v2.3`) |
 | 5.1 | uACPI | [x] | 10:14 | 11:05 | ver `git log` |
 | 5.2 | MSI/MSI-X | [x] | 04:20 | 06:15 | ver `git log` (2 partes) |
-| 5.3 | virtio-blk e virtio-net | [~] | 06:15 | | |
+| 5.3 | virtio-blk e virtio-net | [x] | 06:15 | 13:35 | ver `git log` (2 partes) |
 | 5.4 | NVMe | [ ] | | | |
 | 5.5 | xHCI | [ ] | | | |
 | 5.6 | USB HID | [ ] | | | |
@@ -1382,6 +1381,28 @@ depois; os fontes eram todos de antes do comeco. O Windows reiniciou as 11:51
 (evento 1074), ja com a regressao terminada.
 Ficou de fora: varios pedidos ao mesmo tempo na fila, `VIRTIO_BLK_F_FLUSH`,
 virtio legado por portas de I/O.
+
+#### 5.3 parte 2 virtio-net - 12:45 a 13:35 - FEITO (fecha a 5.3)
+Camada `nic_*` (`drivers/nic.c`) entre a pilha de rede e o driver: quem acha
+a placa registra suas operacoes e `net.c` e `socket.c` so chamam `nic_*`; a
+`e1000` procura so placa Intel. `drivers/virtio_net.c`: fila de recepcao com
+64 buffers postados e MSI-X, fila de transmissao liberada no envio, cabecalho
+de 12 bytes do virtio 1.0, MAC e link da configuracao. Criterio da 5.3 (a
+regressao roda nos dois modos): a sequencia V passou a usar a virtio-net com
+o servidor do hospedeiro: DHCP, ping sem perda, 10 MiB por TCP com o crc32
+certo (2,4 s) e as MSI-X do disco (CPU 2) e da rede (CPU 3) contadas no
+`/proc/interrupts`; A a F seguem com AHCI e `e1000e`. Regressao 495 -> 502,
+verde na primeira rodada completa (30 minutos). Versao 2.4.0-a18. RAM livre
+antes da regressao: 2,9 GB.
+Problemas: o Windows caiu as 12:45:15 (Kernel-Power 41, sem QEMU rodando)
+logo depois do commit da parte 1, no meio da escrita desta parte; os seis
+arquivos gravados no ultimo minuto ficaram so com bytes nulos (o `git diff`
+os mostrava como binarios). O repositorio estava integro (`git fsck`); os
+arquivos voltaram do commit e a parte foi refeita. A virtio-net funcionou de
+primeira.
+Ficou de fora: varias filas, checksum e segmentacao na placa
+(`VIRTIO_NET_F_CSUM`, TSO), buffers que se juntam (`MRG_RXBUF`), MSI-X para a
+fila de transmissao.
 
 ### Sessao 2 - 2026-10-17
 

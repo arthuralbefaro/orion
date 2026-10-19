@@ -297,16 +297,16 @@ static long sock_ioctl(struct file *f, uint64_t request, uint64_t arg)
     switch (request) {
     case SIOCGIFCONF_ORION: {
         struct net_stats ns;
-        struct e1000_stats es;
+        struct nic_stats es;
         net_get_stats(&ns);
-        e1000_get_stats(&es);
+        nic_get_stats(&es);
         memset(&r, 0, sizeof(r));
         memcpy(r.mac, ni->mac, ETH_ALEN);
         r.ip = ni->ip;
         r.netmask = ni->netmask;
         r.gateway = ni->gateway;
         r.dns = ni->dns;
-        r.link_up = e1000_link_up();
+        r.link_up = nic_link_up();
         r.rx_packets = es.rx_packets;
         r.tx_packets = es.tx_packets;
         r.rx_dropped = es.rx_dropped;

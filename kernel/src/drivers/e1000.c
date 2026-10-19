@@ -96,7 +96,7 @@ static uint64_t tx_buf_phys[TX_DESCS];
 static uint32_t rx_next, tx_next;
 static uint8_t mac[ETH_ALEN];
 static bool present;
-static struct e1000_stats stats;
+static struct nic_stats stats;
 static spinlock_t e1000_lock = SPINLOCK_INIT;
 static struct waitqueue rx_wq = WAITQUEUE_INIT;
 
@@ -183,15 +183,30 @@ static void e1000_irq(struct interrupt_frame *frame, void *ctx)
         wake_up_all(&rx_wq);
 }
 
+static const uint8_t *e1000_mac(void);
+static bool e1000_link_up(void);
+static int e1000_receive(void *buf, int max);
+static int e1000_send(const void *buf, int len);
+static void e1000_get_stats(struct nic_stats *out);
+static struct waitqueue *e1000_rx_queue(void);
+
+static const struct nic_ops e1000_ops = {
+    .name = "e1000",
+    .mac = e1000_mac,
+    .link_up = e1000_link_up,
+    .receive = e1000_receive,
+    .send = e1000_send,
+    .stats = e1000_get_stats,
+    .rx_queue = e1000_rx_queue,
+};
+
 bool e1000_init(void)
 {
-    const struct pci_device *dev = pci_find_class(0x02, 0x00, 0);
+    const struct pci_device *dev = NULL;
+    for (uint32_t i = 0; (dev = pci_find_class(0x02, 0x00, i)) && dev->vendor != 0x8086; i++)
+        ;
     if (!dev) {
-        log_info("e1000", "nenhuma placa de rede ethernet no PCI");
-        return false;
-    }
-    if (dev->vendor != 0x8086) {
-        log_warn("e1000", "placa %04x:%04x nao suportada", dev->vendor, dev->device);
+        log_info("e1000", "nenhuma placa de rede Intel no PCI");
         return false;
     }
     pci_enable_bus_master(dev);
@@ -240,6 +255,7 @@ bool e1000_init(void)
     }
 
     present = true;
+    nic_register(&e1000_ops);
     log_info("e1000", "%04x:%04x em %02x:%02x.%u, MAC %02x:%02x:%02x:%02x:%02x:%02x, %s, link %s",
              dev->vendor, dev->device, dev->bus, dev->slot, dev->func,
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], how,
@@ -247,22 +263,17 @@ bool e1000_init(void)
     return true;
 }
 
-bool e1000_present(void)
-{
-    return present;
-}
-
-const uint8_t *e1000_mac(void)
+static const uint8_t *e1000_mac(void)
 {
     return mac;
 }
 
-bool e1000_link_up(void)
+static bool e1000_link_up(void)
 {
     return present && (rd(REG_STATUS) & STATUS_LU) != 0;
 }
 
-int e1000_receive(void *buf, int max)
+static int e1000_receive(void *buf, int max)
 {
     if (!present)
         return 0;
@@ -288,7 +299,7 @@ int e1000_receive(void *buf, int max)
     return len;
 }
 
-int e1000_send(const void *buf, int len)
+static int e1000_send(const void *buf, int len)
 {
     if (!present)
         return -ENODEV;
@@ -317,12 +328,12 @@ int e1000_send(const void *buf, int len)
     return 0;
 }
 
-void e1000_get_stats(struct e1000_stats *out)
+static void e1000_get_stats(struct nic_stats *out)
 {
     *out = stats;
 }
 
-struct waitqueue *e1000_rx_queue(void)
+static struct waitqueue *e1000_rx_queue(void)
 {
     return &rx_wq;
 }
