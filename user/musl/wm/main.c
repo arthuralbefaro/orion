@@ -32,7 +32,11 @@
 #define KEY_CTRL_F     0x06
 #define KEY_CTRL_M     0x0D
 #define KEY_CTRL_X     0x18
+#define SC_F1          0x3B
 #define SC_F9          0x43
+#define SC_UP          0x48
+#define SC_DOWN        0x50
+#define KEY_ESC        0x1B
 #define SC_F10         0x44
 #define CTL_PATH       "/run/wm.sock"
 #define CTL_MAX        8
@@ -373,13 +377,36 @@ static void open_files(const char *path)
     printf("wm: janela de arquivos em %s\n", w->path);
 }
 
+static void launch(const char *prog, const char *arg)
+{
+    char path[64];
+    snprintf(path, sizeof(path), "/bin/%s", prog);
+    fflush(NULL);
+    pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "wm: fork: %s\n", orion_strerror(errno));
+        return;
+    }
+    if (pid == 0) {
+        close_extra_fds(-1);
+        signal(SIGPIPE, SIG_DFL);
+        execl(path, prog, arg, (char *)NULL);
+        _exit(127);
+    }
+    fprintf(stderr, "wm: lancou %s (pid %d)\n", prog, (int)pid);
+}
+
 static void menu_activate(int item)
 {
     switch (item) {
     case 0: new_terminal(); break;
-    case 1: open_procs(); break;
-    case 2: open_files("/"); break;
-    case 3: {
+    case 1: launch("terminal", NULL); break;
+    case 2: launch("arquivos", "/"); break;
+    case 3: launch("editor", "/root/notas.txt"); break;
+    case 4: launch("monitor", NULL); break;
+    case 5: launch("imgview", NULL); break;
+    case 6: launch("config", NULL); break;
+    case 7: {
         struct rect f = rect_make(360, 300, 50 * GFX_CELL_W + 8 + WIN_CHROME_X,
                                   8 * GFX_CELL_H + 8 + WIN_CHROME_Y);
         struct window *w = desk_new(&desk, WIN_ABOUT, "Sobre", f);
@@ -387,7 +414,7 @@ static void menu_activate(int item)
             desk_raise(&desk, w);
         break;
     }
-    case 4: running = false; break;
+    case 8: running = false; break;
     default: break;
     }
 }
@@ -565,15 +592,45 @@ static const char *extended_sequence(int32_t code)
     }
 }
 
+static void menu_keys(int32_t scancode, int32_t ascii, int32_t mods)
+{
+    bool ext = (mods & INPUT_MOD_EXTENDED) != 0;
+    int item = -1;
+    if (ext && scancode == SC_UP)
+        desk.menu_hover = desk.menu_hover <= 0 ? MENU_ITEMS - 1 : desk.menu_hover - 1;
+    else if (ext && scancode == SC_DOWN)
+        desk.menu_hover = desk.menu_hover < 0 || desk.menu_hover >= MENU_ITEMS - 1 ? 0 : desk.menu_hover + 1;
+    else if (ascii == '\n' || ascii == '\r')
+        item = desk.menu_hover;
+    if (ascii == '\n' || ascii == '\r' || ascii == KEY_ESC || (mods & INPUT_MOD_ALT))
+        desk.menu_open = false;
+    desk_damage_menu(&desk);
+    desk_damage_topbar(&desk);
+    if (item >= 0) {
+        fprintf(stderr, "wm: menu: %s\n", desk_menu_label(item));
+        menu_activate(item);
+    }
+}
+
 static void handle_key(int32_t scancode, int32_t ascii, int32_t mods)
 {
-    (void)scancode;
     if ((mods & INPUT_MOD_CTRL) && (mods & INPUT_MOD_ALT) && ascii == KEY_CTRL_X) {
         running = false;
         return;
     }
+    if (desk.menu_open && !(mods & INPUT_MOD_CTRL)) {
+        menu_keys(scancode, ascii, mods);
+        return;
+    }
     if ((mods & INPUT_MOD_ALT) && !(mods & INPUT_MOD_CTRL)) {
         struct window *f = desk_focused(&desk);
+        if (scancode == SC_F1 && !(mods & INPUT_MOD_EXTENDED)) {
+            desk.menu_open = true;
+            desk.menu_hover = 0;
+            desk_damage_menu(&desk);
+            desk_damage_topbar(&desk);
+            return;
+        }
         if (ascii == '\t') {
             cycle_windows();
             return;
@@ -601,11 +658,11 @@ static void handle_key(int32_t scancode, int32_t ascii, int32_t mods)
             return;
         }
         if (ascii == KEY_CTRL_P) {
-            open_procs();
+            launch("monitor", NULL);
             return;
         }
         if (ascii == KEY_CTRL_F) {
-            open_files("/");
+            launch("arquivos", "/");
             return;
         }
     }

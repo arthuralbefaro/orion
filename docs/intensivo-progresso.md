@@ -28,27 +28,40 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 03:40, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+Estado (2026-10-19, 04:20, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
 `v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.6 (apps `imgview`, `monitor`,
-`arquivos`, `editor`, `config` e `terminal`) e a parte 1 da 6.7 (barra de
-tarefas, Alt+Tab, minimizar e maximizar). Versao 2.4.0-a13. O
+`arquivos`, `editor`, `config` e `terminal`) e 6.7 (barra de tarefas,
+Alt+Tab, minimizar e maximizar, lancador de apps): Fase 6 inteira. Versao
+2.4.0-a14. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e
-na ISO na F, com 474 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+na ISO na F, com 480 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 6.7 parte 2, lancador de apps no menu do `wm` (Ctrl+P e Ctrl+F
-abrem o `monitor` e o `arquivos`), com captura da sequencia D com 3 apps
-abertos. Versao 2.4.0-a14 em diante.
+Proxima etapa: 5.2, MSI/MSI-X para AHCI e rede com as IRQs distribuidas
+entre as CPUs (criterio: `irq` mostra interrupcoes em mais de uma CPU);
+depois 5.3 a 5.9. Versao 2.4.0-a15 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
 Fase 5 (turno "10+": fase 6, fase 5, 7.3 a 7.5), e so a 5.1 veio antes, junto
 da 7.1 e da 7.2 (turno 7). Nenhuma etapa da Fase 6 depende delas. Entram
 logo depois da 6.7, de 5.2 a 5.9, antes da 7.3.
+
+A 7.4 (hardware real) nao espera o dono (decidido por ele em 2026-10-19).
+Ao chegar nela, fazer so o que da sem um PC de verdade: gerar a ISO com
+`build.ps1 -Iso` e conferir que ela sobe no QEMU em UEFI e em BIOS; escrever
+`docs/teste-hardware-real.md` com o roteiro do teste (como gravar o pendrive
+no Windows, que opcoes escolher no firmware, como Secure Boot e CSM, o que
+conferir em cada etapa do boot e o que anotar e mandar se algo falhar: foto
+da tela, ultimo texto que apareceu, modelo da placa-mae); marcar a 7.4 como
+`[!]` no checklist com a nota "aguardando teste do usuario em hardware real,
+roteiro em docs/teste-hardware-real.md" e repetir isso no paragrafo do
+Estado. Depois seguir direto para a 7.5 e a Fase 8; a 7.4 volta quando o dono
+mandar o resultado do teste.
 
 ## Checklist
 
@@ -107,7 +120,7 @@ logo depois da 6.7, de 5.2 a 5.9, antes da 7.3.
 | 6.4 | Imagens PNG/JPEG | [x] | 13:05 | 13:38 | ver `git log` |
 | 6.5 | Compositor com areas sujas | [x] | 13:38 | 15:47 | ver `git log` |
 | 6.6 | Apps | [x] | 15:47 | 03:05 | ver `git log` (6 partes) |
-| 6.7 | Area de trabalho | [~] | 03:05 | | |
+| 6.7 | Area de trabalho | [x] | 03:05 | 04:20 | ver `git log` (2 partes) |
 | 7.1 | ISO hibrida | [x] | 06:26 | 09:44 | ver `git log` |
 | 7.2 | Live | [x] | 09:44 | 10:13 | ver `git log` |
 | 7.3 | Instalador | [ ] | | | |
@@ -1281,6 +1294,29 @@ completa (28 minutos). Versao 2.4.0-a13. RAM livre antes da regressao: 6,8 GB.
 Problemas: nenhum; a sequencia D passou na primeira rodada com as mudancas.
 Ficou de fora: maximizar janela de app (o protocolo nao tem redimensionar),
 arrastar a borda para redimensionar, area de trabalho com janelas lado a lado.
+
+#### 6.7 parte 2 Lancador de apps - 03:40 a 04:20 - FEITO (fecha a 6.7 e a Fase 6)
+`wm`: o menu "Orion" lanca os apps (terminal do `wm` e o app, arquivos,
+editor, monitor, imagens, configuracoes) por `fork`/`execl`; Ctrl+P e Ctrl+F
+abrem o `monitor` e o `arquivos` no lugar dos paineis 8x8 (que ficam no
+`wmctl procs` e `wmctl files`); o menu ganhou teclado (Alt+F1, setas, Enter,
+Esc); a janela "Sobre" e a dica da barra mostram os atalhos novos.
+Criterio: na sequencia D o `monitor` (Ctrl+P), o `arquivos` (Ctrl+F) e o
+`config` (menu pelo teclado) abrem e a captura final tem a janela do `config`
+na frente e os tres apps na barra de tarefas. Regressao 474 -> 480, verde na
+primeira rodada completa (28 minutos). Versao 2.4.0-a14. RAM livre antes da
+regressao: 3,9 GB.
+Problemas: o passo antigo da sequencia D que abria o menu pelo mouse nunca
+tinha aberto: o QEMU juntava o `mouse_move -640 -400` com o movimento
+seguinte e o clique caia em x=0, fora do botao; a captura `reg-gui-4-menu`
+saia sem menu e nenhuma verificacao olhava. Trocado pelo teclado, e a
+captura agora confere o item destacado.
+Marco M4 (desktop de verdade): terminal, arquivos, editor e visualizador de
+imagens rodam como programas separados; a fonte TrueType esta no `wm`
+(terminais dele, barra e titulos), mas os apps desenham com a 8x8 ampliada da
+`libgui`, entao o M4 fica com essa ressalva.
+Ficou de fora: icones no menu e na barra, menu com submenus, abrir arquivo
+pelo menu do editor, fonte vetorial nos apps.
 
 ### Sessao 2 - 2026-10-17
 

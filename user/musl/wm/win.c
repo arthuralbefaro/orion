@@ -23,8 +23,12 @@
 
 static const char *const menu_labels[MENU_ITEMS] = {
     "Novo terminal",
-    "Processos",
+    "Terminal (app)",
     "Arquivos",
+    "Editor de texto",
+    "Monitor",
+    "Imagens",
+    "Configuracoes",
     "Sobre",
     "Encerrar o wm",
 };
@@ -70,19 +74,19 @@ void panel_set(struct window *w, int row, const char *text)
 static const char *const about_lines[] = {
     "Orion - compositor em espaco de usuario",
     "",
-    "Ctrl+T       novo terminal      Ctrl+P   processos",
-    "Ctrl+F       arquivos           Ctrl+Q   fecha a janela",
-    "Ctrl+Alt+X   encerra o wm",
+    "Ctrl+T terminal  Ctrl+P monitor  Ctrl+F arquivos",
+    "Alt+Tab janelas  Alt+F9 minimiza  Alt+F10 maximiza",
+    "Ctrl+Q fecha a janela   Ctrl+Alt+X encerra o wm",
     "",
-    "Arraste pela barra de titulo para mover.",
-    "Clique numa janela para focar e trazer a frente.",
+    "Alt+F1 ou Orion: menu de apps. Embaixo: janelas.",
+    "Arraste pelo titulo; clique para focar.",
 };
 
 void desk_init(struct desktop *d, struct gfx *g)
 {
     memset(d, 0, sizeof(*d));
     d->gfx = g;
-    d->hint = "Ctrl+T terminal  Ctrl+P processos  Ctrl+F arquivos  Ctrl+Q fecha";
+    d->hint = "Ctrl+T terminal  Ctrl+P monitor  Ctrl+F arquivos  Alt+Tab janelas  Ctrl+Q fecha";
     strcpy(d->clock, "--:--:--");
     strcpy(d->date, "--/--/----");
     strcpy(d->ip, "sem rede");

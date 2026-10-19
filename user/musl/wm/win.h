@@ -24,7 +24,7 @@ enum win_kind {
 
 #define PANEL_ROWS 16
 #define PANEL_COLS 64
-#define MENU_ITEMS 5
+#define MENU_ITEMS 9
 #define MENU_W     260
 
 struct window {

@@ -2843,3 +2843,25 @@ Uma linha por decisao, na ordem em que foram tomadas.
   da posicao do mouse, que o QEMU entrega por movimentos relativos.
 - `WIN_MAX` de 8 para 16 (na D ja eram 7 janelas abertas) e
   `TERM_MAX_COLS` de 96 para 128 (o terminal maximizado tem 126 colunas).
+
+## v2.4.0-a14 (etapa 6.7 parte 2: lancador de apps)
+
+- O menu "Orion" do `wm` virou o lancador: terminal do `wm`, terminal app,
+  arquivos, editor (`/root/notas.txt`), monitor, imagens (o `imgview` abre o
+  papel de parede), configuracoes, sobre e encerrar. O `wm` lanca com `fork`
+  e `execl` de `/bin/<app>`, fecha no filho o framebuffer, a entrada e as
+  ptys (os sockets ja sao `CLOEXEC`) e colhe os filhos no laco que ja existia.
+- Ctrl+P e Ctrl+F abrem o `monitor` e o `arquivos` no lugar dos paineis 8x8
+  do proprio `wm`, que eram o que a 6.3 deixou para virar app. Os paineis
+  ficam so pelo `wmctl procs` e `wmctl files`, para nao perder o que eles
+  testam (protocolo de comandos, janela de painel).
+- O menu ganhou teclado: Alt+F1 abre, setas escolhem, Enter lanca, Esc fecha;
+  enquanto ele esta aberto as teclas sao dele. O motivo de fazer agora: o
+  passo antigo da sequencia D que abria o menu pelo mouse nunca abriu, porque
+  o QEMU junta o `mouse_move -640 -400` com o movimento seguinte e o cursor
+  ficava em x=0, fora do botao; a captura `reg-gui-4-menu` saia sem menu e
+  nenhuma verificacao olhava. O passo foi trocado pelo teclado, e a captura
+  agora confere o item destacado.
+- Criterio da 6.7: a sequencia D termina com 3 apps abertos (`monitor` pelo
+  Ctrl+P, `arquivos` pelo Ctrl+F e `config` pelo menu); a captura confere a
+  janela do `config` na frente e os tres na barra de tarefas.

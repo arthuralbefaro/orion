@@ -115,7 +115,11 @@ Area de trabalho: a barra de tarefas embaixo lista as janelas (clique foca,
 minimiza a que esta em foco ou restaura a minimizada); Alt+Tab passa pelas
 janelas, inclusive as minimizadas; Alt+F9 ou o botao `_` minimiza; Alt+F10 ou
 o botao de quadrado maximiza o terminal do `wm` na area de trabalho (126x33 em
-1280x800) e volta ao tamanho normal.
+1280x800) e volta ao tamanho normal. O menu "Orion" (clique ou Alt+F1, setas e
+Enter) lanca os apps: terminal do `wm` ou app, arquivos, editor
+(`/root/notas.txt`), monitor, imagens e configuracoes; Ctrl+P abre o `monitor`
+e Ctrl+F o `arquivos`. Os paineis antigos de processos e arquivos do `wm`
+continuam no `wmctl procs` e `wmctl files <caminho>`.
 O terminal grafico entende as sequencias ANSI de cursor, apagamento e cores.
 
 ### Boot direto na interface grafica

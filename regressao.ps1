@@ -827,15 +827,15 @@ if ($runAll -or $OnlyD) {
         "mon:mouse_move 0 26", "wait:0.5", "mon:mouse_button 1", "wait:0.3", "mon:mouse_button 0", "wait:1",
         "mon:sendkey f10", "wait:0.5", "mon:sendkey right", "mon:sendkey left", "mon:sendkey down", "mon:sendkey down",
         "wait:0.5", "shot:out\shots\reg-gui-9-menu-arquivo.ppm", "mon:sendkey ret", "wait:2",
-        "mon:sendkey ctrl-p", "wait:2", "shot:out\shots\reg-gui-2-processos.ppm",
-        "mon:sendkey ctrl-f", "wait:2", "shot:out\shots\reg-gui-3-arquivos.ppm",
+        "mon:sendkey ctrl-p", "wait:4", "shot:out\shots\reg-gui-2-monitor.ppm",
+        "mon:sendkey ctrl-f", "wait:4", "shot:out\shots\reg-gui-3-arquivos.ppm",
         "mon:sendkey ctrl-t", "wait:2", "mon:sendkey alt-f10", "wait:1.5", "shot:out\shots\reg-gui-10-maximizado.ppm",
         "mon:sendkey alt-f10", "wait:1", "mon:sendkey alt-f9", "wait:1", "shot:out\shots\reg-gui-11-minimizado.ppm",
         "mon:sendkey alt-tab", "wait:0.5", "mon:sendkey alt-tab", "wait:0.5", "mon:sendkey alt-tab", "wait:0.5",
         "mon:sendkey alt-tab", "wait:0.5", "mon:sendkey alt-tab", "wait:0.5", "mon:sendkey alt-tab", "wait:1",
-        "mon:mouse_move -640 -400", "wait:0.5", "mon:mouse_move 40 12", "wait:0.5",
-        "mon:mouse_button 1", "wait:0.4", "mon:mouse_button 0", "wait:1",
-        "shot:out\shots\reg-gui-4-menu.ppm",
+        "mon:sendkey alt-f1", "wait:0.5", "mon:sendkey down", "mon:sendkey down", "mon:sendkey down", "mon:sendkey down",
+        "mon:sendkey down", "mon:sendkey down", "wait:0.5", "shot:out\shots\reg-gui-4-menu.ppm", "mon:sendkey ret",
+        "wait:4", "shot:out\shots\reg-gui-12-tres-apps.ppm",
         "mon:sendkey ctrl-alt-x", "wait:6"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image -Gui -LogPath "out\reg-d.log" `
@@ -849,8 +849,14 @@ if ($runAll -or $OnlyD) {
     Expect $d "init: iniciando /bin/wm" "init subiu direto na interface grafica"
     Expect $d "wm: \d+x\d+, celula" "wm abriu o framebuffer sem passar pelo sh"
     Expect $d "wm: terminal 0 -> sh pid \d+" "wm abriu um terminal com o sh dentro"
-    Expect $d "wm: janela de processos aberta" "Ctrl\+P abriu a janela de processos"
-    Expect $d "wm: janela de arquivos em /" "Ctrl\+F abriu a janela de arquivos"
+    Expect $d "wm: lancou monitor \(pid \d+\)[\s\S]*?wm: app abriu a janela \d+ \(640x470, 'monitor'\)" "Ctrl\+P abre o monitor (app)"
+    Expect $d "wm: lancou arquivos \(pid \d+\)[\s\S]*?wm: app abriu a janela \d+ \(640x440, 'arquivos'\)" "Ctrl\+F abre o arquivos (app)"
+    Expect $d "wm: menu: Configuracoes\s*\nwm: lancou config \(pid \d+\)[\s\S]*?wm: app abriu a janela \d+ \(640x400, 'config'\)" "menu do wm (Alt+F1, setas e Enter) lanca o config"
+    Test-ShotPixel "out\shots\reg-gui-4-menu.ppm" 240 148 0x2c5e9e 12 "captura do menu aberto pelo teclado com Configuracoes destacado"
+    Test-ShotPixel "out\shots\reg-gui-12-tres-apps.ppm" 600 600 0x1b2230 12 "captura com 3 apps: janela do config na frente"
+    Test-ShotPixel "out\shots\reg-gui-12-tres-apps.ppm" 1250 785 0x2c5e9e 12 "captura com 3 apps: config em foco na barra de tarefas"
+    Test-ShotPixel "out\shots\reg-gui-12-tres-apps.ppm" 700 785 0x2a3040 12 "captura com 3 apps: monitor na barra de tarefas"
+    Test-ShotPixel "out\shots\reg-gui-12-tres-apps.ppm" 900 785 0x2a3040 12 "captura com 3 apps: arquivos na barra de tarefas"
     Expect $d "wm: terminal \d+ maximizado: 126x33" "Alt\+F10 maximiza o terminal na area de trabalho (126x33)"
     Expect $d "wm: terminal \d+ volta ao tamanho normal: 60x20" "Alt\+F10 de novo volta o terminal a 60x20"
     Expect $d "(wm: alt\+tab: janela \d+ em foco[^\n]*\s*\n){6}" "Alt\+Tab passa por seis janelas seguidas"
