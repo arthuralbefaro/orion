@@ -28,25 +28,25 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 14:10, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+Estado (2026-10-19, 14:55, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
 `v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.6 (apps `imgview`, `monitor`,
 `arquivos`, `editor`, `config` e `terminal`) e 6.7 (barra de tarefas,
 Alt+Tab, minimizar e maximizar, lancador de apps): Fase 6 inteira; e a
 5.2 (MSI: AHCI na CPU 1, rede `e1000e` na CPU 2), a 5.3 (virtio-blk e
-virtio-net com MSI-X) e a 5.4 (NVMe). Versao 2.4.0-a19. O
+virtio-net com MSI-X), a 5.4 (NVMe) e a 5.5 (xHCI e `lsusb`, em Rust).
+Versao 2.4.0-a20. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E,
-na ISO na F, no virtio (disco e rede) na V e no NVMe na N, com 511
-verificacoes; a sequencia A sobe o `tools/hostweb.py`
+na ISO na F, no virtio (disco e rede) na V, no NVMe na N e com USB na U,
+com 518 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.5, xHCI (USB 3) parte 1: controlador e enumeracao,
-em Rust como o plano manda para o USB (`kernel/rust/usb`); criterio:
-`lsusb` lista os dispositivos do QEMU. Depois 5.6 a 5.9. Versao
-2.4.0-a20 em diante.
+Proxima etapa: 5.6, teclado e mouse USB HID (criterio: QEMU com
+`usb-kbd` e sem PS/2 funciona); depois 5.7 a 5.9. Versao 2.4.0-a21 em
+diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -134,7 +134,7 @@ e o notebook, que vem caindo com tela azul):
 | 5.2 | MSI/MSI-X | [x] | 04:20 | 06:15 | ver `git log` (2 partes) |
 | 5.3 | virtio-blk e virtio-net | [x] | 06:15 | 13:35 | ver `git log` (2 partes) |
 | 5.4 | NVMe | [x] | 13:35 | 14:10 | ver `git log` |
-| 5.5 | xHCI | [ ] | | | |
+| 5.5 | xHCI | [x] | 14:10 | 14:55 | ver `git log` |
 | 5.6 | USB HID | [ ] | | | |
 | 5.7 | USB armazenamento | [ ] | | | |
 | 5.8 | Audio HDA | [ ] | | | |
@@ -1444,6 +1444,29 @@ antes da regressao: 2,8 GB.
 Problemas: nenhum; o driver funcionou de primeira no QEMU.
 Ficou de fora: varias filas de I/O e varios pedidos ao mesmo tempo, namespaces
 alem do 1, blocos de 4 KiB, desligar o controlador no `poweroff`.
+
+#### 5.5 xHCI e enumeracao USB, em Rust - 14:10 a 14:55 - FEITO
+`kernel/rust/usb` (novo, `orion_usb`): `desc.rs` interpreta os descritores
+USB sem confiar no dispositivo (testes no hospedeiro com os descritores do
+teclado do QEMU, cortados e com cada byte trocado); `xhci.rs` (so no alvo do
+kernel) tira o controlador do firmware, reinicia, monta `DCBAA`, rascunho,
+anel de comandos e de eventos, e enumera: reset de porta, `Enable Slot`,
+`Address Device` e transferencias de controle para os descritores e as
+strings. O C (`drivers/usb.c`) acha o xHCI no PCI, mapeia a BAR e da ao Rust
+DMA, relogio, espera e log; `/proc/usb` e `lsusb` (novo) mostram o que foi
+achado. `test.ps1 -Usb` liga `qemu-xhci` com `usb-kbd` e `usb-tablet`.
+Criterio: o `lsusb` lista os dois dispositivos do QEMU com fabricante,
+produto, versao, velocidade e classe. Verificacao: a sequencia U sozinha (7
+verificacoes) e a regressao completa de fim de etapa, 511 -> 518, verde na
+primeira rodada (31 minutos). Versao 2.4.0-a20. RAM livre: 1,8 GB na sequencia
+U (rodou e anotado), 2,4 GB antes da completa, depois de esperar.
+Problemas: (1) a primeira rodada mostrou "xHCI 0.00": o QEMU devolve 0 na
+leitura de 16 bits do registrador de capacidades; passou a ler 32 bits. (2) O
+`cargo test` do crate guarda-chuva nao linkava, porque compilava o `xhci.rs`
+no Windows; o modulo passou a existir so no alvo do kernel.
+Ficou de fora: hubs USB, interrupcao do xHCI (os eventos sao lidos por laco),
+desligar slots, dispositivos ligados depois do boot, portas USB 3 de verdade
+(os dispositivos do QEMU sao USB 2).
 
 ### Sessao 2 - 2026-10-17
 

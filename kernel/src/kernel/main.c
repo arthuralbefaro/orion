@@ -12,6 +12,7 @@
 #include <drivers/ahci.h>
 #include <drivers/virtio.h>
 #include <drivers/nvme.h>
+#include <drivers/usb.h>
 #include <fs/vfs.h>
 #include <fs/block.h>
 #include <fs/devfs.h>
@@ -139,6 +140,7 @@ void kmain(void)
     nvme_init();
     e1000_init();
     virtio_net_init();
+    usb_init();
     net_init();
     blockdev_cache_init();
     vfs_init();

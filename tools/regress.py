@@ -55,6 +55,7 @@ def parse_sequences():
             seq["nic"] = nic.group(1) if nic else "e1000e"
             bus = re.search(r"-Bus\s+(\S+)", c)
             seq["bus"] = bus.group(1) if bus else "ahci"
+            seq["usb"] = bool(re.search(r"-Usb\b", c))
             hf = re.search(r"-HostFwd\s+@\(([^)]*)\)", c)
             if hf:
                 seq["hostfwd"] = [ps_string(s) for s in STRING.finditer(hf.group(1))]
@@ -192,7 +193,7 @@ def run_stress(seq, rep, runs, smp, image=False):
 
 def main():
     ap = argparse.ArgumentParser(description="Regressao do Orion (le os passos do regressao.ps1)")
-    ap.add_argument("which", nargs="?", default="ABCDFVNE", help="sequencias, ex.: ABCDFVNE ou AC")
+    ap.add_argument("which", nargs="?", default="ABCDFVNUE", help="sequencias, ex.: ABCDFVNUE ou AC")
     ap.add_argument("--smp", type=int, default=4)
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--stress-runs", type=int, default=1)
@@ -238,7 +239,7 @@ def main():
                               boot_timeout=seq["boot"], command_delay=seq["delay"], log_path=seq["log"],
                               iso=seq.get("iso", False), iso_disk=seq.get("iso_disk", False),
                               bios=seq.get("bios", False), nic=seq.get("nic", "e1000e"),
-                              bus=seq.get("bus", "ahci"))
+                              bus=seq.get("bus", "ahci"), usb=seq.get("usb", False))
         finally:
             if web:
                 web.kill()

@@ -2984,3 +2984,38 @@ Uma linha por decisao, na ordem em que foram tomadas.
   `test.ps1` e no `qrun.py`): o OVMF boota pelo NVMe, a raiz monta em
   `nvme0n1p2`, `fstest -a` na raiz, a MSI-X contada e um arquivo que sobrevive
   ao reboot.
+
+## v2.4.0-a20 (etapa 5.5: xHCI e enumeracao USB, em Rust)
+
+- O USB e o segundo lugar do Rust que o plano listou depois do TCP:
+  `kernel/rust/usb` (`orion_usb`). O C fica com o que e do kernel: achar o
+  controlador no PCI (classe 0C/03/30), mapear a BAR, e funcoes finas que o
+  Rust chama (`usb_dma_alloc`, `usb_now_us`, `usb_sleep_ms`, `usb_log`), porque
+  `phys_to_virt` e `inline` e `log_info` e macro. O Rust faz o controlador e
+  interpreta os descritores.
+- Descritores (`desc.rs`) sao dados que vem do dispositivo, entao o parser nao
+  confia em nada: confere tamanho e tipo, anda pela configuracao pelo `bLength`
+  ate o menor entre o `wTotalLength` e o que chegou, para no comprimento zero, e
+  troca caractere fora do ASCII por `?` nas strings. Os testes no hospedeiro
+  usam os descritores do teclado do QEMU e cortam e trocam cada byte.
+- `xhci.rs` so compila no alvo do kernel (`target_os = "none"`): o `cargo test`
+  do crate guarda-chuva compila o `orion_usb` como dependencia comum no
+  Windows, onde as funcoes do kernel nao existem.
+- Controlador: tira a posse do firmware (capacidade estendida 1), para,
+  reinicia, `MaxSlotsEn` ate 32, `DCBAA` com os buffers de rascunho que ele
+  pedir, anel de comandos e anel de eventos de 256 TRBs com o bit de ciclo e
+  o TRB de ligacao, e liga. Nesta etapa os eventos sao lidos por laco com
+  prazo; interrupcao fica para quando houver transferencia continua (5.6).
+- Enumeracao: em cada porta com algo ligado e ainda nao habilitada, reset da
+  porta (preservando os bits RW1C e limpando as mudancas depois); `Enable
+  Slot`, contexto de entrada com o slot e o EP0 (tamanho de pacote pela
+  velocidade), `Address Device`, e transferencias de controle (Setup, Data,
+  Status) para o descritor do dispositivo, a configuracao inteira, o idioma e
+  as strings de fabricante e produto.
+- O registrador de capacidades e lido em 32 bits: o QEMU devolveu 0 na leitura
+  de 16 bits da versao (a primeira rodada mostrou "xHCI 0.00").
+- `/proc/usb` e o `lsusb` (novo) mostram porta, slot, `ID vvvv:pppp`,
+  fabricante, produto, versao USB, velocidade e a classe (do dispositivo ou da
+  primeira interface). `test.ps1 -Usb` e `qrun.py --usb` ligam um `qemu-xhci`
+  com `usb-kbd` e `usb-tablet`; a sequencia U nova confere o controlador, a
+  enumeracao e o `lsusb`.

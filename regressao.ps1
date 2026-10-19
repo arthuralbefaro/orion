@@ -9,6 +9,7 @@ param(
     [switch]$OnlyF,
     [switch]$OnlyV,
     [switch]$OnlyN,
+    [switch]$OnlyU,
     [int]$StressRuns = 1,
     [switch]$Verbose
 )
@@ -17,7 +18,7 @@ $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 $failures = @()
 $checks = 0
-$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN)
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -1000,6 +1001,26 @@ if ($runAll -or $OnlyN) {
     ExpectNot $n "(?s)cat /proc/interrupts.*?\n\s*\d+:\s+0\s+0\s+0\s+0\s+nvme" "a MSI-X do NVMe chegou de fato"
     Expect $n "(?s)----- reboot -----.*?cat /root/persiste\.txt\s*\npersiste-no-nvme" "o que foi gravado no NVMe sobrevive ao reboot"
     ExpectNot $n "PANIC|EXCECAO" "nenhum panico na sequencia N"
+}
+
+# ---------------- Sequencia U: USB ----------------
+if ($runAll -or $OnlyU) {
+    Write-Host "== Sequencia U (USB pelo xHCI) ==" -ForegroundColor Cyan
+    $stepsU = @(
+        "cmd:lsusb", "wait:2", "cmd:cat /proc/usb", "wait:1"
+    )
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Usb -LogPath "out\reg-u.log" `
+        -Script $stepsU -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
+    $u = Get-Log "out\reg-u.log"
+    if ($Verbose) { Write-Output $u }
+
+    Expect $u "usb\s+controlador xHCI 1b36:000d em " "xHCI achado no PCI"
+    Expect $u "usb\s+xHCI 1\.\d\d, 8 porta\(s\)" "xHCI reiniciado e ligado, com a versao e as portas"
+    Expect $u "usb\s+2 dispositivo\(s\) USB" "dois dispositivos enumerados (Enable Slot e Address Device)"
+    Expect $u "(?s)\$ lsusb\s*\n[^\n]*ID 0627:0001 QEMU QEMU USB Keyboard \(USB 2\.00, [a-z ]+speed, classe hid\)" "lsusb mostra o teclado USB com as strings do dispositivo"
+    Expect $u "(?s)\$ lsusb.*?ID 0627:0001 QEMU QEMU USB Tablet \(USB 2\.00, [a-z ]+speed, classe hid\)" "lsusb mostra o tablet USB"
+    ExpectNot $u "usb\s+porta \d+: (Enable|Address|descritor)" "nenhuma porta falhou na enumeracao"
+    ExpectNot $u "PANIC|EXCECAO|rust: " "nenhum panico na sequencia U"
 }
 
 # ---------------- Sequencia E: estresse de processos ----------------

@@ -12,8 +12,13 @@ version = "0.1.0"
 dependencies = [
  "orion_ext2",
  "orion_tcp",
+ "orion_usb",
 ]
 
 [[package]]
 name = "orion_tcp"
+version = "0.1.0"
+
+[[package]]
+name = "orion_usb"
 version = "0.1.0"

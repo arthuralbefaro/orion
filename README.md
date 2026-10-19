@@ -245,7 +245,7 @@ desempacota num tmpfs usado como raiz, sem precisar de disco. Login `root` ou
 ## Programas proprios em /bin
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
-    ifconfig ping nslookup wget nc telnet httpget httpd wmctl hello-gui guidemo imgview monitor arquivos editor config terminal imginfo cpuuso dhcp netup id login su passwd poweroff reboot halt mkfs mkfs.ext2 fsck.ext2 mount umount
+    ifconfig ping nslookup wget nc telnet httpget httpd wmctl hello-gui guidemo imgview monitor arquivos editor config terminal lsusb imginfo cpuuso dhcp netup id login su passwd poweroff reboot halt mkfs mkfs.ext2 fsck.ext2 mount umount
     testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest unixtest permtest aslrtest shmtest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
@@ -293,7 +293,7 @@ trafego em `out\net.pcap`.
 
 ## /proc
     /proc/<pid>/status cmdline maps stat fd/   cada processo (self = o proprio)
-    /proc/meminfo cpuinfo uptime loadavg mounts version diskstats stat interrupts
+    /proc/meminfo cpuinfo uptime loadavg mounts version diskstats stat interrupts usb
     (AHCI e rede por MSI, cada uma numa CPU; a placa padrao dos testes e a e1000e)
 
 Virtio: `test.ps1 -Image -Bus virtio` liga a imagem como `virtio-blk-pci` e
@@ -304,6 +304,11 @@ sequencia V da regressao roda assim.
 NVMe: `test.ps1 -Image -Bus nvme` liga a imagem como controlador NVMe do QEMU;
 o disco vira `nvme0n1` (particoes `nvme0n1p1`, `nvme0n1p2`, como no Linux), a
 raiz monta no NVMe e a fila de I/O usa MSI-X. A sequencia N roda assim.
+
+USB: o kernel liga o controlador xHCI (codigo em Rust, `kernel/rust/usb`),
+enumera os dispositivos e `lsusb` (ou `/proc/usb`) mostra fabricante, produto,
+versao USB, velocidade e classe; `test.ps1 -Usb` poe um xHCI com teclado e
+tablet USB no QEMU, e a sequencia U roda assim.
 O `ps`, o `top`, o `free`, o `uptime` e a janela de processos do `wm` leem
 daqui. `/proc/<pid>/fd/N` ainda e um arquivo com o caminho (vira link
 simbolico na 2.7).

@@ -11,6 +11,7 @@
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/percpu.h>
 #include <arch/x86_64/interrupts.h>
+#include <drivers/usb.h>
 #include <mm/heap.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
@@ -31,6 +32,7 @@ enum pkind {
     P_DISKSTATS,
     P_SYSSTAT,
     P_INTERRUPTS,
+    P_USB,
     P_PIDDIR = 16,
     P_STATUS,
     P_CMDLINE,
@@ -49,7 +51,7 @@ static const struct pent root_ents[] = {
     { "meminfo", P_MEMINFO }, { "cpuinfo", P_CPUINFO }, { "uptime", P_UPTIME },
     { "mounts", P_MOUNTS },   { "loadavg", P_LOADAVG }, { "version", P_VERSION },
     { "diskstats", P_DISKSTATS }, { "stat", P_SYSSTAT },
-    { "interrupts", P_INTERRUPTS },
+    { "interrupts", P_INTERRUPTS }, { "usb", P_USB },
 };
 
 static const struct pent pid_ents[] = {
@@ -455,6 +457,18 @@ static void gen_interrupts(struct pbuf *b)
     }
 }
 
+static void gen_usb(struct pbuf *b)
+{
+    char *tmp = kmalloc(8192);
+    if (!tmp) {
+        b->failed = true;
+        return;
+    }
+    size_t n = usb_report(tmp, 8192);
+    pb_bytes(b, tmp, n);
+    kfree(tmp);
+}
+
 static void mount_line(const struct mount *m, void *ctx)
 {
     pb_printf(ctx, "%s %s %s %s 0 0\n", m->source, m->point, m->type->name,
@@ -621,6 +635,7 @@ static int proc_open(struct vnode *v, int flags, struct file **out)
     case P_DISKSTATS: gen_diskstats(&b); break;
     case P_SYSSTAT: gen_sysstat(&b); break;
     case P_INTERRUPTS: gen_interrupts(&b); break;
+    case P_USB: gen_usb(&b); break;
     case P_STATUS:  gen_status(&b, p); break;
     case P_STAT:    gen_stat(&b, p); break;
     case P_CMDLINE: gen_cmdline(&b, p); break;

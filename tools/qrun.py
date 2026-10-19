@@ -118,8 +118,9 @@ def host_get(port, path):
 class Machine:
     def __init__(self, smp=4, memory=512, disk=False, extra_disks=(), serial_port=4444, monitor_port=4445,
                  boot_timeout=60.0, image=False, hostfwd=(), login=("root", "orion"), media=None, bios=False,
-                 nic="e1000e", bus="ahci"):
+                 nic="e1000e", bus="ahci", usb=False):
         self.image = image
+        self.usb = usb
         self.nic = nic
         self.bus = bus
         self.media = media or ("image" if image else "esp")
@@ -173,6 +174,8 @@ class Machine:
             "-netdev", "user,id=n0" + "".join(",hostfwd=" + f for f in self.hostfwd), "-device", f"{self.nic},netdev=n0",
             "-object", "filter-dump,id=d0,netdev=n0,file=out/net.pcap",
         ]
+        if self.usb:
+            args += ["-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0", "-device", "usb-tablet,bus=xhci.0"]
         if self.disk:
             args += ["-drive", "format=raw,file=out/disk.img"]
         for extra in self.extra_disks:
@@ -482,7 +485,7 @@ def write_autostart(gui):
 
 def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_build=False, boot_timeout=60.0,
         command_delay=1.0, settle=2.0, log_path="out/test-serial.log", kernel_shell=False, image=False,
-        hostfwd=(), iso=False, iso_disk=False, bios=False, nic="e1000e", bus="ahci"):
+        hostfwd=(), iso=False, iso_disk=False, bios=False, nic="e1000e", bus="ahci", usb=False):
     if not no_build:
         build(gui, image, iso or iso_disk)
     elif gui:
@@ -495,7 +498,7 @@ def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_buil
         raise SystemExit("out/orion.iso nao existe: rode o build com a ISO")
     media = "cd" if iso else "isodisk" if iso_disk else None
     m = Machine(smp=smp, memory=memory, disk=disk, extra_disks=extra_disks, boot_timeout=boot_timeout,
-                image=image, hostfwd=hostfwd, media=media, bios=bios, nic=nic, bus=bus)
+                image=image, hostfwd=hostfwd, media=media, bios=bios, nic=nic, bus=bus, usb=usb)
     code = 0
     try:
         m.start()
@@ -537,6 +540,7 @@ def main():
     ap.add_argument("--bios", action="store_true", help="firmware BIOS (SeaBIOS) em vez de UEFI")
     ap.add_argument("--nic", default="e1000e", help="placa de rede do QEMU (e1000e ou e1000)")
     ap.add_argument("--bus", default="ahci", help="barramento do disco da imagem (ahci, virtio ou nvme)")
+    ap.add_argument("--usb", action="store_true", help="liga um xHCI com teclado e tablet USB")
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--kernel-shell", action="store_true")
     ap.add_argument("--boot-timeout", type=float, default=60.0)
@@ -549,7 +553,7 @@ def main():
     code, text = run(steps, smp=a.smp, memory=a.memory, disk=a.disk, gui=a.gui, no_build=a.no_build,
                      boot_timeout=a.boot_timeout, command_delay=a.delay, settle=a.settle,
                      log_path=a.log, kernel_shell=a.kernel_shell, image=a.image, iso=a.iso,
-                     iso_disk=a.iso_disk, bios=a.bios, nic=a.nic, bus=a.bus)
+                     iso_disk=a.iso_disk, bios=a.bios, nic=a.nic, bus=a.bus, usb=a.usb)
     if not a.quiet:
         print(f"----- {a.log} -----")
         print(text)

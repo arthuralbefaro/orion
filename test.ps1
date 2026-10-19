@@ -24,6 +24,7 @@ param(
     [string[]]$HostFwd = @(),
     [string]$Nic = "e1000e",
     [string]$Bus = "ahci",
+    [switch]$Usb,
     [string]$LoginUser = "root",
     [string]$LoginPassword = "orion"
 )
@@ -113,6 +114,7 @@ function Get-QemuArgs {
     foreach ($fwd in $HostFwd) { $netdev += ",hostfwd=$fwd" }
     $a += @("-netdev", $netdev, "-device", "$Nic,netdev=n0",
             "-object", "filter-dump,id=d0,netdev=n0,file=out/net.pcap")
+    if ($Usb) { $a += @("-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0", "-device", "usb-tablet,bus=xhci.0") }
     if ($Disk) { $a += @("-drive", "format=raw,file=out/disk.img") }
     foreach ($extra in $ExtraDisks) { $a += @("-drive", "format=raw,file=$extra") }
     return $a | Where-Object { $_ } | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }

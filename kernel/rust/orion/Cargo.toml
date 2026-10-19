@@ -10,3 +10,4 @@ path = "src/lib.rs"
 [dependencies]
 orion_ext2 = { path = "../ext2" }
 orion_tcp = { path = "../tcp" }
+orion_usb = { path = "../usb" }
