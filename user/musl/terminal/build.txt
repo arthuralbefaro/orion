@@ -1,0 +1,5 @@
+flag -I../../libgui -I../wm
+src ../../libgui/*.c
+src ../wm/term.c
+dep ../../libgui/*.h
+dep ../wm/term.h

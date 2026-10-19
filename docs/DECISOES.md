@@ -2791,3 +2791,30 @@ Uma linha por decisao, na ordem em que foram tomadas.
   quadrantes vermelho e verde no fundo da tela) e depois o `teste.png`, fecha
   com `q`; depois do `wm`, o `cat /etc/wm.conf` confere o arquivo e um `wm`
   novo, aberto e fechado pelo shell da serial, carrega o fundo dele.
+
+## v2.4.0-a12 (etapa 6.6 parte 6: terminal como app)
+
+- `libgui`: `on_watch` e `watch_fd` na `struct gui`. O `gui_run` poe o
+  descritor no mesmo `poll` do socket do `wm` (e do prazo do `on_tick`); o
+  socket tem a vez quando os dois estao prontos, e o app que receber fim de
+  arquivo poe `watch_fd = -1` para nao girar em vazio.
+- `terminal` (novo): abre a pty com `orion_openpty` e o `sh` como o `wm` faz,
+  e reaproveita o `wm/term.c` (o mesmo interpretador ANSI do terminal do
+  `wm`), compilado junto pelo `build.txt`. Desenha as celulas numa tela com a
+  fonte 8x8 ampliada da `libgui` (16x18 por celula; a fonte vetorial so existe
+  dentro do `wm`). As teclas estendidas viram as mesmas sequencias que o `wm`
+  manda para os terminais dele.
+- Tamanho 48x26: o `wm` recusa janela de app maior que 800x520, e a primeira
+  tentativa (60x22, 988x424) foi recusada. O `sh` recebe `COLUMNS` e `LINES`
+  no ambiente, alem do `TIOCSWINSZ`.
+- O app fecha quando a pty da fim de arquivo ou quando o `waitpid` do tique
+  (500 ms) ve o `sh` sair, o que cobre a pty que nao avisa no `poll`. Se a
+  janela for fechada pelo `wm`, o app fecha a pty e mata o `sh` com
+  `SIGKILL`.
+- Regressao B: a primeira versao do teste gravava um texto num arquivo e o
+  conferia depois; com a janela recusada, as teclas cairam no terminal do
+  `wm` e a verificacao passou assim mesmo. O teste agora grava o
+  `printenv COLUMNS`, que so da `48` no `sh` do app. Depois vem um `sleep 50`
+  cortado por Ctrl+C (o `echo` seguinte so roda se o Ctrl+C funcionou), um
+  `ls` para a captura (cursor na linha do prompt) e `exit`, que fecha a
+  janela.

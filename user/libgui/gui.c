@@ -87,6 +87,7 @@ bool gui_open(struct gui *g, int width, int height, const char *title)
     signal(SIGPIPE, SIG_IGN);
     g->focus = -1;
     g->open_menu = -1;
+    g->watch_fd = -1;
     g->sock = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     struct sockaddr_un a = { 0 };
     a.sun_family = AF_UNIX;
@@ -669,20 +670,35 @@ static long now_ms(void)
     return (long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-static bool wait_input(struct gui *g, long *next)
+enum wake { WAKE_SOCKET, WAKE_TICK, WAKE_WATCH };
+
+static enum wake wait_input(struct gui *g, long *next)
 {
-    if (!g->on_tick || g->tick_ms <= 0 || memchr(g->in, '\n', (size_t)g->inlen))
-        return true;
+    bool ticking = g->on_tick && g->tick_ms > 0;
+    bool watching = g->on_watch && g->watch_fd >= 0;
+    if ((!ticking && !watching) || memchr(g->in, '\n', (size_t)g->inlen))
+        return WAKE_SOCKET;
     for (;;) {
-        long left = *next - now_ms();
-        if (left <= 0) {
-            *next = now_ms() + g->tick_ms;
-            return false;
+        int timeout = -1;
+        if (ticking) {
+            long left = *next - now_ms();
+            if (left <= 0) {
+                *next = now_ms() + g->tick_ms;
+                return WAKE_TICK;
+            }
+            timeout = (int)left;
         }
-        struct pollfd p = { .fd = g->sock, .events = POLLIN };
-        int r = poll(&p, 1, (int)left);
-        if (r > 0 || (r < 0 && errno != EINTR))
-            return true;
+        struct pollfd p[2] = {
+            { .fd = g->sock, .events = POLLIN },
+            { .fd = g->watch_fd, .events = POLLIN },
+        };
+        int r = poll(p, watching ? 2 : 1, timeout);
+        if (r < 0 && errno == EINTR)
+            continue;
+        if (r < 0 || (r > 0 && p[0].revents))
+            return WAKE_SOCKET;
+        if (r > 0 && watching && p[1].revents)
+            return WAKE_WATCH;
     }
 }
 
@@ -692,8 +708,12 @@ void gui_run(struct gui *g)
     char line[256];
     long next = now_ms() + g->tick_ms;
     while (g->running) {
-        if (!wait_input(g, &next)) {
-            g->on_tick(g);
+        enum wake why = wait_input(g, &next);
+        if (why != WAKE_SOCKET) {
+            if (why == WAKE_TICK)
+                g->on_tick(g);
+            else
+                g->on_watch(g);
             if (g->running)
                 gui_redraw(g);
             continue;

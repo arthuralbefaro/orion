@@ -596,8 +596,12 @@ if ($runAll -or $OnlyB) {
         "shot:out\shots\reg-app-editor.ppm", "mon:sendkey ctrl-q", "wait:2",
         "type:config &", "mon:sendkey ret", "wait:4", "mon:sendkey up", "mon:sendkey up", "mon:sendkey ret", "wait:2",
         "shot:out\shots\reg-app-config.ppm", "mon:sendkey down", "mon:sendkey ret", "wait:2", "mon:sendkey q", "wait:2",
+        "type:terminal &", "mon:sendkey ret", "wait:4", "type:printenv COLUMNS > /tmp/term.txt", "mon:sendkey ret", "wait:1",
+        "type:sleep 50", "mon:sendkey ret", "wait:1.5", "mon:sendkey ctrl-c", "wait:1",
+        "type:echo depois >> /tmp/term.txt", "mon:sendkey ret", "wait:1", "type:ls /usr/share", "mon:sendkey ret", "wait:1.5",
+        "shot:out\shots\reg-app-terminal.ppm", "type:exit", "mon:sendkey ret", "wait:2",
         "mon:sendkey ctrl-alt-x", "wait:5",
-        "cmd:echo TTY-DE-VOLTA", "wait:1", "shot:out\shots\reg-wm-6-tty.ppm", "cmd:cat /tmp/nota.txt", "wait:1",
+        "cmd:echo TTY-DE-VOLTA", "wait:1", "shot:out\shots\reg-wm-6-tty.ppm", "cmd:cat /tmp/nota.txt", "wait:1", "cmd:cat /tmp/term.txt", "wait:1",
         "cmd:cat /etc/wm.conf", "wait:1", "cmd:wm", "wait:4", "mon:sendkey ctrl-alt-x", "wait:5",
         "key:0B", "cmd:mem", "cmd:pty", "cmd:procs",
         "key:0B", "cmd:crash smep", "wait:4", "reboot:", "cmd:crash smap", "wait:4",
@@ -657,6 +661,12 @@ if ($runAll -or $OnlyB) {
     Expect $b "wm: fundo de /etc/wm\.conf: /usr/share/imagens/teste\.png\s*\n[\s\S]*?wm: papel de parede /usr/share/imagens/teste\.png \(PNG 48x32\)" "wm le o papel de parede de /etc/wm.conf ao iniciar"
     Test-ShotPixel "out\shots\reg-app-config.ppm" 100 200 0xc82828 40 "captura do config: fundo novo, quadrante vermelho do JPEG"
     Test-ShotPixel "out\shots\reg-app-config.ppm" 1100 200 0x28b33c 40 "captura do config: fundo novo, quadrante verde do JPEG"
+    Expect $b "wm: app abriu a janela \d+ \(796x496, 'terminal'\)" "terminal abre a janela"
+    Expect $b "agora se chama 'terminal: sh pid \d+'" "terminal abre um sh numa pty"
+    Expect $b "cat /tmp/term\.txt\s*\n48\s*\ndepois\s*\n" "terminal: comandos e Ctrl+C chegam ao sh do app (COLUMNS=48) pela pty"
+    Expect $b "(?s)'terminal: sh pid \d+'.*?wm: app da janela \d+ saiu \(pediu para fechar\)" "terminal fecha quando o sh sai"
+    Test-ShotPixel "out\shots\reg-app-terminal.ppm" 345 350 0xc8d4e0 24 "captura do terminal: cursor depois do ls, na linha do prompt"
+    Test-ShotPixel "out\shots\reg-app-terminal.ppm" 700 500 0x0a0e17 12 "captura do terminal: fundo da tela"
     Expect $b 'crash: pedindo ao kernel para executar codigo de usuario \(SMEP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?busca de instrucao[\s\S]*?SMEP: o kernel tentou executar codigo de usuario \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMEP: kernel executando pagina de usuario vira panico controlado"
     Expect $b 'crash: pedindo ao kernel para ler memoria de usuario sem copy_from_user \(SMAP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?SMAP: o kernel acessou memoria de usuario fora das copias de uaccess \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMAP: kernel lendo memoria de usuario fora do uaccess vira panico controlado"
     ExpectNot $b 'crash: o kernel voltou' "o kernel nunca volta de um acesso proibido a memoria de usuario"

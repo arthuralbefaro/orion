@@ -82,6 +82,8 @@ struct gui {
     int click_x, click_y;
     void (*on_tick)(struct gui *g);
     int tick_ms;
+    void (*on_watch)(struct gui *g);
+    int watch_fd;
     bool running;
     char in[512];
     int inlen;

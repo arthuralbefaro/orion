@@ -108,6 +108,8 @@ posiciona o cursor); Ctrl+S salva e o titulo marca o que nao foi salvo.
 `config` mostra o sistema (versao, CPU, memoria, rede) e troca o papel de parede
 na hora; a escolha fica em `/etc/wm.conf` (`fundo=<imagem>` ou `fundo=nenhum`),
 que o `wm` le ao iniciar. `wmctl fundo <imagem|nenhum>` faz o mesmo sem gravar.
+`terminal` e o terminal como app separado: um `sh` numa pty de 48x26 com
+`COLUMNS` e `LINES` no ambiente, cores e cursor ANSI; fecha quando o `sh` sai.
 O terminal grafico entende as sequencias ANSI de cursor, apagamento e cores.
 
 ### Boot direto na interface grafica
@@ -233,7 +235,7 @@ desempacota num tmpfs usado como raiz, sem precisar de disco. Login `root` ou
 ## Programas proprios em /bin
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
-    ifconfig ping nslookup wget nc telnet httpget httpd wmctl hello-gui guidemo imgview monitor arquivos editor config imginfo cpuuso dhcp netup id login su passwd poweroff reboot halt mkfs mkfs.ext2 fsck.ext2 mount umount
+    ifconfig ping nslookup wget nc telnet httpget httpd wmctl hello-gui guidemo imgview monitor arquivos editor config terminal imginfo cpuuso dhcp netup id login su passwd poweroff reboot halt mkfs mkfs.ext2 fsck.ext2 mount umount
     testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest unixtest permtest aslrtest shmtest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest

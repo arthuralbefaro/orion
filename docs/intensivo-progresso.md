@@ -28,19 +28,20 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 02:20, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
-`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.5 e as partes 1 a 5 da 6.6
-(`imgview`, `monitor`, `arquivos`, `editor` e `config`). Versao 2.4.0-a11. O
+Estado (2026-10-19, 03:05, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.6 (apps `imgview`, `monitor`,
+`arquivos`, `editor`, `config` e `terminal`). Versao 2.4.0-a12. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e
-na ISO na F, com 461 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+na ISO na F, com 467 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 6.6 parte 6, terminal como app, com captura na sequencia B;
-depois a 6.7. Versao 2.4.0-a12 em diante.
+Proxima etapa: 6.7, area de trabalho (barra de tarefas, Alt+Tab, minimizar e
+maximizar, lancador de apps), com captura da sequencia D com 3 apps abertos.
+Versao 2.4.0-a13 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -104,7 +105,7 @@ logo depois da 6.7, de 5.2 a 5.9, antes da 7.3.
 | 6.3 | Fontes TrueType | [x] | 12:27 | 13:05 | ver `git log` |
 | 6.4 | Imagens PNG/JPEG | [x] | 13:05 | 13:38 | ver `git log` |
 | 6.5 | Compositor com areas sujas | [x] | 13:38 | 15:47 | ver `git log` |
-| 6.6 | Apps | [~] | 15:47 | | |
+| 6.6 | Apps | [x] | 15:47 | 03:05 | ver `git log` (6 partes) |
 | 6.7 | Area de trabalho | [ ] | | | |
 | 7.1 | ISO hibrida | [x] | 06:26 | 09:44 | ver `git log` |
 | 7.2 | Live | [x] | 09:44 | 10:13 | ver `git log` |
@@ -1246,6 +1247,23 @@ minutos). Versao 2.4.0-a11. RAM livre antes da regressao: 6,7 GB.
 Problemas: nenhum; a sequencia B passou na primeira rodada com o app novo.
 Ficou de fora: tema e cores, fontes, teclado, data e hora, rede estatica pelo
 app (o `ifconfig` faz), usuarios e senhas (o `passwd` faz).
+
+#### 6.6 parte 6 Terminal como app - 02:20 a 03:05 - FEITO (fecha a 6.6)
+`libgui`: `on_watch`/`watch_fd` (um descritor a mais no `poll` do `gui_run`).
+`terminal` (novo): `sh` numa pty de 48x26 com `COLUMNS` e `LINES` no
+ambiente, o interpretador ANSI do `wm` (`wm/term.c`) reaproveitado, teclas
+estendidas como no terminal do `wm`; fecha quando o `sh` sai. Criterio: na
+sequencia B o `terminal` abre, o `printenv COLUMNS` grava `48` (so o `sh` do
+app tem essa variavel), um `sleep 50` e cortado por Ctrl+C antes do `echo`
+seguinte, o `ls` aparece na captura com o cursor na linha do prompt e o `exit`
+fecha a janela. Regressao 461 -> 467, verde na primeira rodada completa (27
+minutos). Versao 2.4.0-a12. RAM livre antes da regressao: 7,4 GB.
+Problemas: (1) o `wm` recusa janela de app maior que 800x520 e a primeira
+versao (988x424) nao abriu. (2) Com a janela recusada, as teclas do teste
+cairam no terminal do `wm` e a verificacao do arquivo passou mesmo assim; o
+teste passou a gravar o `COLUMNS`, que separa os dois terminais.
+Ficou de fora: fonte vetorial no app (so o `wm` tem), rolagem para tras,
+copiar e colar, redimensionar.
 
 ### Sessao 2 - 2026-10-17
 
