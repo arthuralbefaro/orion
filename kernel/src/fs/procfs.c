@@ -10,6 +10,7 @@
 #include <kernel/version.h>
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/percpu.h>
+#include <arch/x86_64/interrupts.h>
 #include <mm/heap.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
@@ -29,6 +30,7 @@ enum pkind {
     P_VERSION,
     P_DISKSTATS,
     P_SYSSTAT,
+    P_INTERRUPTS,
     P_PIDDIR = 16,
     P_STATUS,
     P_CMDLINE,
@@ -47,6 +49,7 @@ static const struct pent root_ents[] = {
     { "meminfo", P_MEMINFO }, { "cpuinfo", P_CPUINFO }, { "uptime", P_UPTIME },
     { "mounts", P_MOUNTS },   { "loadavg", P_LOADAVG }, { "version", P_VERSION },
     { "diskstats", P_DISKSTATS }, { "stat", P_SYSSTAT },
+    { "interrupts", P_INTERRUPTS },
 };
 
 static const struct pent pid_ents[] = {
@@ -429,6 +432,29 @@ static void gen_sysstat(struct pbuf *b)
     pb_printf(b, "btime 0\n");
 }
 
+static void gen_interrupts(struct pbuf *b)
+{
+    uint32_t cpus[MAX_CPUS];
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < MAX_CPUS; i++) {
+        struct percpu *c = percpu_by_index(i);
+        if (c && c->online)
+            cpus[n++] = i;
+    }
+    pb_printf(b, "    ");
+    for (uint32_t i = 0; i < n; i++)
+        pb_printf(b, " %10s%u", "CPU", cpus[i]);
+    pb_printf(b, "\n");
+    for (int v = VECTOR_IRQ_BASE; v < 256; v++) {
+        if (!interrupts_count((uint8_t)v))
+            continue;
+        pb_printf(b, "%3d:", v);
+        for (uint32_t i = 0; i < n; i++)
+            pb_printf(b, " %11lu", interrupts_count_cpu((uint8_t)v, cpus[i]));
+        pb_printf(b, "  %s\n", interrupts_name((uint8_t)v));
+    }
+}
+
 static void mount_line(const struct mount *m, void *ctx)
 {
     pb_printf(ctx, "%s %s %s %s 0 0\n", m->source, m->point, m->type->name,
@@ -594,6 +620,7 @@ static int proc_open(struct vnode *v, int flags, struct file **out)
     case P_VERSION: gen_version(&b); break;
     case P_DISKSTATS: gen_diskstats(&b); break;
     case P_SYSSTAT: gen_sysstat(&b); break;
+    case P_INTERRUPTS: gen_interrupts(&b); break;
     case P_STATUS:  gen_status(&b, p); break;
     case P_STAT:    gen_stat(&b, p); break;
     case P_CMDLINE: gen_cmdline(&b, p); break;

@@ -1,5 +1,6 @@
 #include <drivers/pci.h>
 #include <arch/x86_64/cpu.h>
+#include <arch/x86_64/percpu.h>
 #include <kernel/log.h>
 
 #define PCI_CONFIG_ADDR 0xCF8
@@ -81,6 +82,45 @@ void pci_enable_bus_master(const struct pci_device *dev)
     uint32_t cmd = pci_read32(dev->bus, dev->slot, dev->func, 0x04);
     cmd |= (1 << 1) | (1 << 2);
     pci_write32(dev->bus, dev->slot, dev->func, 0x04, cmd);
+}
+
+uint8_t pci_find_cap(const struct pci_device *dev, uint8_t id)
+{
+    uint32_t status = pci_read32(dev->bus, dev->slot, dev->func, 0x04) >> 16;
+    if (!(status & (1u << 4)))
+        return 0;
+    uint8_t ptr = pci_read32(dev->bus, dev->slot, dev->func, 0x34) & 0xFC;
+    for (int hops = 0; ptr && hops < 48; hops++) {
+        uint32_t head = pci_read32(dev->bus, dev->slot, dev->func, ptr);
+        if ((head & 0xFF) == id)
+            return ptr;
+        ptr = (head >> 8) & 0xFC;
+    }
+    return 0;
+}
+
+bool pci_enable_msi(const struct pci_device *dev, uint8_t vector, uint32_t cpu)
+{
+    uint8_t off = pci_find_cap(dev, 0x05);
+    struct percpu *c = percpu_by_index(cpu);
+    if (!off || !c)
+        return false;
+    uint32_t head = pci_read32(dev->bus, dev->slot, dev->func, off);
+    uint32_t ctl = head >> 16;
+    bool wide = (ctl & (1u << 7)) != 0;
+    pci_write32(dev->bus, dev->slot, dev->func, off + 4, 0xFEE00000u | (c->lapic_id << 12));
+    uint8_t data_off = off + 8;
+    if (wide) {
+        pci_write32(dev->bus, dev->slot, dev->func, off + 8, 0);
+        data_off = off + 12;
+    }
+    uint32_t data = pci_read32(dev->bus, dev->slot, dev->func, data_off);
+    pci_write32(dev->bus, dev->slot, dev->func, data_off, (data & 0xFFFF0000u) | vector);
+    ctl = (ctl & ~(7u << 4)) | 1u;
+    pci_write32(dev->bus, dev->slot, dev->func, off, (head & 0xFFFF) | (ctl << 16));
+    uint32_t cmd = pci_read32(dev->bus, dev->slot, dev->func, 0x04) & 0xFFFF;
+    pci_write32(dev->bus, dev->slot, dev->func, 0x04, cmd | (1u << 10) | (1u << 2) | (1u << 1));
+    return true;
 }
 
 static const char *class_name(uint8_t c, uint8_t s)

@@ -8,6 +8,8 @@
 #define VECTOR_LAPIC_TIMER    0x40
 #define VECTOR_GSI_BASE       0x50
 #define VECTOR_GSI_COUNT      32
+#define VECTOR_MSI_BASE       0x80
+#define VECTOR_MSI_COUNT      32
 #define VECTOR_IPI_HALT       0xF0
 #define VECTOR_IPI_TLB        0xF1
 #define VECTOR_IPI_TLB_SYNC   0xF2
@@ -50,6 +52,10 @@ void irq_disable(uint8_t irq);
 bool irq_attach_gsi(uint32_t gsi, bool active_low, bool level, interrupt_handler_t handler, void *ctx);
 
 uint64_t interrupts_count(uint8_t vector);
+uint64_t interrupts_count_cpu(uint8_t vector, uint32_t cpu);
+int interrupts_alloc_vector(interrupt_handler_t handler, void *ctx, const char *name);
+const char *interrupts_name(uint8_t vector);
+uint32_t irq_next_cpu(void);
 
 const char *exception_name(uint8_t vector);
 

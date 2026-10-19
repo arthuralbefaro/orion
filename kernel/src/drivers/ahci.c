@@ -6,6 +6,8 @@
 #include <kernel/spinlock.h>
 #include <kernel/mutex.h>
 #include <kernel/sched.h>
+#include <kernel/wait.h>
+#include <arch/x86_64/interrupts.h>
 #include <mm/vmm.h>
 #include <mm/pmm.h>
 #include <mm/memory.h>
@@ -34,6 +36,7 @@
 
 #define GHC_AE      (1u << 31)
 #define GHC_IE      (1u << 1)
+#define PORT_IRQS   ((1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 5) | (0xFu << 27) | (1u << 31))
 #define CMD_ST      (1u << 0)
 #define CMD_FRE     (1u << 4)
 #define CMD_FR      (1u << 14)
@@ -87,11 +90,14 @@ struct ahci_port {
     char model[41];
     char lock_name[12];
     struct mutex lock;
+    spinlock_t irq_lock;
+    struct waitqueue wq;
 };
 
 static volatile uint8_t *abar;
 static struct ahci_port ports[32];
 static uint32_t port_count;
+static bool irq_on;
 
 static inline uint32_t rd(volatile uint8_t *base, uint32_t off)
 {
@@ -125,10 +131,53 @@ static void port_stop(struct ahci_port *p)
 static void port_start(struct ahci_port *p)
 {
     wait_clear(p->regs, PX_CMD, CMD_CR, 500000);
-    wr(p->regs, PX_IE, 0);
     wr(p->regs, PX_IS, 0xFFFFFFFF);
+    wr(p->regs, PX_IE, irq_on ? PORT_IRQS : 0);
     wr(p->regs, PX_CMD, rd(p->regs, PX_CMD) | CMD_FRE);
     wr(p->regs, PX_CMD, rd(p->regs, PX_CMD) | CMD_ST);
+}
+
+static void ahci_irq(struct interrupt_frame *frame, void *ctx)
+{
+    (void)frame;
+    (void)ctx;
+    uint32_t is = rd(abar, HBA_IS);
+    for (uint32_t i = 0; i < 32; i++) {
+        struct ahci_port *p = &ports[i];
+        if (!p->regs || !(is & (1u << p->index)))
+            continue;
+        wr(p->regs, PX_IS, rd(p->regs, PX_IS));
+        spin_lock(&p->irq_lock);
+        wake_up_all(&p->wq);
+        spin_unlock(&p->irq_lock);
+    }
+    wr(abar, HBA_IS, is);
+}
+
+static bool wait_done(struct ahci_port *p)
+{
+    uint64_t end = time_now_us() + 2000000;
+    bool can_sleep = irq_on && interrupts_enabled() && sched_enabled();
+    for (;;) {
+        if (can_sleep) {
+            uint64_t flags = spin_lock_irqsave(&p->irq_lock);
+            if ((rd(p->regs, PX_CI) & 1) && !(rd(p->regs, PX_TFD) & TFD_ERR))
+                wait_sleep_timeout(&p->wq, &p->irq_lock, 10);
+            spin_unlock_irqrestore(&p->irq_lock, flags);
+        }
+        if (!(rd(p->regs, PX_CI) & 1))
+            return true;
+        if (rd(p->regs, PX_TFD) & TFD_ERR)
+            return false;
+        if (time_now_us() > end)
+            return false;
+        if (!can_sleep) {
+            if (interrupts_enabled() && sched_enabled())
+                thread_yield();
+            else
+                pause();
+        }
+    }
 }
 
 static bool port_command(struct ahci_port *p, uint8_t ata_cmd, uint64_t lba, uint16_t count,
@@ -166,17 +215,8 @@ static bool port_command(struct ahci_port *p, uint8_t ata_cmd, uint64_t lba, uin
     wr(p->regs, PX_IS, 0xFFFFFFFF);
     wr(p->regs, PX_CI, 1);
 
-    uint64_t end = time_now_us() + 2000000;
-    while (rd(p->regs, PX_CI) & 1) {
-        if (rd(p->regs, PX_TFD) & TFD_ERR)
-            return false;
-        if (time_now_us() > end)
-            return false;
-        if (interrupts_enabled() && sched_enabled())
-            thread_yield();
-        else
-            pause();
-    }
+    if (!wait_done(p))
+        return false;
     bool ok = !(rd(p->regs, PX_TFD) & TFD_ERR);
     wr(p->regs, PX_IS, 0xFFFFFFFF);
     wr(abar, HBA_IS, 0xFFFFFFFF);
@@ -255,6 +295,8 @@ static void port_init(uint32_t index)
     p->regs = abar + HBA_PORTS + index * PORT_SIZE;
     ksnprintf(p->lock_name, sizeof(p->lock_name), "ahci%u", index);
     mutex_init(&p->lock, p->lock_name);
+    p->irq_lock = (spinlock_t)SPINLOCK_INIT;
+    waitqueue_init(&p->wq);
 
     port_stop(p);
 
@@ -271,7 +313,6 @@ static void port_init(uint32_t index)
     wr(p->regs, PX_FB, (uint32_t)(p->mem_phys + 0x400));
     wr(p->regs, PX_FBU, (uint32_t)((p->mem_phys + 0x400) >> 32));
     wr(p->regs, PX_SERR, 0xFFFFFFFF);
-    wr(p->regs, PX_IE, 0);
 
     p->dma_phys = pmm_alloc_pages(DMA_PAGES);
     p->dma_buf = phys_to_virt(p->dma_phys);
@@ -308,6 +349,16 @@ void ahci_init(void)
     abar = vmm_map_mmio(abar_phys, 0x1100);
 
     wr(abar, HBA_GHC, (rd(abar, HBA_GHC) | GHC_AE) & ~GHC_IE);
+    int vector = interrupts_alloc_vector(ahci_irq, NULL, "ahci");
+    uint32_t cpu = irq_next_cpu();
+    if (vector >= 0 && pci_enable_msi(dev, (uint8_t)vector, cpu)) {
+        irq_on = true;
+        wr(abar, HBA_IS, 0xFFFFFFFF);
+        wr(abar, HBA_GHC, rd(abar, HBA_GHC) | GHC_IE);
+        log_info("ahci", "MSI no vetor %d, entregue na CPU %u", vector, cpu);
+    } else {
+        log_info("ahci", "sem MSI; espera ativa pelo fim dos comandos");
+    }
     uint32_t cap = rd(abar, HBA_CAP);
     uint32_t pi = rd(abar, HBA_PI);
     log_info("ahci", "controlador %04x:%04x em %02x:%02x.%u, ABAR %08lx, %u porta(s), %s",

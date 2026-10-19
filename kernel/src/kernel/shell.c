@@ -158,10 +158,18 @@ static void cmd_irq(const char *args)
             irq_get_mode() == IRQ_MODE_IOAPIC ? "I/O APIC" : "8259 PIC", pic_get_mask());
     if (irq_get_mode() == IRQ_MODE_IOAPIC)
         ioapic_dump();
+    uint32_t cpus = percpu_count();
+    kprintf("  vetor ");
+    for (uint32_t c = 0; c < cpus; c++)
+        kprintf("     CPU%u", c);
+    kprintf("\n");
     for (int v = 0; v < 256; v++) {
-        uint64_t n = interrupts_count((uint8_t)v);
-        if (n)
-            kprintf("  vetor %3d: %lu\n", v, n);
+        if (!interrupts_count((uint8_t)v))
+            continue;
+        kprintf("  %5d ", v);
+        for (uint32_t c = 0; c < cpus; c++)
+            kprintf(" %8lu", interrupts_count_cpu((uint8_t)v, c));
+        kprintf("  %s\n", interrupts_name((uint8_t)v));
     }
 }
 

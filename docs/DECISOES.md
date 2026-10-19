@@ -2865,3 +2865,31 @@ Uma linha por decisao, na ordem em que foram tomadas.
 - Criterio da 6.7: a sequencia D termina com 3 apps abertos (`monitor` pelo
   Ctrl+P, `arquivos` pelo Ctrl+F e `config` pelo menu); a captura confere a
   janela do `config` na frente e os tres na barra de tarefas.
+
+## v2.4.0-a15 (etapa 5.2 parte 1: MSI e a AHCI por interrupcao)
+
+- A 5.2 vai em duas partes: esta (MSI, contadores por CPU, AHCI) e a rede.
+  A `e1000` do QEMU (82540EM) nao tem MSI; a rede por MSI precisa da `e1000e`
+  (82574L), que fica para a parte 2.
+- PCI: `pci_find_cap` anda pela lista de capacidades e `pci_enable_msi`
+  programa endereco (`0xFEE00000` com o id do LAPIC de destino), dado (o
+  vetor, entrega fixa, borda) e liga a MSI com uma mensagem so; o INTx do
+  dispositivo fica desligado no registrador de comando.
+- Vetores 0x80 a 0x9F para MSI, alocados com nome (`interrupts_alloc_vector`);
+  a CPU de destino sai de um rodizio que comeca na CPU 1 (`irq_next_cpu`),
+  para tirar as IRQs dos dispositivos da CPU 0, que ja recebe as da ISA.
+- Contadores por CPU e por vetor no `isr_dispatch`; `/proc/interrupts` (no
+  formato do Linux, uma coluna por CPU e o nome no fim) e o `irq` do shell do
+  kernel mostram os dois.
+- AHCI: antes, o fim de cada comando era esperado com `thread_yield` em laco
+  (a IRQ nem era ligada). Agora, com MSI, a porta liga as interrupcoes de fim
+  de FIS e de erro, e quem espera dorme numa fila; o tratador limpa o `PxIS`
+  e acorda a fila segurando a mesma trava que quem espera usa para conferir o
+  `PxCI`, entao o aviso nao se perde entre a conferencia e o sono. O sono tem
+  prazo de 10 ms como rede de seguranca. Sem MSI (ou antes do escalonador), a
+  espera continua como era.
+- Regressao A: o `cat /proc/interrupts` roda depois do `history`. O
+  historico do `sh` guarda 50 comandos e, com o `cat /proc/stat` da 6.6, a
+  sequencia A ja chegava a 50 antes do `history`; um comando a mais antes dele
+  empurra para fora o `ls /bin | wc`, que a verificacao procura na linha 1.
+  Comando novo na A antes do `history` precisa levar isso em conta.

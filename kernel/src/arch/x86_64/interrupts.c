@@ -63,6 +63,8 @@ struct handler_slot {
 
 static struct handler_slot handlers[256];
 static uint64_t counters[256];
+static uint64_t cpu_counters[MAX_CPUS][256];
+static const char *names[256];
 
 void interrupts_register(uint8_t vector, interrupt_handler_t handler, void *ctx)
 {
@@ -80,6 +82,58 @@ void interrupts_unregister(uint8_t vector)
 uint64_t interrupts_count(uint8_t vector)
 {
     return counters[vector];
+}
+
+uint64_t interrupts_count_cpu(uint8_t vector, uint32_t cpu)
+{
+    return cpu < MAX_CPUS ? cpu_counters[cpu][vector] : 0;
+}
+
+int interrupts_alloc_vector(interrupt_handler_t handler, void *ctx, const char *name)
+{
+    uint64_t flags = irq_save();
+    for (int v = VECTOR_MSI_BASE; v < VECTOR_MSI_BASE + VECTOR_MSI_COUNT; v++) {
+        if (handlers[v].fn)
+            continue;
+        handlers[v].ctx = ctx;
+        handlers[v].fn = handler;
+        names[v] = name;
+        irq_restore(flags);
+        return v;
+    }
+    irq_restore(flags);
+    return -1;
+}
+
+const char *interrupts_name(uint8_t vector)
+{
+    if (names[vector])
+        return names[vector];
+    if (vector == VECTOR_LAPIC_TIMER)
+        return "lapic-timer";
+    if (vector >= VECTOR_IRQ_BASE && vector < VECTOR_IRQ_BASE + VECTOR_IRQ_COUNT)
+        return "irq-isa";
+    if (vector >= VECTOR_GSI_BASE && vector < VECTOR_GSI_BASE + VECTOR_GSI_COUNT)
+        return "irq-gsi";
+    if (vector >= VECTOR_IPI_HALT && vector <= VECTOR_IPI_TLB_SYNC)
+        return "ipi";
+    return "-";
+}
+
+uint32_t irq_next_cpu(void)
+{
+    static uint32_t next = 1;
+    uint32_t count = percpu_count();
+    if (count <= 1)
+        return 0;
+    for (uint32_t tries = 0; tries < MAX_CPUS; tries++) {
+        uint32_t cpu = next;
+        next = next + 1 >= count ? 1 : next + 1;
+        struct percpu *c = percpu_by_index(cpu);
+        if (c && c->online)
+            return cpu;
+    }
+    return 0;
 }
 
 static enum irq_mode irq_mode = IRQ_MODE_PIC;
@@ -313,6 +367,8 @@ void isr_dispatch(struct interrupt_frame *frame)
 {
     uint8_t vec = (uint8_t)frame->int_no;
     counters[vec]++;
+    if (percpu_ready())
+        cpu_counters[percpu_cpu_id() % MAX_CPUS][vec]++;
 
     if (vec < VECTOR_EXCEPTIONS_END) {
         handle_exception(frame);
@@ -359,6 +415,8 @@ void idt_init(void)
     memset(idt, 0, sizeof(idt));
     memset(handlers, 0, sizeof(handlers));
     memset(counters, 0, sizeof(counters));
+    memset(cpu_counters, 0, sizeof(cpu_counters));
+    memset(names, 0, sizeof(names));
 
     for (int i = 0; i < 256; i++)
         idt_set_gate((uint8_t)i, ISR_STUB(i), 0, 0);

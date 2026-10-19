@@ -28,22 +28,22 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 04:20, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+Estado (2026-10-19, 05:40, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
 `v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.6 (apps `imgview`, `monitor`,
 `arquivos`, `editor`, `config` e `terminal`) e 6.7 (barra de tarefas,
-Alt+Tab, minimizar e maximizar, lancador de apps): Fase 6 inteira. Versao
-2.4.0-a14. O
+Alt+Tab, minimizar e maximizar, lancador de apps): Fase 6 inteira; e a
+parte 1 da 5.2 (MSI, AHCI por interrupcao). Versao 2.4.0-a15. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e
-na ISO na F, com 480 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+na ISO na F, com 484 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.2, MSI/MSI-X para AHCI e rede com as IRQs distribuidas
-entre as CPUs (criterio: `irq` mostra interrupcoes em mais de uma CPU);
-depois 5.3 a 5.9. Versao 2.4.0-a15 em diante.
+Proxima etapa: 5.2 parte 2, rede por MSI (`e1000e`, 82574L, no mesmo driver
+da `e1000`, com a IRQ em outra CPU); depois 5.3 a 5.9. Versao 2.4.0-a16 em
+diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -106,7 +106,7 @@ mandar o resultado do teste.
 | 4.3 | SMEP e SMAP | [x] | 05:28 | 05:55 | ver `git log` |
 | 4.4 | ASLR basico | [x] | 05:55 | 06:26 | ver `git log` (tag `v2.3`) |
 | 5.1 | uACPI | [x] | 10:14 | 11:05 | ver `git log` |
-| 5.2 | MSI/MSI-X | [ ] | | | |
+| 5.2 | MSI/MSI-X | [~] | 04:20 | | |
 | 5.3 | virtio-blk e virtio-net | [ ] | | | |
 | 5.4 | NVMe | [ ] | | | |
 | 5.5 | xHCI | [ ] | | | |
@@ -1317,6 +1317,33 @@ imagens rodam como programas separados; a fonte TrueType esta no `wm`
 `libgui`, entao o M4 fica com essa ressalva.
 Ficou de fora: icones no menu e na barra, menu com submenus, abrir arquivo
 pelo menu do editor, fonte vetorial nos apps.
+
+#### 5.2 parte 1 MSI e AHCI por interrupcao - 04:20 a 05:40 - FEITO
+PCI: lista de capacidades (`pci_find_cap`) e MSI (`pci_enable_msi`, com o
+LAPIC de destino e o INTx desligado). Vetores 0x80 a 0x9F alocados com nome;
+CPU de destino em rodizio a partir da CPU 1. Contadores de interrupcao por
+CPU; `/proc/interrupts` (novo, formato do Linux) e o `irq` do shell do kernel
+com uma coluna por CPU. AHCI: com MSI, quem espera o fim do comando dorme
+numa fila acordada pela IRQ (antes era `thread_yield` em laco, com a IRQ
+desligada), com prazo de 10 ms como rede de seguranca. Criterio: a AHCI
+liga a MSI no vetor 128 entregue na CPU 1; na sequencia A o
+`/proc/interrupts` tem a AHCI so na CPU 1 e o timer local nas 4 CPUs; na B o
+`irq` do shell do kernel mostra a AHCI na CPU 1. Regressao 480 -> 484, verde
+na segunda rodada completa (27 minutos); estresse 5x verde. Versao
+2.4.0-a15. RAM livre antes das regressoes: 6,1 GB e 6,5 GB.
+Problemas: a primeira rodada completa deu 3 falhas na sequencia A. (1) O
+`history`: o historico do `sh` guarda 50 comandos e o `cat /proc/interrupts`
+novo, posto antes do `history`, empurrou para fora o `ls /bin | wc` que a
+verificacao procura na linha 1 (falhou de novo rodando a A sozinha); o
+comando passou para depois do `history`. (2) O `tmptest` (1000 arquivos sem
+vazar pagina): logo depois de apagar os arquivos, mais de 256 paginas ainda
+estavam na fila da `kreclaim` (que devolve as alocacoes grandes a cada 10 ms)
+e voltaram em seguida; rodando a A sozinha passou, entao foi tempo, com o
+Windows ocupado (o `cpptools` do VS Code tinha gastado 800 s de CPU). Fica
+anotado: o teste mede logo depois do ultimo `unlink`, sem esperar a
+`kreclaim`.
+Ficou de fora: MSI-X (vem com o virtio da 5.3), mais de uma mensagem MSI por
+dispositivo, afinidade de IRQ configuravel.
 
 ### Sessao 2 - 2026-10-17
 

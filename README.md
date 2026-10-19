@@ -293,7 +293,7 @@ trafego em `out\net.pcap`.
 
 ## /proc
     /proc/<pid>/status cmdline maps stat fd/   cada processo (self = o proprio)
-    /proc/meminfo cpuinfo uptime loadavg mounts version diskstats stat
+    /proc/meminfo cpuinfo uptime loadavg mounts version diskstats stat interrupts
 O `ps`, o `top`, o `free`, o `uptime` e a janela de processos do `wm` leem
 daqui. `/proc/<pid>/fd/N` ainda e um arquivo com o caminho (vira link
 simbolico na 2.7).

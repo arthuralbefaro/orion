@@ -192,7 +192,7 @@ if ($runAll -or $OnlyA) {
         "raw:cho homeok", "keys:1B5B48", "raw:e", "key:0D", "wait:1.5",
         "raw:eccho delok", "keys:1B5B48", "keys:1B5B43", "keys:1B5B43", "keys:1B5B337E",
         "key:0D", "wait:1.5",
-        "cmd:history", "wait:3",
+        "cmd:history", "wait:3", "cmd:cat /proc/interrupts", "wait:1",
         "cmd:forktest", "wait:30",
         "cmd:forktest -s 6", "wait:3", "key:0B", "cmd:mem", "key:0B", "wait:12",
         "cmd:dhcp", "wait:8",
@@ -478,6 +478,9 @@ if ($runAll -or $OnlyA) {
     Expect $a "(?s)cat /proc/self/maps\s*\n\s*[0-9a-f]{8,}-[0-9a-f]{8,} r--p [0-9a-f]{8} 00:00 \d+\s+/bin/cat" "cat /proc/self/maps mostra as VMAs do proprio cat"
     Expect $a "[0-9a-f]+-7ff[0-9a-f]{9} rw-p 00000000 00:00 0\s+\[stack\]" "maps mostra a pilha"
     Expect $a "proc /proc proc ro 0 0" "/proc/mounts lista o procfs"
+    Expect $a "ahci\s+MSI no vetor 128, entregue na CPU 1" "AHCI liga a MSI e manda a IRQ para a CPU 1"
+    Expect $a "(?s)cat /proc/interrupts\s*\n\s+CPU0\s+CPU1\s+CPU2\s+CPU3\s*\n.*?\n\s*128:\s+0\s+[1-9]\d*\s+0\s+0\s+ahci" "/proc/interrupts: AHCI por MSI so na CPU 1"
+    Expect $a "\n\s*64:\s+[1-9]\d*\s+[1-9]\d*\s+[1-9]\d*\s+[1-9]\d*\s+lapic-timer" "/proc/interrupts: timer local nas 4 CPUs"
     Expect $a "(?s)cat /proc/stat\s*\ncpu  \d+ 0 \d+ [1-9]\d* 0 0 0 0 0 0\s*\ncpu0 \d+ 0 \d+ \d+ [^\n]*\ncpu1 [^\n]*\ncpu2 [^\n]*\ncpu3 \d+ 0 \d+ \d+ [^\n]*\nctxt [1-9]\d*" "/proc/stat tem o total e uma linha por CPU"
     Expect $a "tmpfs /tmp tmpfs rw 0 0" "/proc/mounts lista o tmpfs"
     Expect $a "mprotect divide a area no maps\s+ok" "proctest: maps acompanha o mprotect"
@@ -603,7 +606,7 @@ if ($runAll -or $OnlyB) {
         "mon:sendkey ctrl-alt-x", "wait:5",
         "cmd:echo TTY-DE-VOLTA", "wait:1", "shot:out\shots\reg-wm-6-tty.ppm", "cmd:cat /tmp/nota.txt", "wait:1", "cmd:cat /tmp/term.txt", "wait:1",
         "cmd:cat /etc/wm.conf", "wait:1", "cmd:wm", "wait:4", "mon:sendkey ctrl-alt-x", "wait:5",
-        "key:0B", "cmd:mem", "cmd:pty", "cmd:procs",
+        "key:0B", "cmd:mem", "cmd:pty", "cmd:procs", "cmd:irq",
         "key:0B", "cmd:crash smep", "wait:4", "reboot:", "cmd:crash smap", "wait:4",
         "reboot:", "cmd:reboot", "wait:4", "monlog:info status",
         "reboot:", "cmd:poweroff", "wait:4", "monlog:info status",
@@ -626,6 +629,7 @@ if ($runAll -or $OnlyB) {
     Expect $b "wm: encerrando" "Ctrl\+Alt\+X encerrou o wm"
     Expect $b "TTY-DE-VOLTA\r?\nTTY-DE-VOLTA|echo TTY-DE-VOLTA[\s\S]{0,40}TTY-DE-VOLTA" "TTY respondeu depois do wm"
     Expect $b "0 pty\(s\) viva\(s\)" "nenhuma pty vazada"
+    Expect $b "\n\s+128\s+0\s+[1-9]\d*\s+0\s+0\s+ahci" "irq do shell do kernel mostra a AHCI em outra CPU (MSI)"
     Expect $b "(?s)pid\s+ppid\s+estado[^\n]*\n\s+\d+\s+1\s+running\s+\d+\s+sh\s*\n\s+1\s+0\s+running\s+\d+\s+init" "procs so tem init e sh"
     Test-MemDelta $b "memoria estavel na sequencia B" 16
     Expect $b "wm: app abriu a janela \d+ \(660x490, 'imgview'\)" "imgview abre a janela"
