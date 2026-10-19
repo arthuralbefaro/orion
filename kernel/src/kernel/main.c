@@ -11,6 +11,7 @@
 #include <net/net.h>
 #include <drivers/ahci.h>
 #include <drivers/virtio.h>
+#include <drivers/nvme.h>
 #include <fs/vfs.h>
 #include <fs/block.h>
 #include <fs/devfs.h>
@@ -135,6 +136,7 @@ void kmain(void)
     power_init();
     ahci_init();
     virtio_blk_init();
+    nvme_init();
     e1000_init();
     virtio_net_init();
     net_init();

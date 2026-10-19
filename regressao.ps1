@@ -8,6 +8,7 @@ param(
     [switch]$OnlyE,
     [switch]$OnlyF,
     [switch]$OnlyV,
+    [switch]$OnlyN,
     [int]$StressRuns = 1,
     [switch]$Verbose
 )
@@ -16,7 +17,7 @@ $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 $failures = @()
 $checks = 0
-$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV)
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -973,6 +974,32 @@ if ($runAll -or $OnlyV) {
     Expect $v "(?s)cat /proc/interrupts.*?\n\s*\d+:(\s+\d+){4}\s+virtio-net" "/proc/interrupts conta a MSI-X da virtio-net"
     ExpectNot $v "(?s)cat /proc/interrupts.*?\n\s*\d+:\s+0\s+0\s+0\s+0\s+virtio-net" "a MSI-X da virtio-net chegou de fato"
     ExpectNot $v "PANIC|EXCECAO" "nenhum panico na sequencia V"
+}
+
+# ---------------- Sequencia N: NVMe ----------------
+if ($runAll -or $OnlyN) {
+    Write-Host "== Sequencia N (raiz no NVMe) ==" -ForegroundColor Cyan
+    $stepsN = @(
+        "cmd:cat /proc/mounts", "wait:1",
+        "cmd:mkdir /root/nt", "cmd:fstest -a /root/nt", 'cmd:echo FIM$X-NFSTEST', "until:600:FIM-NFSTEST",
+        "cmd:rmdir /root/nt", "cmd:echo persiste-no-nvme > /root/persiste.txt", "cmd:sync", "wait:2",
+        "cmd:cat /proc/interrupts", "wait:1",
+        "reboot:", "cmd:cat /root/persiste.txt", "cmd:rm /root/persiste.txt", "cmd:sync", "wait:1"
+    )
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Bus nvme -LogPath "out\reg-n.log" `
+        -Script $stepsN -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
+    $n = Get-Log "out\reg-n.log"
+    if ($Verbose) { Write-Output $n }
+
+    Expect $n "nvme\s+nvme0n1: 1b36:0010 [^\n]*versao 1\.\d[^\n]*MSI-X no vetor \d+, CPU [1-9]" "NVMe: controlador, Identify e MSI-X fora da CPU 0"
+    Expect $n "nvme0n1p2: GPT, LBA \d+, \d+ setores \(256 MiB\), raiz Linux x86-64" "particoes GPT do NVMe com nomes nvme0n1pN"
+    Expect $n "vfs\s+raiz montada: ext2 em nvme0n1p2" "boot com a raiz no NVMe"
+    Expect $n "/dev/nvme0n1p2 / ext2 rw 0 0" "/proc/mounts mostra a raiz no NVMe"
+    Expect $n "(?s)fstest -a /root/nt.*?fstest: TUDO OK.*?FIM-NFSTEST" "fstest -a na raiz pelo NVMe"
+    Expect $n "(?s)cat /proc/interrupts.*?\n\s*\d+:(\s+\d+){4}\s+nvme" "/proc/interrupts conta a MSI-X do NVMe"
+    ExpectNot $n "(?s)cat /proc/interrupts.*?\n\s*\d+:\s+0\s+0\s+0\s+0\s+nvme" "a MSI-X do NVMe chegou de fato"
+    Expect $n "(?s)----- reboot -----.*?cat /root/persiste\.txt\s*\npersiste-no-nvme" "o que foi gravado no NVMe sobrevive ao reboot"
+    ExpectNot $n "PANIC|EXCECAO" "nenhum panico na sequencia N"
 }
 
 # ---------------- Sequencia E: estresse de processos ----------------

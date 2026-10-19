@@ -351,6 +351,13 @@ static const char *kind_name(uint8_t kind)
     }
 }
 
+static void part_name(const struct blockdev *disk, uint32_t index, char out[BLOCK_NAME_MAX])
+{
+    size_t len = strlen(disk->name);
+    bool digit = len && disk->name[len - 1] >= '0' && disk->name[len - 1] <= '9';
+    ksnprintf(out, BLOCK_NAME_MAX, "%s%s%u", disk->name, digit ? "p" : "", index);
+}
+
 static void scan_gpt(struct blockdev *disk)
 {
     struct gpt_header h;
@@ -372,7 +379,7 @@ static void scan_gpt(struct blockdev *disk)
             continue;
         }
         char name[BLOCK_NAME_MAX];
-        ksnprintf(name, sizeof(name), "%s%u", disk->name, i + 1);
+        part_name(disk, i + 1, name);
         uint64_t count = e->last - e->first + 1;
         struct blockdev *p = blockdev_register(name, disk->sector_size, count, NULL, NULL, NULL);
         if (!p)
@@ -421,7 +428,7 @@ void blockdev_scan_partitions(struct blockdev *disk)
             continue;
         }
         char name[BLOCK_NAME_MAX];
-        ksnprintf(name, sizeof(name), "%s%d", disk->name, i + 1);
+        part_name(disk, (uint32_t)i + 1, name);
         struct blockdev *p = blockdev_register(name, disk->sector_size, count, NULL, NULL, NULL);
         if (!p)
             break;

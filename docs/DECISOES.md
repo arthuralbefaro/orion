@@ -2961,3 +2961,26 @@ Uma linha por decisao, na ordem em que foram tomadas.
 - A sessao caiu no meio da escrita desta parte (Windows desligou sem aviso,
   sem QEMU rodando): os fontes gravados no ultimo minuto ficaram so com bytes
   nulos e foram refeitos a partir do commit da parte 1, que estava integro.
+
+## v2.4.0-a19 (etapa 5.4: NVMe)
+
+- Driver NVMe (`drivers/nvme.c`) para o primeiro controlador da classe
+  01/08: desliga o controlador, monta a fila admin (16 entradas) e liga com
+  comandos de 64 bytes e respostas de 16; `Identify` do controlador (modelo)
+  e do namespace 1 (tamanho e formato do bloco). So aceita bloco de 512 bytes,
+  que e o que a camada de bloco usa; outro tamanho e recusado com aviso.
+- Uma fila de I/O (ate 32 entradas, ou menos se o `CAP.MQES` mandar) e um
+  pedido por vez sob mutex, com um buffer de 64 KiB: a primeira pagina vai no
+  PRP1, a segunda no PRP2 e, acima de duas paginas, o PRP2 aponta uma lista de
+  PRP montada uma vez so. Escrita termina com `Flush`. As respostas sao
+  reconhecidas pelo bit de fase, e o doorbell da fila de respostas anda junto.
+- MSI-X na entrada 0 (a fila de respostas de I/O usa o vetor 0 com interrupcao
+  ligada); quem espera dorme como na AHCI e no virtio. Os comandos admin, que
+  so rodam na partida, esperam por laco.
+- Nome `nvme0n1`, e a camada de bloco passou a por um `p` entre o nome do disco
+  e o numero da particao quando o nome termina em digito (`nvme0n1p2`), como o
+  Linux; `sda2` e `vda2` nao mudam.
+- Regressao: sequencia N, com a imagem num NVMe do QEMU (`-Bus nvme` no
+  `test.ps1` e no `qrun.py`): o OVMF boota pelo NVMe, a raiz monta em
+  `nvme0n1p2`, `fstest -a` na raiz, a MSI-X contada e um arquivo que sobrevive
+  ao reboot.

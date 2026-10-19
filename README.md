@@ -300,6 +300,10 @@ Virtio: `test.ps1 -Image -Bus virtio` liga a imagem como `virtio-blk-pci` e
 `-Nic virtio-net-pci` troca a placa de rede; o kernel acha o disco (`vda`),
 monta a raiz em `vda2`, sobe a rede pela virtio-net e usa MSI-X nos dois. A
 sequencia V da regressao roda assim.
+
+NVMe: `test.ps1 -Image -Bus nvme` liga a imagem como controlador NVMe do QEMU;
+o disco vira `nvme0n1` (particoes `nvme0n1p1`, `nvme0n1p2`, como no Linux), a
+raiz monta no NVMe e a fila de I/O usa MSI-X. A sequencia N roda assim.
 O `ps`, o `top`, o `free`, o `uptime` e a janela de processos do `wm` leem
 daqui. `/proc/<pid>/fd/N` ainda e um arquivo com o caminho (vira link
 simbolico na 2.7).

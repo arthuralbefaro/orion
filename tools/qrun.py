@@ -160,8 +160,10 @@ class Machine:
         args += {
             "cd": ["-cdrom", "out/orion.iso"],
             "isodisk": ["-drive", "format=raw,file=out/orion.iso"],
-            "image": (["-drive", "if=none,id=d0,format=raw,file=out/orion.img", "-device", "virtio-blk-pci,drive=d0"]
-                      if self.bus == "virtio" else ["-drive", "format=raw,file=out/orion.img"]),
+            "image": {
+                "virtio": ["-drive", "if=none,id=d0,format=raw,file=out/orion.img", "-device", "virtio-blk-pci,drive=d0"],
+                "nvme": ["-drive", "if=none,id=d0,format=raw,file=out/orion.img", "-device", "nvme,drive=d0,serial=orion0"],
+            }.get(self.bus, ["-drive", "format=raw,file=out/orion.img"]),
         }.get(self.media, ["-drive", "format=raw,file=fat:rw:out/esp"])
         args += [
             "-display", "none",
@@ -534,7 +536,7 @@ def main():
     ap.add_argument("--iso-disk", action="store_true", help="boota do out/orion.iso como disco (pendrive)")
     ap.add_argument("--bios", action="store_true", help="firmware BIOS (SeaBIOS) em vez de UEFI")
     ap.add_argument("--nic", default="e1000e", help="placa de rede do QEMU (e1000e ou e1000)")
-    ap.add_argument("--bus", default="ahci", help="barramento do disco da imagem (ahci ou virtio)")
+    ap.add_argument("--bus", default="ahci", help="barramento do disco da imagem (ahci, virtio ou nvme)")
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--kernel-shell", action="store_true")
     ap.add_argument("--boot-timeout", type=float, default=60.0)

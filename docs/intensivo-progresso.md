@@ -28,22 +28,25 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 13:35, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+Estado (2026-10-19, 14:10, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
 `v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.6 (apps `imgview`, `monitor`,
 `arquivos`, `editor`, `config` e `terminal`) e 6.7 (barra de tarefas,
 Alt+Tab, minimizar e maximizar, lancador de apps): Fase 6 inteira; e a
-5.2 (MSI: AHCI na CPU 1, rede `e1000e` na CPU 2) e a 5.3 (virtio-blk e
-virtio-net com MSI-X). Versao 2.4.0-a18. O
+5.2 (MSI: AHCI na CPU 1, rede `e1000e` na CPU 2), a 5.3 (virtio-blk e
+virtio-net com MSI-X) e a 5.4 (NVMe). Versao 2.4.0-a19. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E,
-na ISO na F e no virtio (disco e rede) na V, com 502 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+na ISO na F, no virtio (disco e rede) na V e no NVMe na N, com 511
+verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.4, NVMe (criterio: boot com a raiz num disco NVMe do
-QEMU); depois 5.5 a 5.9. Versao 2.4.0-a19 em diante.
+Proxima etapa: 5.5, xHCI (USB 3) parte 1: controlador e enumeracao,
+em Rust como o plano manda para o USB (`kernel/rust/usb`); criterio:
+`lsusb` lista os dispositivos do QEMU. Depois 5.6 a 5.9. Versao
+2.4.0-a20 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -62,6 +65,28 @@ da tela, ultimo texto que apareceu, modelo da placa-mae); marcar a 7.4 como
 roteiro em docs/teste-hardware-real.md" e repetir isso no paragrafo do
 Estado. Depois seguir direto para a 7.5 e a Fase 8; a 7.4 volta quando o dono
 mandar o resultado do teste.
+
+Criterio de verificacao (decidido pelo dono em 2026-10-19, para poupar tempo
+e o notebook, que vem caindo com tela azul):
+- Fim de cada PARTE: `.\check.ps1` sem warnings, `.\build.ps1` OK e so as
+  sequencias da regressao que cobrem o que mudou (`-OnlyX`): rede ou
+  programas de texto -> A; grafico, framebuffer ou Doom -> B; disco, ext2 ou
+  armazenamento -> C; `wm` ou apps -> D; travas, processos, threads ou sinais
+  -> E; ISO ou boot -> F; virtio -> V; NVMe -> N. Na duvida, inclui a
+  sequencia.
+- Fim de cada ETAPA (todas as partes feitas): regressao completa, uma vez,
+  antes de marcar `[x]`.
+- Excecao: parte que mexe no nucleo do kernel (interrupcoes, MSI, memoria,
+  paginacao, escalonador, preempcao, travas, syscalls de uso geral) roda a
+  regressao completa mesmo sendo parte; isso cobre quase toda a Fase 8.
+- Se a regressao completa do fim da etapa falhar, achar pelos commits em que
+  parte o erro entrou, corrigir num commit novo e rodar de novo, sem
+  reescrever historico.
+- No diario, cada parte registra quais sequencias rodou e com quantas
+  verificacoes.
+- Continuam: RAM livre medida antes de rodar QEMU (2 GB; entre 1 e 2 GB roda e
+  anota; abaixo de 1 GB depois de esperar, para), commit por parte logo depois
+  da verificacao verde, e a entrada do diario so depois dela.
 
 ## Checklist
 
@@ -108,7 +133,7 @@ mandar o resultado do teste.
 | 5.1 | uACPI | [x] | 10:14 | 11:05 | ver `git log` |
 | 5.2 | MSI/MSI-X | [x] | 04:20 | 06:15 | ver `git log` (2 partes) |
 | 5.3 | virtio-blk e virtio-net | [x] | 06:15 | 13:35 | ver `git log` (2 partes) |
-| 5.4 | NVMe | [ ] | | | |
+| 5.4 | NVMe | [x] | 13:35 | 14:10 | ver `git log` |
 | 5.5 | xHCI | [ ] | | | |
 | 5.6 | USB HID | [ ] | | | |
 | 5.7 | USB armazenamento | [ ] | | | |
@@ -1403,6 +1428,22 @@ primeira.
 Ficou de fora: varias filas, checksum e segmentacao na placa
 (`VIRTIO_NET_F_CSUM`, TSO), buffers que se juntam (`MRG_RXBUF`), MSI-X para a
 fila de transmissao.
+
+#### 5.4 NVMe - 13:35 a 14:10 - FEITO
+`drivers/nvme.c` (novo): fila admin, `Identify` do controlador e do
+namespace 1, uma fila de I/O com MSI-X, PRP e lista de PRP para pedidos de ate
+64 KiB, `Flush` depois de escrever; so bloco de 512 bytes. O disco e
+`nvme0n1` e a camada de bloco poe `p` antes do numero da particao quando o
+nome termina em digito (`nvme0n1p2`). `test.ps1 -Bus nvme` e `qrun.py --bus
+nvme` ligam a imagem num NVMe do QEMU. Criterio: sequencia N nova, com o boot
+e a raiz no NVMe (`nvme0n1p2`), `fstest -a` na raiz, a MSI-X contada no
+`/proc/interrupts` e um arquivo que sobrevive ao reboot. Verificacao: a
+sequencia N sozinha (9 verificacoes) e a regressao completa de fim de etapa,
+502 -> 511, verde na primeira rodada (30 minutos). Versao 2.4.0-a19. RAM livre
+antes da regressao: 2,8 GB.
+Problemas: nenhum; o driver funcionou de primeira no QEMU.
+Ficou de fora: varias filas de I/O e varios pedidos ao mesmo tempo, namespaces
+alem do 1, blocos de 4 KiB, desligar o controlador no `poweroff`.
 
 ### Sessao 2 - 2026-10-17
 
