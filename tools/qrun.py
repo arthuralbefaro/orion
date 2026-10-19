@@ -115,11 +115,15 @@ def host_get(port, path):
     return f"{status}, corpo de {len(body)} bytes\n{shown}"
 
 
+SLOW_WAITS_ENV = "ORION_SLOW_WAITS"
+
+
 class Machine:
     def __init__(self, smp=4, memory=512, disk=False, extra_disks=(), serial_port=4444, monitor_port=4445,
                  boot_timeout=60.0, image=False, hostfwd=(), login=("root", "orion"), media=None, bios=False,
-                 nic="e1000e", bus="ahci", usb=False, no_ps2=False, usb_disk=False, usb_fat=False):
+                 nic="e1000e", bus="ahci", usb=False, no_ps2=False, usb_disk=False, usb_fat=False, no_strict=False):
         self.image = image
+        self.no_strict = no_strict
         self.usb_disk = usb_disk
         self.usb_fat = usb_fat
         self.usb = usb
@@ -142,6 +146,7 @@ class Machine:
         self.serial = None
         self.monitor = None
         self.cmd_pos = 0
+        self.last_cmd = None
 
     def start(self):
         OUT.mkdir(exist_ok=True)
@@ -177,6 +182,8 @@ class Machine:
             "-netdev", "user,id=n0" + "".join(",hostfwd=" + f for f in self.hostfwd), "-device", f"{self.nic},netdev=n0",
             "-object", "filter-dump,id=d0,netdev=n0,file=out/net.pcap",
         ]
+        if not self.no_strict:
+            args += ["-fw_cfg", "name=opt/orion/strict,string=1"]
         if self.usb:
             args += ["-device", "qemu-xhci,id=xhci,p2=8,p3=8", "-device", "usb-kbd,bus=xhci.0", "-device", "usb-mouse,bus=xhci.0"]
         if self.usb and self.usb_disk:
@@ -230,6 +237,29 @@ class Machine:
         end = time.time() + seconds
         while time.time() < end:
             if not self._read_some():
+                time.sleep(0.015)
+
+    def at_prompt(self, start):
+        if len(self.log) <= start:
+            return False
+        echo_end = self.log.find(b"\n", start)
+        if echo_end < 0:
+            return False
+        line_start = self.log.rfind(b"\n") + 1
+        if line_start <= echo_end:
+            return False
+        line = self.log[line_start:].replace(b"\r", b"")
+        return bool(re.fullmatch(rb"(\S+ )?[$#] ", line)) or line == b"orion> "
+
+    def pump_until_prompt(self, seconds, start, quiet):
+        end = time.time() + seconds
+        last = time.time()
+        while time.time() < end:
+            if self._read_some():
+                last = time.time()
+            elif time.time() - last >= quiet and self.at_prompt(start):
+                return
+            else:
                 time.sleep(0.015)
 
     def text(self, start=0):
@@ -333,11 +363,16 @@ class Machine:
 
     def run_step(self, step, command_delay):
         kind, _, arg = step.partition(":")
+        prev, self.last_cmd = self.last_cmd, None
         if kind == "cmd":
             print(f"  cmd  > {arg}")
             self.cmd_pos = len(self.log)
             self.send(arg + "\r")
-            self.pump(command_delay)
+            if os.environ.get(SLOW_WAITS_ENV):
+                self.pump(command_delay)
+            else:
+                self.pump_until_prompt(command_delay, self.cmd_pos, 0.15)
+            self.last_cmd = arg
         elif kind == "raw":
             print(f"  raw  > {arg}")
             self.send(arg)
@@ -364,7 +399,11 @@ class Machine:
             clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", reply).replace("\r", "").strip()
             self.log += f"\n[monitor] {arg}: {clean}\n".encode()
         elif kind == "wait":
-            self.pump(float(arg))
+            self.last_cmd = prev
+            if not os.environ.get(SLOW_WAITS_ENV) and prev is not None and not re.search(r"(?<!&)&(?!&)", prev):
+                self.pump_until_prompt(float(arg), self.cmd_pos, 0.4)
+            else:
+                self.pump(float(arg))
         elif kind == "until":
             secs, _, needle = arg.partition(":")
             print(f"  until> {needle} ({secs} s)")
@@ -501,7 +540,7 @@ def write_autostart(gui):
 def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_build=False, boot_timeout=60.0,
         command_delay=1.0, settle=2.0, log_path="out/test-serial.log", kernel_shell=False, image=False,
         hostfwd=(), iso=False, iso_disk=False, bios=False, nic="e1000e", bus="ahci", usb=False, no_ps2=False, usb_disk=False,
-        usb_fat=False):
+        usb_fat=False, no_strict=False):
     if not no_build:
         build(gui, image, iso or iso_disk)
     elif gui:
@@ -515,7 +554,7 @@ def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_buil
     media = "cd" if iso else "isodisk" if iso_disk else None
     m = Machine(smp=smp, memory=memory, disk=disk, extra_disks=extra_disks, boot_timeout=boot_timeout,
                 image=image, hostfwd=hostfwd, media=media, bios=bios, nic=nic, bus=bus, usb=usb, no_ps2=no_ps2, usb_disk=usb_disk,
-                usb_fat=usb_fat)
+                usb_fat=usb_fat, no_strict=no_strict)
     code = 0
     try:
         m.start()
@@ -562,6 +601,8 @@ def main():
     ap.add_argument("--usb-disk", action="store_true", help="com --usb, liga um pendrive (out/stick.img)")
     ap.add_argument("--usb-fat", action="store_true", help="com --usb, liga um segundo pendrive FAT feito no hospedeiro (out/stick2.img)")
     ap.add_argument("--no-build", action="store_true")
+    ap.add_argument("--slow-waits", action="store_true", help="esperas fixas antigas, sem esperar o prompt")
+    ap.add_argument("--no-strict", action="store_true", help="sem o fw_cfg opt/orion/strict (como num PC de verdade)")
     ap.add_argument("--kernel-shell", action="store_true")
     ap.add_argument("--boot-timeout", type=float, default=60.0)
     ap.add_argument("--delay", type=float, default=1.0)
@@ -569,12 +610,14 @@ def main():
     ap.add_argument("--log", default="out/test-serial.log")
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args()
+    if a.slow_waits:
+        os.environ["ORION_SLOW_WAITS"] = "1"
     steps = [f"cmd:{c}" for c in a.command] + a.steps
     code, text = run(steps, smp=a.smp, memory=a.memory, disk=a.disk, gui=a.gui, no_build=a.no_build,
                      boot_timeout=a.boot_timeout, command_delay=a.delay, settle=a.settle,
                      log_path=a.log, kernel_shell=a.kernel_shell, image=a.image, iso=a.iso,
                      iso_disk=a.iso_disk, bios=a.bios, nic=a.nic, bus=a.bus, usb=a.usb, no_ps2=a.no_ps2, usb_disk=a.usb_disk,
-                     usb_fat=a.usb_fat)
+                     usb_fat=a.usb_fat, no_strict=a.no_strict)
     if not a.quiet:
         print(f"----- {a.log} -----")
         print(text)

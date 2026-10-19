@@ -28,11 +28,14 @@ param(
     [switch]$NoPs2,
     [switch]$UsbDisk,
     [switch]$UsbFat,
+    [switch]$SlowWaits,
+    [switch]$NoStrict,
     [string]$LoginUser = "root",
     [string]$LoginPassword = "orion"
 )
 
 $ErrorActionPreference = "Stop"
+if ($env:ORION_SLOW_WAITS) { $SlowWaits = $true }
 $Root = $PSScriptRoot
 $OutDir = Join-Path $Root "out"
 
@@ -128,6 +131,7 @@ function Get-QemuArgs {
             "-serial", "tcp:127.0.0.1:$SerialPort,server,nowait",
             "-monitor", "tcp:127.0.0.1:$MonitorPort,server,nowait",
             "-no-reboot", "-no-shutdown")
+    if (-not $NoStrict) { $a += @("-fw_cfg", "name=opt/orion/strict,string=1") }
     $netdev = "user,id=n0"
     foreach ($fwd in $HostFwd) { $netdev += ",hostfwd=$fwd" }
     $a += @("-netdev", $netdev, "-device", "$Nic,netdev=n0",
@@ -148,6 +152,8 @@ function Start-Qemu {
     Write-Host "QEMU pid $($p.Id), smp $Smp" -ForegroundColor DarkGray
     return $p
 }
+$runStart = Get-Date
+$stepTimes = @{}
 $proc = Start-Qemu
 
 $log = New-Object System.Text.StringBuilder
@@ -179,6 +185,33 @@ function Pump-Serial([double]$seconds) {
             $n = $stream.Read($buf, 0, $buf.Length)
             if ($n -gt 0) { [void]$log.Append([System.Text.Encoding]::ASCII.GetString($buf, 0, $n)) }
         } else {
+            Start-Sleep -Milliseconds 15
+        }
+    }
+}
+
+function Test-Prompt([int]$from) {
+    $text = $log.ToString()
+    if ($text.Length -le $from) { return $false }
+    $echoEnd = $text.IndexOf("`n", $from)
+    if ($echoEnd -lt 0) { return $false }
+    $lineStart = $text.LastIndexOf("`n") + 1
+    if ($lineStart -le $echoEnd) { return $false }
+    $line = $text.Substring($lineStart).Replace("`r", "")
+    return (($line -cmatch '^(\S+ )?[$#] $') -or ($line -ceq 'orion> '))
+}
+
+function Pump-UntilPrompt([double]$seconds, [int]$from, [double]$quiet) {
+    $stream = $client.GetStream()
+    $buf = New-Object byte[] 65536
+    $end = (Get-Date).AddSeconds($seconds)
+    $last = Get-Date
+    while ((Get-Date) -lt $end) {
+        if ($stream.DataAvailable) {
+            $n = $stream.Read($buf, 0, $buf.Length)
+            if ($n -gt 0) { [void]$log.Append([System.Text.Encoding]::ASCII.GetString($buf, 0, $n)); $last = Get-Date }
+        } else {
+            if ((((Get-Date) - $last).TotalSeconds -ge $quiet) -and (Test-Prompt $from)) { return }
             Start-Sleep -Milliseconds 15
         }
     }
@@ -353,13 +386,28 @@ try {
         Pump-Serial ([Math]::Min($BootTimeout, 12))
     }
 
+    $timeBoot = ((Get-Date) - $runStart).TotalSeconds
+    $lastCmd = $null
     foreach ($step in $steps) {
         $kind = $step
         $arg = ""
         $i = $step.IndexOf(':')
         if ($i -ge 0) { $kind = $step.Substring(0, $i); $arg = $step.Substring($i + 1) }
+        $stepStart = Get-Date
         switch ($kind) {
-            "cmd"  { Write-Host "  cmd  > $arg" -ForegroundColor DarkGray; $cmdPos = $log.Length; Send-Serial ($arg + "`r"); Pump-Serial $CommandDelay }
+            "cmd"  {
+                Write-Host "  cmd  > $arg" -ForegroundColor DarkGray
+                $cmdPos = $log.Length
+                Send-Serial ($arg + "`r")
+                if ($SlowWaits) { Pump-Serial $CommandDelay } else { Pump-UntilPrompt $CommandDelay $cmdPos 0.15 }
+            }
+            "wait" {
+                if (-not $SlowWaits -and $lastCmd -ne $null -and $lastCmd -notmatch '(?<!&)&(?!&)') {
+                    Pump-UntilPrompt ([double]$arg) $cmdPos 0.4
+                } else {
+                    Pump-Serial ([double]$arg)
+                }
+            }
             "raw"  { Write-Host "  raw  > $arg" -ForegroundColor DarkGray; Send-Serial $arg; Pump-Serial 0.3 }
             "key"  { Write-Host "  key  > $arg" -ForegroundColor DarkGray; Send-Bytes @([byte][Convert]::ToInt32($arg, 16)); Pump-Serial 0.6 }
             "keys" {
@@ -378,7 +426,6 @@ try {
                 $clean = ($reply -replace "\x1b\[[0-9;]*[A-Za-z]", "" -replace "`r", "").Trim()
                 [void]$log.Append("`n[monitor] ${arg}: $clean`n")
             }
-            "wait" { Pump-Serial ([double]$arg) }
             "until" {
                 $j = $arg.IndexOf(':')
                 $secs = [double]$arg.Substring(0, $j)
@@ -520,6 +567,8 @@ try {
             }
             default { Write-Host "  passo desconhecido: $step" -ForegroundColor Yellow }
         }
+        if ($kind -eq "cmd") { $lastCmd = $arg } elseif ($kind -ne "wait") { $lastCmd = $null }
+        $stepTimes[$kind] = $stepTimes[$kind] + ((Get-Date) - $stepStart).TotalSeconds
     }
 
     Pump-Serial $Settle
@@ -534,6 +583,10 @@ try {
     if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
     Get-Process qemu-system-x86_64 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
+
+$parts = @("boot {0:N1} s" -f $timeBoot)
+foreach ($e in ($stepTimes.GetEnumerator() | Sort-Object Name)) { $parts += ("{0} {1:N1} s" -f $e.Name, $e.Value) }
+Write-Host ("tempo: " + ($parts -join ", ") + (", total {0:N1} s" -f ((Get-Date) - $runStart).TotalSeconds)) -ForegroundColor DarkCyan
 
 $logFull = Join-Path $Root $LogPath
 $logDir = Split-Path $logFull -Parent
