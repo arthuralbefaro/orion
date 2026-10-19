@@ -108,6 +108,20 @@ struct rect win_close_button(const struct window *w)
     return rect_make(t.x + t.w - WIN_TITLE_H, t.y, WIN_TITLE_H, WIN_TITLE_H);
 }
 
+struct rect win_min_button(const struct window *w)
+{
+    struct rect c = win_close_button(w);
+    return rect_make(c.x - WIN_TITLE_H, c.y, WIN_TITLE_H, WIN_TITLE_H);
+}
+
+struct rect win_max_button(const struct window *w)
+{
+    struct rect c = win_close_button(w);
+    if (w->kind != WIN_TERM)
+        return rect_make(c.x, c.y, 0, 0);
+    return rect_make(c.x - 2 * WIN_TITLE_H, c.y, WIN_TITLE_H, WIN_TITLE_H);
+}
+
 struct rect win_row_rect(const struct window *w, int row)
 {
     struct rect c = win_content(w);
@@ -124,6 +138,7 @@ static void damage_focus(struct desktop *d)
     struct window *w = desk_focused(d);
     if (w)
         gfx_damage(d->gfx, win_titlebar(w));
+    desk_damage_taskbar(d);
 }
 
 struct window *desk_new(struct desktop *d, enum win_kind kind, const char *title, struct rect frame)
@@ -163,17 +178,115 @@ void desk_remove(struct desktop *d, struct window *w)
 
 struct window *desk_focused(struct desktop *d)
 {
-    if (!d->count)
-        return NULL;
-    return &d->windows[d->order[d->count - 1]];
+    for (int i = d->count - 1; i >= 0; i--) {
+        struct window *w = &d->windows[d->order[i]];
+        if (!w->minimized)
+            return w;
+    }
+    return NULL;
 }
 
 struct window *desk_at(struct desktop *d, int x, int y)
 {
     for (int i = d->count - 1; i >= 0; i--) {
         struct window *w = &d->windows[d->order[i]];
-        if (rect_contains(w->frame, x, y))
+        if (!w->minimized && rect_contains(w->frame, x, y))
             return w;
+    }
+    return NULL;
+}
+
+static void to_bottom(struct desktop *d, int idx)
+{
+    int out = d->count - 1;
+    for (int i = d->count - 1; i >= 0; i--)
+        if (d->order[i] != idx)
+            d->order[out--] = d->order[i];
+    d->order[0] = idx;
+}
+
+void desk_minimize(struct desktop *d, struct window *w)
+{
+    if (w->minimized)
+        return;
+    damage_focus(d);
+    desk_damage_window(d, w);
+    w->minimized = true;
+    to_bottom(d, index_of(d, w));
+    damage_focus(d);
+}
+
+void desk_restore(struct desktop *d, struct window *w)
+{
+    damage_focus(d);
+    w->minimized = false;
+    int idx = index_of(d, w);
+    int out = 0;
+    for (int i = 0; i < d->count; i++)
+        if (d->order[i] != idx)
+            d->order[out++] = d->order[i];
+    d->order[out++] = idx;
+    desk_damage_window(d, w);
+    damage_focus(d);
+}
+
+struct window *desk_cycle(struct desktop *d)
+{
+    struct window *top = desk_focused(d);
+    if (d->count < 2 || !top)
+        return top;
+    damage_focus(d);
+    to_bottom(d, index_of(d, top));
+    struct window *next = &d->windows[d->order[d->count - 1]];
+    if (next->minimized)
+        desk_restore(d, next);
+    else
+        desk_damage_window(d, next);
+    damage_focus(d);
+    return next;
+}
+
+struct rect desk_taskbar(const struct desktop *d)
+{
+    return rect_make(0, d->gfx->height - TASKBAR_H, d->gfx->width, TASKBAR_H);
+}
+
+struct rect desk_workarea(const struct desktop *d)
+{
+    return rect_make(0, TOPBAR_H, d->gfx->width, d->gfx->height - TOPBAR_H - TASKBAR_H);
+}
+
+void desk_damage_taskbar(struct desktop *d)
+{
+    gfx_damage(d->gfx, desk_taskbar(d));
+}
+
+static int task_width(const struct desktop *d, int n)
+{
+    int w = n ? (d->gfx->width - 6) / n - 6 : 0;
+    return w > 200 ? 200 : w;
+}
+
+static struct rect task_button(const struct desktop *d, int slot, int n)
+{
+    struct rect bar = desk_taskbar(d);
+    int w = task_width(d, n);
+    return rect_make(6 + slot * (w + 6), bar.y + 4, w, TASKBAR_H - 7);
+}
+
+struct window *desk_taskbar_at(struct desktop *d, int x, int y)
+{
+    int n = 0;
+    for (int i = 0; i < WIN_MAX; i++)
+        if (d->windows[i].used)
+            n++;
+    int slot = 0;
+    for (int i = 0; i < WIN_MAX; i++) {
+        if (!d->windows[i].used)
+            continue;
+        if (rect_contains(task_button(d, slot, n), x, y))
+            return &d->windows[i];
+        slot++;
     }
     return NULL;
 }
@@ -278,6 +391,38 @@ static void draw_topbar(struct desktop *d)
             room = (int)sizeof(hint) - 1;
         snprintf(hint, sizeof(hint), "%.*s", room, d->hint);
         gfx_text(g, hint_x, 6, hint, gfx_rgb(g, 0x7C8AA5), GFX_ZOOM);
+    }
+}
+
+static void draw_taskbar(struct desktop *d)
+{
+    struct gfx *g = d->gfx;
+    struct rect bar = desk_taskbar(d);
+    gfx_fill(g, bar, gfx_rgb(g, COL_TOPBAR));
+    gfx_fill(g, rect_make(0, bar.y, g->width, 1), gfx_rgb(g, COL_TOPBAR_ED));
+    int n = 0;
+    for (int i = 0; i < WIN_MAX; i++)
+        if (d->windows[i].used)
+            n++;
+    struct window *focused = desk_focused(d);
+    int slot = 0;
+    for (int i = 0; i < WIN_MAX; i++) {
+        struct window *w = &d->windows[i];
+        if (!w->used)
+            continue;
+        struct rect b = task_button(d, slot++, n);
+        uint32_t bg = w == focused ? COL_TITLE_ON : w->minimized ? COL_PANEL_BG : COL_TITLE_OFF;
+        uint32_t fg = w->minimized ? 0x7C8AA5 : COL_TITLE_TXT;
+        gfx_fill(g, b, gfx_rgb(g, bg));
+        if (d->sans) {
+            int len = font_fit(d->sans, w->title, b.w - 12);
+            font_text(g, d->sans, b.x + 6, b.y + (b.h - d->sans->line_h) / 2, w->title, len, fg);
+        } else {
+            int room = (b.w - 8) / GFX_CELL_W;
+            int len = (int)strlen(w->title);
+            gfx_text_n(g, b.x + 4, b.y + 2, w->title, len < room ? len : (room > 0 ? room : 0), gfx_rgb(g, fg),
+                       GFX_ZOOM);
+        }
     }
 }
 
@@ -391,11 +536,14 @@ static void draw_window(struct desktop *d, struct window *w, bool focused)
     struct rect t = win_titlebar(w);
     gfx_fill(g, t, gfx_rgb(g, focused ? COL_TITLE_ON : COL_TITLE_OFF));
     struct rect b = win_close_button(w);
+    struct rect mn = win_min_button(w);
+    struct rect mx = win_max_button(w);
+    int text_end = mx.w ? mx.x : mn.x;
     if (d->sans) {
-        int n = font_fit(d->sans, w->title, b.x - t.x - 14);
+        int n = font_fit(d->sans, w->title, text_end - t.x - 14);
         font_text(g, d->sans, t.x + 8, t.y + (t.h - d->sans->line_h) / 2, w->title, n, COL_TITLE_TXT);
     } else {
-        int room = (b.x - t.x - 12) / GFX_CELL_W;
+        int room = (text_end - t.x - 12) / GFX_CELL_W;
         int len = (int)strlen(w->title);
         gfx_text_n(g, t.x + 8, t.y + 3, w->title, len < room ? len : (room > 0 ? room : 0),
                    gfx_rgb(g, COL_TITLE_TXT), GFX_ZOOM);
@@ -404,6 +552,15 @@ static void draw_window(struct desktop *d, struct window *w, bool focused)
     gfx_fill(g, rect_make(b.x + 4, b.y + 4, b.w - 8, b.h - 8),
              gfx_rgb(g, focused ? COL_CLOSE : COL_CLOSE_OFF));
     gfx_text(g, b.x + 5, b.y + 3, "x", gfx_rgb(g, 0x101418), GFX_ZOOM);
+    uint32_t icon = gfx_rgb(g, focused ? COL_TITLE_TXT : 0x7C8AA5);
+    gfx_fill(g, rect_make(mn.x + 6, mn.y + mn.h - 8, mn.w - 12, 2), icon);
+    if (mx.w) {
+        struct rect r = rect_make(mx.x + 6, mx.y + 6, mx.w - 12, mx.h - 12);
+        gfx_fill(g, rect_make(r.x, r.y, r.w, 2), icon);
+        gfx_fill(g, rect_make(r.x, r.y + r.h - 1, r.w, 1), icon);
+        gfx_fill(g, rect_make(r.x, r.y, 1, r.h), icon);
+        gfx_fill(g, rect_make(r.x + r.w - 1, r.y, 1, r.h), icon);
+    }
 
     switch (w->kind) {
     case WIN_TERM:  draw_terminal(d, w, focused); break;
@@ -420,11 +577,14 @@ void desk_compose(struct desktop *d, struct rect area)
     draw_desktop(d, area);
     if (rect_intersects(area, rect_make(0, 0, d->gfx->width, TOPBAR_H)))
         draw_topbar(d);
+    struct window *focused = desk_focused(d);
     for (int i = 0; i < d->count; i++) {
         struct window *w = &d->windows[d->order[i]];
-        if (rect_intersects(area, w->frame))
-            draw_window(d, w, i == d->count - 1);
+        if (!w->minimized && rect_intersects(area, w->frame))
+            draw_window(d, w, w == focused);
     }
+    if (rect_intersects(area, desk_taskbar(d)))
+        draw_taskbar(d);
     if (d->menu_open && rect_intersects(area, desk_menu_rect(d)))
         draw_menu(d);
 }

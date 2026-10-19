@@ -32,6 +32,8 @@
 #define KEY_CTRL_F     0x06
 #define KEY_CTRL_M     0x0D
 #define KEY_CTRL_X     0x18
+#define SC_F9          0x43
+#define SC_F10         0x44
 #define CTL_PATH       "/run/wm.sock"
 #define CTL_MAX        8
 #define FONT_DIR       "/usr/share/fonts"
@@ -152,6 +154,61 @@ static void close_window(struct window *w)
     struct window *top = desk_focused(&desk);
     if (top)
         desk_damage_window(&desk, top);
+}
+
+static void minimize_window(struct window *w)
+{
+    desk_minimize(&desk, w);
+    fprintf(stderr, "wm: janela %d minimizada (%s)\n", w->id, w->title);
+}
+
+static void restore_window(struct window *w)
+{
+    desk_restore(&desk, w);
+    fprintf(stderr, "wm: janela %d restaurada (%s)\n", w->id, w->title);
+}
+
+static void cycle_windows(void)
+{
+    struct window *before = desk_focused(&desk);
+    struct window *w = desk_cycle(&desk);
+    if (!w || w == before)
+        return;
+    fprintf(stderr, "wm: alt+tab: janela %d em foco (%s)\n", w->id, w->title);
+}
+
+static void toggle_maximize(struct window *w)
+{
+    if (w->kind != WIN_TERM)
+        return;
+    desk_damage_window(&desk, w);
+    int cols = TERM_COLS, rows = TERM_ROWS;
+    if (!w->maximized) {
+        w->normal = w->frame;
+        struct rect a = desk_workarea(&desk);
+        cols = (a.w - WIN_CHROME_X) / gfx.cell_w;
+        rows = (a.h - WIN_CHROME_Y) / gfx.cell_h;
+        if (cols > TERM_MAX_COLS)
+            cols = TERM_MAX_COLS;
+        if (rows > TERM_MAX_ROWS)
+            rows = TERM_MAX_ROWS;
+        w->frame = rect_make(a.x, a.y, cols * gfx.cell_w + WIN_CHROME_X, rows * gfx.cell_h + WIN_CHROME_Y);
+        w->maximized = true;
+    } else {
+        w->frame = w->normal;
+        w->maximized = false;
+    }
+    term_resize(&w->term, cols, rows);
+    if (w->master >= 0) {
+        struct winsize ws = { (unsigned short)rows, (unsigned short)cols, 0, 0 };
+        ioctl(w->master, TIOCSWINSZ, &ws);
+    }
+    desk_raise(&desk, w);
+    desk_damage_window(&desk, w);
+    if (w->maximized)
+        fprintf(stderr, "wm: terminal %d maximizado: %dx%d\n", w->id, cols, rows);
+    else
+        fprintf(stderr, "wm: terminal %d volta ao tamanho normal: %dx%d\n", w->id, cols, rows);
 }
 
 static void reap_children(void)
@@ -401,6 +458,18 @@ static void handle_button(int32_t mask)
     }
     if (mouse_y < TOPBAR_H)
         return;
+    if (rect_contains(desk_taskbar(&desk), mouse_x, mouse_y)) {
+        struct window *t = desk_taskbar_at(&desk, mouse_x, mouse_y);
+        if (!t)
+            return;
+        if (t->minimized)
+            restore_window(t);
+        else if (t == desk_focused(&desk))
+            minimize_window(t);
+        else
+            desk_raise(&desk, t);
+        return;
+    }
 
     struct window *w = desk_at(&desk, mouse_x, mouse_y);
     if (!w)
@@ -409,6 +478,14 @@ static void handle_button(int32_t mask)
 
     if (rect_contains(win_close_button(w), mouse_x, mouse_y)) {
         close_window(w);
+        return;
+    }
+    if (rect_contains(win_min_button(w), mouse_x, mouse_y)) {
+        minimize_window(w);
+        return;
+    }
+    if (rect_contains(win_max_button(w), mouse_x, mouse_y)) {
+        toggle_maximize(w);
         return;
     }
     if (rect_contains(win_titlebar(w), mouse_x, mouse_y)) {
@@ -494,6 +571,23 @@ static void handle_key(int32_t scancode, int32_t ascii, int32_t mods)
     if ((mods & INPUT_MOD_CTRL) && (mods & INPUT_MOD_ALT) && ascii == KEY_CTRL_X) {
         running = false;
         return;
+    }
+    if ((mods & INPUT_MOD_ALT) && !(mods & INPUT_MOD_CTRL)) {
+        struct window *f = desk_focused(&desk);
+        if (ascii == '\t') {
+            cycle_windows();
+            return;
+        }
+        if (scancode == SC_F9 && !(mods & INPUT_MOD_EXTENDED)) {
+            if (f)
+                minimize_window(f);
+            return;
+        }
+        if (scancode == SC_F10 && !(mods & INPUT_MOD_EXTENDED)) {
+            if (f)
+                toggle_maximize(f);
+            return;
+        }
     }
     if (mods & INPUT_MOD_CTRL) {
         if (ascii == KEY_CTRL_T) {

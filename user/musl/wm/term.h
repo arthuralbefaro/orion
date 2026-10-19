@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define TERM_MAX_COLS 96
+#define TERM_MAX_COLS 128
 #define TERM_MAX_ROWS 40
 #define TERM_TAB      8
 #define TERM_MAX_PARAMS 8
@@ -39,6 +39,7 @@ void term_init(struct term *t, int cols, int rows);
 void term_putc(struct term *t, char c);
 void term_write(struct term *t, const char *buf, int len);
 void term_mark_all(struct term *t);
+void term_resize(struct term *t, int cols, int rows);
 bool term_take_row(struct term *t, int row);
 void term_sync_cursor(struct term *t);
 uint32_t term_color(uint8_t index);

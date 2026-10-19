@@ -110,6 +110,12 @@ na hora; a escolha fica em `/etc/wm.conf` (`fundo=<imagem>` ou `fundo=nenhum`),
 que o `wm` le ao iniciar. `wmctl fundo <imagem|nenhum>` faz o mesmo sem gravar.
 `terminal` e o terminal como app separado: um `sh` numa pty de 48x26 com
 `COLUMNS` e `LINES` no ambiente, cores e cursor ANSI; fecha quando o `sh` sai.
+
+Area de trabalho: a barra de tarefas embaixo lista as janelas (clique foca,
+minimiza a que esta em foco ou restaura a minimizada); Alt+Tab passa pelas
+janelas, inclusive as minimizadas; Alt+F9 ou o botao `_` minimiza; Alt+F10 ou
+o botao de quadrado maximiza o terminal do `wm` na area de trabalho (126x33 em
+1280x800) e volta ao tamanho normal.
 O terminal grafico entende as sequencias ANSI de cursor, apagamento e cores.
 
 ### Boot direto na interface grafica

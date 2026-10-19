@@ -829,6 +829,10 @@ if ($runAll -or $OnlyD) {
         "wait:0.5", "shot:out\shots\reg-gui-9-menu-arquivo.ppm", "mon:sendkey ret", "wait:2",
         "mon:sendkey ctrl-p", "wait:2", "shot:out\shots\reg-gui-2-processos.ppm",
         "mon:sendkey ctrl-f", "wait:2", "shot:out\shots\reg-gui-3-arquivos.ppm",
+        "mon:sendkey ctrl-t", "wait:2", "mon:sendkey alt-f10", "wait:1.5", "shot:out\shots\reg-gui-10-maximizado.ppm",
+        "mon:sendkey alt-f10", "wait:1", "mon:sendkey alt-f9", "wait:1", "shot:out\shots\reg-gui-11-minimizado.ppm",
+        "mon:sendkey alt-tab", "wait:0.5", "mon:sendkey alt-tab", "wait:0.5", "mon:sendkey alt-tab", "wait:0.5",
+        "mon:sendkey alt-tab", "wait:0.5", "mon:sendkey alt-tab", "wait:0.5", "mon:sendkey alt-tab", "wait:1",
         "mon:mouse_move -640 -400", "wait:0.5", "mon:mouse_move 40 12", "wait:0.5",
         "mon:mouse_button 1", "wait:0.4", "mon:mouse_button 0", "wait:1",
         "shot:out\shots\reg-gui-4-menu.ppm",
@@ -847,6 +851,13 @@ if ($runAll -or $OnlyD) {
     Expect $d "wm: terminal 0 -> sh pid \d+" "wm abriu um terminal com o sh dentro"
     Expect $d "wm: janela de processos aberta" "Ctrl\+P abriu a janela de processos"
     Expect $d "wm: janela de arquivos em /" "Ctrl\+F abriu a janela de arquivos"
+    Expect $d "wm: terminal \d+ maximizado: 126x33" "Alt\+F10 maximiza o terminal na area de trabalho (126x33)"
+    Expect $d "wm: terminal \d+ volta ao tamanho normal: 60x20" "Alt\+F10 de novo volta o terminal a 60x20"
+    Expect $d "(wm: alt\+tab: janela \d+ em foco[^\n]*\s*\n){6}" "Alt\+Tab passa por seis janelas seguidas"
+    Expect $d "(?s)wm: janela (\d+) minimizada \(Terminal \d+\).*?wm: alt\+tab: janela \1 em foco" "Alt\+Tab traz de volta a janela minimizada com Alt\+F9"
+    Test-ShotPixel "out\shots\reg-gui-10-maximizado.ppm" 1200 600 0x0a0e17 12 "captura: terminal maximizado cobre a area de trabalho"
+    Test-ShotPixel "out\shots\reg-gui-10-maximizado.ppm" 3 785 0x161c2b 12 "captura: barra de tarefas embaixo"
+    Test-ShotPixel "out\shots\reg-gui-11-minimizado.ppm" 3 785 0x161c2b 12 "captura: barra de tarefas com a janela minimizada"
     Expect $d "wm: encerrando" "Ctrl\+Alt\+X encerrou o wm"
     Expect $d "init: /bin/wm terminou" "init percebeu a saida do wm"
     Expect $d "wm: comandos em /run/wm\.sock" "wm escuta comandos num socket Unix"

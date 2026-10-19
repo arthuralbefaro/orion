@@ -59,6 +59,40 @@ void term_sync_cursor(struct term *t)
     }
 }
 
+void term_resize(struct term *t, int cols, int rows)
+{
+    if (cols < 1)
+        cols = 1;
+    if (rows < 1)
+        rows = 1;
+    if (cols > TERM_MAX_COLS)
+        cols = TERM_MAX_COLS;
+    if (rows > TERM_MAX_ROWS)
+        rows = TERM_MAX_ROWS;
+    int keep = t->rows;
+    if (t->cur_row >= rows) {
+        int drop = t->cur_row - rows + 1;
+        memmove(t->cells[0], t->cells[drop], sizeof(t->cells[0]) * (size_t)(t->rows - drop));
+        t->cur_row -= drop;
+        keep -= drop;
+    }
+    for (int r = 0; r < rows; r++) {
+        int from = r < keep ? t->cols : 0;
+        for (int c = from; c < cols; c++) {
+            t->cells[r][c].ch = ' ';
+            t->cells[r][c].fg = TERM_DEFAULT_FG;
+            t->cells[r][c].bg = TERM_DEFAULT_BG;
+        }
+    }
+    t->cols = cols;
+    t->rows = rows;
+    if (t->cur_col > cols)
+        t->cur_col = cols;
+    t->last_row = t->cur_row;
+    t->last_col = t->cur_col;
+    term_mark_all(t);
+}
+
 static void scroll(struct term *t)
 {
     memmove(t->cells[0], t->cells[1], sizeof(t->cells[0]) * (size_t)(t->rows - 1));

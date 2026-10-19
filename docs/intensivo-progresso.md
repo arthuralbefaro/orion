@@ -28,20 +28,21 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 03:05, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+Estado (2026-10-19, 03:40, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
 `v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.6 (apps `imgview`, `monitor`,
-`arquivos`, `editor`, `config` e `terminal`). Versao 2.4.0-a12. O
+`arquivos`, `editor`, `config` e `terminal`) e a parte 1 da 6.7 (barra de
+tarefas, Alt+Tab, minimizar e maximizar). Versao 2.4.0-a13. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e
-na ISO na F, com 467 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+na ISO na F, com 474 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 6.7, area de trabalho (barra de tarefas, Alt+Tab, minimizar e
-maximizar, lancador de apps), com captura da sequencia D com 3 apps abertos.
-Versao 2.4.0-a13 em diante.
+Proxima etapa: 6.7 parte 2, lancador de apps no menu do `wm` (Ctrl+P e Ctrl+F
+abrem o `monitor` e o `arquivos`), com captura da sequencia D com 3 apps
+abertos. Versao 2.4.0-a14 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -106,7 +107,7 @@ logo depois da 6.7, de 5.2 a 5.9, antes da 7.3.
 | 6.4 | Imagens PNG/JPEG | [x] | 13:05 | 13:38 | ver `git log` |
 | 6.5 | Compositor com areas sujas | [x] | 13:38 | 15:47 | ver `git log` |
 | 6.6 | Apps | [x] | 15:47 | 03:05 | ver `git log` (6 partes) |
-| 6.7 | Area de trabalho | [ ] | | | |
+| 6.7 | Area de trabalho | [~] | 03:05 | | |
 | 7.1 | ISO hibrida | [x] | 06:26 | 09:44 | ver `git log` |
 | 7.2 | Live | [x] | 09:44 | 10:13 | ver `git log` |
 | 7.3 | Instalador | [ ] | | | |
@@ -1264,6 +1265,22 @@ cairam no terminal do `wm` e a verificacao do arquivo passou mesmo assim; o
 teste passou a gravar o `COLUMNS`, que separa os dois terminais.
 Ficou de fora: fonte vetorial no app (so o `wm` tem), rolagem para tras,
 copiar e colar, redimensionar.
+
+#### 6.7 parte 1 Barra de tarefas, Alt+Tab, minimizar e maximizar - 03:05 a 03:40 - FEITO
+`wm`: barra de tarefas embaixo com um botao por janela (clique foca,
+minimiza a que esta em foco ou restaura); botoes de minimizar e, no terminal
+do `wm`, de maximizar no titulo; Alt+F9 minimiza, Alt+F10 maximiza ou volta,
+Alt+Tab manda a janela em foco para o fundo e restaura a que sobe se estiver
+minimizada. O terminal maximizado ocupa a area de trabalho com o texto
+guardado (`term_resize`) e a pty recebe o tamanho novo. `WIN_MAX` 16 e
+`TERM_MAX_COLS` 128. Criterio: na sequencia D um terminal novo maximiza para
+126x33 (a captura tem o terminal cobrindo a area de trabalho e a barra de
+tarefas), volta a 60x20, minimiza, e seis Alt+Tab passam pelas outras seis
+janelas e o trazem de volta. Regressao 467 -> 474, verde na primeira rodada
+completa (28 minutos). Versao 2.4.0-a13. RAM livre antes da regressao: 6,8 GB.
+Problemas: nenhum; a sequencia D passou na primeira rodada com as mudancas.
+Ficou de fora: maximizar janela de app (o protocolo nao tem redimensionar),
+arrastar a borda para redimensionar, area de trabalho com janelas lado a lado.
 
 ### Sessao 2 - 2026-10-17
 

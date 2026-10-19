@@ -2818,3 +2818,28 @@ Uma linha por decisao, na ordem em que foram tomadas.
   cortado por Ctrl+C (o `echo` seguinte so roda se o Ctrl+C funcionou), um
   `ls` para a captura (cursor na linha do prompt) e `exit`, que fecha a
   janela.
+
+## v2.4.0-a13 (etapa 6.7 parte 1: barra de tarefas, Alt+Tab, minimizar e maximizar)
+
+- A 6.7 vai em duas partes: esta (janelas) e o lancador de apps com a
+  captura da sequencia D com 3 apps abertos.
+- Minimizar marca a janela e a manda para o fundo da pilha; `desk_focused`,
+  `desk_at` e o desenho pulam as minimizadas. Alt+Tab manda a janela em foco
+  para o fundo e foca a que sobe; se ela estiver minimizada, e restaurada.
+  Assim o Alt+Tab passa por todas, inclusive as minimizadas, e repetido
+  N - 1 vezes volta a minimizada, sem precisar de uma lista separada.
+- Barra de tarefas de 30 px embaixo, um botao por janela na ordem de
+  criacao (o lugar de cada uma nao muda com o foco); clique restaura a
+  minimizada, minimiza a que esta em foco e foca as outras. Ela e desenhada
+  depois das janelas, entao fica sempre visivel.
+- Maximizar so vale para o terminal do `wm`: ele ocupa a area de trabalho
+  (entre a barra de cima e a de tarefas), o `term` muda de tamanho guardando
+  o texto (`term_resize`, que sobe as linhas se o cursor ficaria de fora) e a
+  pty recebe o tamanho novo (`TIOCSWINSZ`). Janelas de app tem o tamanho do
+  buffer compartilhado escolhido pelo app, e o protocolo nao tem
+  redimensionar; o botao de maximizar nem aparece nelas.
+- Teclas: Alt+Tab, Alt+F9 (minimiza) e Alt+F10 (maximiza ou volta), alem
+  dos botoes no titulo. As teclas deixam o teste da sequencia D sem depender
+  da posicao do mouse, que o QEMU entrega por movimentos relativos.
+- `WIN_MAX` de 8 para 16 (na D ja eram 7 janelas abertas) e
+  `TERM_MAX_COLS` de 96 para 128 (o terminal maximizado tem 126 colunas).

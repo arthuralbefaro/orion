@@ -198,6 +198,7 @@ static void command(struct app *a, char *line)
         snprintf(a->win->title, sizeof(a->win->title), "%s", line + 7);
         fprintf(stderr, "wm: janela %d agora se chama '%s'\n", a->win->id, a->win->title);
         gfx_damage(gfx, win_titlebar(a->win));
+        desk_damage_taskbar(desk);
     } else if (strcmp(line, "fecha") == 0) {
         drop(a, "pediu para fechar");
     } else {
