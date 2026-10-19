@@ -182,7 +182,8 @@ static void on_open(struct gui *gu, struct gui_widget *w)
         spawn("/bin/imgview", full);
         gui_set_text(status, "abrindo %s no imgview", e->name);
     } else {
-        gui_set_text(status, "%s: %lld bytes", e->name, e->size);
+        spawn("/bin/editor", full);
+        gui_set_text(status, "abrindo %s no editor", e->name);
     }
 }
 

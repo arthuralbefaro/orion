@@ -590,8 +590,12 @@ if ($runAll -or $OnlyB) {
         "wait:4", "mon:sendkey q", "wait:2", "mon:sendkey tab", "type:pasta-nova", "mon:sendkey ret", "wait:1",
         "mon:sendkey tab", "mon:sendkey tab", "mon:sendkey tab", "mon:sendkey tab", "mon:sendkey ret", "wait:0.5", "mon:sendkey ret", "wait:1",
         "mon:sendkey q", "wait:2",
+        "type:editor /tmp/nota.txt &", "mon:sendkey ret", "wait:4", "type:ola orion", "mon:sendkey ret", "type:segunda linha",
+        "mon:sendkey backspace", "mon:sendkey backspace", "mon:sendkey backspace", "mon:sendkey backspace", "mon:sendkey backspace",
+        "type:vez", "mon:sendkey up", "mon:sendkey end", "type:.", "mon:sendkey ctrl-s", "wait:1.5",
+        "shot:out\shots\reg-app-editor.ppm", "mon:sendkey ctrl-q", "wait:2",
         "mon:sendkey ctrl-alt-x", "wait:5",
-        "cmd:echo TTY-DE-VOLTA", "wait:1", "shot:out\shots\reg-wm-6-tty.ppm",
+        "cmd:echo TTY-DE-VOLTA", "wait:1", "shot:out\shots\reg-wm-6-tty.ppm", "cmd:cat /tmp/nota.txt", "wait:1",
         "key:0B", "cmd:mem", "cmd:pty", "cmd:procs",
         "key:0B", "cmd:crash smep", "wait:4", "reboot:", "cmd:crash smap", "wait:4",
         "reboot:", "cmd:reboot", "wait:4", "monlog:info status",
@@ -636,6 +640,12 @@ if ($runAll -or $OnlyB) {
     Expect $b "(?s)'arquivos: apagou pasta-nova'.*?wm: app da janela \d+ saiu \(pediu para fechar\)" "arquivos fecha com q"
     Test-ShotPixel "out\shots\reg-app-arquivos.ppm" 900 192 0xf4f6fa 12 "captura do arquivos: campo do caminho"
     Test-ShotPixel "out\shots\reg-app-arquivos.ppm" 306 241 0xe8ecf4 24 "captura do arquivos: texto da lista (teste.jpg)"
+    Expect $b "wm: app abriu a janela \d+ \(640x470, 'editor'\)" "editor abre a janela"
+    Expect $b "(?s)agora se chama 'editor: nota\.txt'\s*\n.*?agora se chama 'editor: nota\.txt \*'.*?agora se chama 'editor: salvou nota\.txt'" "editor marca a mudanca e salva com Ctrl+S"
+    Expect $b "cat /tmp/nota\.txt\s*\nola orion\.\s*\nsegunda vez\s*\n" "editor gravou o texto com as edicoes (Backspace, seta, End)"
+    Expect $b "(?s)'editor: salvou nota\.txt'.*?wm: app da janela \d+ saiu" "editor fecha com Ctrl+Q"
+    Test-ShotPixel "out\shots\reg-app-editor.ppm" 520 245 0xffd060 30 "captura do editor: cursor no fim da primeira linha"
+    Test-ShotPixel "out\shots\reg-app-editor.ppm" 700 450 0x141a26 12 "captura do editor: fundo da pagina"
     Expect $b 'crash: pedindo ao kernel para executar codigo de usuario \(SMEP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?busca de instrucao[\s\S]*?SMEP: o kernel tentou executar codigo de usuario \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMEP: kernel executando pagina de usuario vira panico controlado"
     Expect $b 'crash: pedindo ao kernel para ler memoria de usuario sem copy_from_user \(SMAP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?SMAP: o kernel acessou memoria de usuario fora das copias de uaccess \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMAP: kernel lendo memoria de usuario fora do uaccess vira panico controlado"
     ExpectNot $b 'crash: o kernel voltou' "o kernel nunca volta de um acesso proibido a memoria de usuario"

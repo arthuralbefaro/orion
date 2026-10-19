@@ -28,20 +28,19 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-18, 20:30, sessao 2): Fases 2, 3 e 4 inteiras (tags `v2.1`,
-`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.5 e as partes 1 a 3 da 6.6
-(`imgview`, `monitor` e `arquivos`). Versao 2.4.0-a9. O
+Estado (2026-10-19, 01:45, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.5 e as partes 1 a 4 da 6.6
+(`imgview`, `monitor`, `arquivos` e `editor`). Versao 2.4.0-a10. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e
-na ISO na F, com 447 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+na ISO na F, com 453 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 6.6 parte 4, editor de texto, com captura na sequencia B;
-depois configuracoes e terminal, um app por parte, e a 6.7. Versao
-2.4.0-a10 em diante.
+Proxima etapa: 6.6 parte 5, configuracoes, com captura na sequencia B;
+depois o terminal, e a 6.7. Versao 2.4.0-a11 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -1208,6 +1207,29 @@ Versao 2.4.0-a9. RAM livre antes da regressao completa: 6,3 GB.
 Problemas: nenhum; a sequencia B passou na primeira rodada com o app novo.
 Ficou de fora: copiar, mover e renomear, arquivos ocultos, abrir texto (vem
 com o editor), icones (6.7).
+
+#### 6.6 parte 4 Editor de texto - 2026-10-18 20:30 a 2026-10-19 01:45 - FEITO
+`editor` (novo): linhas em buffers proprios, desenho numa tela com rolagem
+nos dois sentidos, setas, Home/End, PgUp/PgDn, Delete, Backspace que junta
+linhas, Tab em 4 espacos, clique que posiciona o cursor e Ctrl+S para salvar;
+o titulo marca a mudanca nao salva. O `arquivos` abre no `editor` o que nao e
+imagem. Criterio: na sequencia B o `editor /tmp/nota.txt` recebe duas linhas,
+Backspace, seta para cima, End e um ponto, salva com Ctrl+S e fecha com
+Ctrl+Q; o `cat /tmp/nota.txt` depois do `wm` mostra `ola orion.` e
+`segunda vez`, e a captura tem o cursor no fim da primeira linha. Regressao
+447 -> 453, verde na rodada completa de 01:13 a 01:40. Versao 2.4.0-a10.
+RAM livre antes dessa regressao: 4,4 GB.
+Problemas: o PC reiniciou sozinho no meio da primeira regressao completa
+desta parte (sequencia C), sem commit; os arquivos ficaram integros e a
+regressao seguinte passou inteira sem mudanca no codigo. O log do Windows
+registra o desligamento inesperado as 20:42:48 (Kernel-Power 41, sem tela
+azul), assim como o das 16:39:57; nenhum dos dois teve antes o aviso de falta
+de memoria virtual (o ultimo foi as 15:09, com o vazamento do OneDrive), entao
+nao parecem ser falta de memoria. A entrada deste diario tinha sido escrita
+antes da regressao terminar; foi tirada e so voltou depois da rodada verde.
+Ficou de fora: selecao, copiar e colar, desfazer, busca, perguntar antes de
+fechar com mudanca nao salva (o `wm` fecha sem consultar o app), caracteres
+fora do ASCII.
 
 ### Sessao 2 - 2026-10-17
 

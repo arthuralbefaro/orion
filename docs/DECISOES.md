@@ -2742,3 +2742,29 @@ Uma linha por decisao, na ordem em que foram tomadas.
   abre o `teste.jpg` (sobe o `imgview`), fecha, cria e apaga `pasta-nova`
   com a confirmacao e fecha com `q`; a captura confere o campo do caminho e
   o texto da lista.
+
+## v2.4.0-a10 (etapa 6.6 parte 4: editor de texto)
+
+- `editor` (novo, separado do `edit` de terminal): o texto e um vetor de
+  linhas, cada uma com o proprio buffer que cresce por `realloc`; o desenho
+  e numa tela (`gui_canvas`) com celulas de 16x18, rolagem vertical e
+  horizontal para manter o cursor visivel, e o cursor e uma barra de 2 px.
+  O `on_key` fica com todas as teclas (setas, Home, End, PgUp, PgDn, Delete,
+  Backspace, Enter, Tab vira 4 espacos, Ctrl+S salva), entao os botoes
+  "Salvar" e "Fechar" so respondem ao mouse; o clique na tela posiciona o
+  cursor.
+- Gravacao: `O_TRUNC` e as linhas com `\n` no fim de cada uma. Ao abrir, o
+  `\r` e descartado e a linha vazia depois do ultimo `\n` nao vira linha nova,
+  entao abrir e salvar sem mexer devolve o mesmo arquivo para texto com fim de
+  linha do Unix. Arquivo que nao existe abre vazio e e criado no primeiro
+  Ctrl+S.
+- O titulo muda so quando o estado muda (`editor: nome`, `editor: nome *`
+  com mudanca nao salva, `editor: salvou nome`), para nao encher o log do
+  `wm` a cada tecla. Ctrl+Q fecha pelo `wm` sem perguntar; avisar de mudanca
+  nao salva precisaria de o `wm` pedir licenca ao app antes de fechar.
+- `arquivos`: arquivo que nao e imagem abre no `editor`.
+- Regressao B: abre `/tmp/nota.txt` (novo), digita duas linhas, apaga com
+  Backspace, sobe com a seta, vai ao fim com End, acrescenta um ponto, salva
+  com Ctrl+S e fecha com Ctrl+Q; depois do `wm`, o `cat /tmp/nota.txt` na
+  serial confere o que foi gravado, e a captura confere o cursor no fim da
+  primeira linha.

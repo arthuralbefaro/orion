@@ -102,7 +102,9 @@ na mesma pasta, `f` alterna ajustada e 1:1, `q` fecha).
 `monitor` mostra CPU e memoria em graficos e os processos com o CPU de cada um,
 atualizados a cada segundo; "Encerrar" manda `SIGTERM` ao processo escolhido.
 `arquivos [pasta]` navega pelas pastas (Enter abre, Backspace sobe), abre imagens
-no `imgview`, cria pastas e apaga com confirmacao.
+no `imgview` e o resto no `editor`, cria pastas e apaga com confirmacao.
+`editor <arquivo>` edita texto (setas, Home/End, PgUp/PgDn, Delete, clique
+posiciona o cursor); Ctrl+S salva e o titulo marca o que nao foi salvo.
 O terminal grafico entende as sequencias ANSI de cursor, apagamento e cores.
 
 ### Boot direto na interface grafica
@@ -228,7 +230,7 @@ desempacota num tmpfs usado como raiz, sem precisar de disco. Login `root` ou
 ## Programas proprios em /bin
     sh init edit wm top ps free uptime time kill env printenv clear
     ls cat echo wc date sleep hello cp mv rm mkdir touch head tail grep sort uniq tee
-    ifconfig ping nslookup wget nc telnet httpget httpd wmctl hello-gui guidemo imgview monitor arquivos imginfo cpuuso dhcp netup id login su passwd poweroff reboot halt mkfs mkfs.ext2 fsck.ext2 mount umount
+    ifconfig ping nslookup wget nc telnet httpget httpd wmctl hello-gui guidemo imgview monitor arquivos editor imginfo cpuuso dhcp netup id login su passwd poweroff reboot halt mkfs mkfs.ext2 fsck.ext2 mount umount
     testes: memtest fstest vfstest tmptest proctest pctest ext2test linktest attrtest unixtest permtest aslrtest shmtest polltest forktest ptytest limtest stress sctest filetest
             auxtest fputest badptr crash fbtest evtest
     testes da musl: mhello mthreads mfutex sigtest
