@@ -25,6 +25,7 @@ param(
     [string]$Nic = "e1000e",
     [string]$Bus = "ahci",
     [switch]$Usb,
+    [switch]$NoPs2,
     [string]$LoginUser = "root",
     [string]$LoginPassword = "orion"
 )
@@ -90,7 +91,8 @@ $bootBios = [bool]$Bios
 $bootMedia = if ($Iso) { "cd" } elseif ($IsoDisk) { "isodisk" } elseif ($Image) { "image" } else { "esp" }
 
 function Get-QemuArgs {
-    $a = @("-M", "q35", "-cpu", "qemu64,+smep,+smap", "-smp", "$Smp", "-m", "${Memory}M")
+    $machine = if ($NoPs2) { "q35,i8042=off" } else { "q35" }
+    $a = @("-M", $machine, "-cpu", "qemu64,+smep,+smap", "-smp", "$Smp", "-m", "${Memory}M")
     if (-not $script:bootBios) {
         Copy-Item $ovmfVarsTemplate $ovmfVars -Force
         $a += @("-drive", "if=pflash,format=raw,unit=0,file=$ovmfCode,readonly=on",
@@ -114,7 +116,7 @@ function Get-QemuArgs {
     foreach ($fwd in $HostFwd) { $netdev += ",hostfwd=$fwd" }
     $a += @("-netdev", $netdev, "-device", "$Nic,netdev=n0",
             "-object", "filter-dump,id=d0,netdev=n0,file=out/net.pcap")
-    if ($Usb) { $a += @("-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0", "-device", "usb-tablet,bus=xhci.0") }
+    if ($Usb) { $a += @("-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0", "-device", "usb-mouse,bus=xhci.0") }
     if ($Disk) { $a += @("-drive", "format=raw,file=out/disk.img") }
     foreach ($extra in $ExtraDisks) { $a += @("-drive", "format=raw,file=$extra") }
     return $a | Where-Object { $_ } | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }

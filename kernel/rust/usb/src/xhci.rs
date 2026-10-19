@@ -1,26 +1,33 @@
 use crate::desc::{self, Config, DeviceDesc};
+use crate::hid;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Write;
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{fence, AtomicPtr, Ordering};
+use core::sync::atomic::{fence, AtomicBool, AtomicPtr, Ordering};
 
 extern "C" {
     fn usb_dma_alloc(pages: usize, phys: *mut u64) -> *mut u8;
     fn usb_now_us() -> u64;
     fn usb_sleep_ms(ms: u64);
     fn usb_log(msg: *const u8, len: usize);
+    fn usb_key(scancode: u8, extended: bool, pressed: bool);
+    fn usb_mouse(dx: i32, dy: i32, dz: i32, buttons: u8);
 }
 
 const RING_TRBS: usize = 256;
+const HID_TRBS: usize = 8;
+const HID_BUF: usize = 64;
 
+const TRB_NORMAL: u32 = 1;
 const TRB_SETUP: u32 = 2;
 const TRB_DATA: u32 = 3;
 const TRB_STATUS: u32 = 4;
 const TRB_LINK: u32 = 6;
 const TRB_ENABLE_SLOT: u32 = 9;
 const TRB_ADDRESS_DEVICE: u32 = 11;
+const TRB_CONFIGURE_EP: u32 = 12;
 const TRB_TRANSFER_EVENT: u32 = 32;
 const TRB_COMMAND_DONE: u32 = 33;
 
@@ -67,6 +74,14 @@ impl Dma {
 
     fn bytes(&self, len: usize) -> &[u8] {
         unsafe { core::slice::from_raw_parts(self.virt, len) }
+    }
+
+    fn read64(&self, off: usize) -> u64 {
+        unsafe { read_volatile(self.virt.add(off) as *const u64) }
+    }
+
+    fn clear(&self, len: usize) {
+        unsafe { core::ptr::write_bytes(self.virt, 0, len) }
     }
 }
 
@@ -126,6 +141,21 @@ impl Event {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HidKind {
+    Keyboard,
+    Mouse,
+}
+
+struct Hid {
+    kind: HidKind,
+    dci: u32,
+    mps: u16,
+    ring: Ring,
+    bufs: Dma,
+    prev: [u8; 8],
+}
+
 pub struct Device {
     pub port: u8,
     pub slot: u8,
@@ -135,8 +165,9 @@ pub struct Device {
     pub manufacturer: String,
     pub product: String,
     ep0: Ring,
-    _input: Dma,
-    _output: Dma,
+    input: Dma,
+    output: Dma,
+    hid: Option<Hid>,
 }
 
 pub struct Xhci {
@@ -337,6 +368,131 @@ impl Xhci {
         Some(len as usize)
     }
 
+    fn control_out(&mut self, dev: usize, setup: [u8; 8]) -> bool {
+        let slot = self.devices[dev].slot;
+        let ring = &mut self.devices[dev].ep0;
+        ring.push(u64::from_le_bytes(setup), 8, (TRB_SETUP << 10) | (1 << 6));
+        ring.push(0, 0, (TRB_STATUS << 10) | (1 << 16) | (1 << 5));
+        unsafe { wr(self.db, slot as usize * 4, 1) };
+        matches!(
+            self.wait_event(1000, |ev| ev.kind() == TRB_TRANSFER_EVENT && ev.slot() == slot as u32),
+            Some(ev) if ev.code() == CC_SUCCESS
+        )
+    }
+
+    fn configure_interrupt_in(&mut self, dev: usize, dci: u32, mps: u16, interval: u32, ring: u64) -> bool {
+        let c = self.ctx_size;
+        let slot = self.devices[dev].slot as u32;
+        let input = &self.devices[dev].input;
+        let output = &self.devices[dev].output;
+        input.clear(4096);
+        input.write32(4, 1 | (1 << dci));
+        for off in (0..c).step_by(4) {
+            input.write32(c + off, output.read32(off));
+        }
+        let slot0 = input.read32(c);
+        input.write32(c, (slot0 & !(0x1F << 27)) | (dci << 27));
+        let ep = (dci as usize + 1) * c;
+        input.write32(ep, interval << 16);
+        input.write32(ep + 4, (3 << 1) | (7 << 3) | ((mps as u32) << 16));
+        input.write64(ep + 8, ring | 1);
+        input.write32(ep + 16, mps as u32 | ((mps as u32) << 16));
+        let phys = input.phys;
+        matches!(self.command(phys, (TRB_CONFIGURE_EP << 10) | (slot << 24)), Some(ev) if ev.code() == CC_SUCCESS)
+    }
+
+    fn start_hid(&mut self, dev: usize) -> Result<Option<HidKind>, &'static str> {
+        let Some(cfg) = self.devices[dev].config.clone() else { return Ok(None) };
+        let Some(iface) = cfg
+            .interfaces
+            .iter()
+            .find(|i| i.class == 3 && i.subclass == 1 && (i.protocol == 1 || i.protocol == 2))
+            .copied()
+        else {
+            return Ok(None);
+        };
+        let Some(ep) = cfg
+            .endpoints
+            .iter()
+            .find(|e| e.interface == iface.number && e.address & 0x80 != 0 && e.attributes & 3 == 3)
+            .copied()
+        else {
+            return Ok(None);
+        };
+        let kind = if iface.protocol == 1 { HidKind::Keyboard } else { HidKind::Mouse };
+        let mps = ep.max_packet.clamp(1, HID_BUF as u16);
+        let dci = ((ep.address & 0x0F) as u32) * 2 + 1;
+        let ring = Ring::new().ok_or("sem memoria")?;
+        let bufs = Dma::new(1).ok_or("sem memoria")?;
+        if !self.control_out(dev, [0x00, 9, cfg.value, 0, 0, 0, 0, 0]) {
+            return Err("Set Configuration recusado");
+        }
+        let interval = hid::interval_for(self.devices[dev].speed, ep.interval);
+        if !self.configure_interrupt_in(dev, dci, mps, interval, ring.mem.phys) {
+            return Err("Configure Endpoint recusado");
+        }
+        self.control_out(dev, [0x21, 0x0B, 0, 0, iface.number, 0, 0, 0]);
+        self.control_out(dev, [0x21, 0x0A, 0, 0, iface.number, 0, 0, 0]);
+        let slot = self.devices[dev].slot as usize;
+        let mut hid = Hid { kind, dci, mps, ring, bufs, prev: [0; 8] };
+        for i in 0..HID_TRBS {
+            let buf = hid.bufs.phys + (i * HID_BUF) as u64;
+            hid.ring.push(buf, mps as u32, (TRB_NORMAL << 10) | (1 << 5) | (1 << 2));
+        }
+        self.devices[dev].hid = Some(hid);
+        unsafe { wr(self.db, slot * 4, dci) };
+        Ok(Some(kind))
+    }
+
+    fn handle_transfer(&mut self, ev: &Event) {
+        let slot = ev.slot() as u8;
+        let dci = (ev.control >> 16) & 0x1F;
+        let db = self.db;
+        let Some(d) = self.devices.iter_mut().find(|d| d.slot == slot) else { return };
+        let Some(h) = d.hid.as_mut() else { return };
+        if h.dci != dci || ev.param < h.ring.mem.phys || ev.param >= h.ring.mem.phys + 4096 {
+            return;
+        }
+        let buf = h.ring.mem.read64((ev.param - h.ring.mem.phys) as usize);
+        if buf < h.bufs.phys || buf >= h.bufs.phys + (HID_TRBS * HID_BUF) as u64 {
+            return;
+        }
+        let off = (buf - h.bufs.phys) as usize;
+        if ev.code() == CC_SUCCESS || ev.code() == CC_SHORT_PACKET {
+            let residual = (ev.status & 0x00FF_FFFF) as usize;
+            let len = (h.mps as usize).saturating_sub(residual);
+            let data = &h.bufs.bytes(off + len)[off..];
+            match h.kind {
+                HidKind::Keyboard => {
+                    let mut now = [0u8; 8];
+                    let n = data.len().min(8);
+                    now[..n].copy_from_slice(&data[..n]);
+                    let mut events = Vec::new();
+                    hid::keyboard_diff(&h.prev, &now, &mut events);
+                    h.prev = now;
+                    for k in events {
+                        unsafe { usb_key(k.scancode, k.extended, k.pressed) };
+                    }
+                }
+                HidKind::Mouse => {
+                    if let Some(m) = hid::parse_mouse(data) {
+                        unsafe { usb_mouse(m.dx, m.dy, m.dz, m.buttons) };
+                    }
+                }
+            }
+        }
+        h.ring.push(buf, h.mps as u32, (TRB_NORMAL << 10) | (1 << 5) | (1 << 2));
+        unsafe { wr(db, slot as usize * 4, dci) };
+    }
+
+    fn poll(&mut self) {
+        while let Some(ev) = self.next_event() {
+            if ev.kind() == TRB_TRANSFER_EVENT {
+                self.handle_transfer(&ev);
+            }
+        }
+    }
+
     fn get_descriptor(&mut self, dev: usize, kind: u8, index: u8, lang: u16, len: u16) -> Option<Vec<u8>> {
         let value = ((kind as u16) << 8) | index as u16;
         let setup = [0x80, 6, value as u8, (value >> 8) as u8, lang as u8, (lang >> 8) as u8, len as u8, (len >> 8) as u8];
@@ -409,8 +565,9 @@ impl Xhci {
             manufacturer: String::new(),
             product: String::new(),
             ep0,
-            _input: input,
-            _output: output,
+            input,
+            output,
+            hid: None,
         });
         let dev = self.devices.len() - 1;
         let raw = self.get_descriptor(dev, desc::DT_DEVICE, 0, 0, 18).ok_or("descritor do dispositivo nao veio")?;
@@ -430,6 +587,24 @@ impl Xhci {
             .unwrap_or(0x0409);
         self.devices[dev].manufacturer = self.read_string(dev, d.i_manufacturer, lang);
         self.devices[dev].product = self.read_string(dev, d.i_product, lang);
+        match self.start_hid(dev) {
+            Ok(Some(kind)) => {
+                let mut msg = String::new();
+                let _ = write!(
+                    msg,
+                    "porta {}: {} HID pronto, protocolo de boot",
+                    port,
+                    if kind == HidKind::Keyboard { "teclado" } else { "mouse" }
+                );
+                log(&msg);
+            }
+            Ok(None) => {}
+            Err(why) => {
+                let mut msg = String::new();
+                let _ = write!(msg, "porta {}: HID nao iniciou: {}", port, why);
+                log(&msg);
+            }
+        }
         Ok(())
     }
 
@@ -472,6 +647,17 @@ impl Xhci {
 }
 
 static CONTROLLER: AtomicPtr<Xhci> = AtomicPtr::new(core::ptr::null_mut());
+static BUSY: AtomicBool = AtomicBool::new(false);
+
+fn with_controller<R>(f: impl FnOnce(Option<&mut Xhci>) -> R) -> R {
+    while BUSY.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        core::hint::spin_loop();
+    }
+    let hc = CONTROLLER.load(Ordering::Acquire);
+    let r = f(unsafe { hc.as_mut() });
+    BUSY.store(false, Ordering::Release);
+    r
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn xhci_start(mmio: *mut u8) -> i32 {
@@ -510,18 +696,31 @@ pub unsafe extern "C" fn xhci_start(mmio: *mut u8) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn xhci_report(buf: *mut u8, cap: usize) -> usize {
-    let hc = CONTROLLER.load(Ordering::Acquire);
     let mut text = String::new();
-    if hc.is_null() {
-        text.push_str("sem controlador USB\n");
-    } else {
-        (*hc).report(&mut text);
-        if (*hc).devices.is_empty() {
-            text.push_str("nenhum dispositivo USB\n");
+    with_controller(|hc| match hc {
+        None => text.push_str("sem controlador USB\n"),
+        Some(hc) => {
+            hc.report(&mut text);
+            if hc.devices.is_empty() {
+                text.push_str("nenhum dispositivo USB\n");
+            }
         }
-    }
+    });
     let n = text.len().min(cap);
     core::ptr::copy_nonoverlapping(text.as_ptr(), buf, n);
     n
 }
 
+#[no_mangle]
+pub extern "C" fn xhci_poll() {
+    with_controller(|hc| {
+        if let Some(hc) = hc {
+            hc.poll();
+        }
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn xhci_hid_count() -> i32 {
+    with_controller(|hc| hc.map(|hc| hc.devices.iter().filter(|d| d.hid.is_some()).count() as i32).unwrap_or(0))
+}

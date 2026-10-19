@@ -4,6 +4,7 @@
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/interrupts.h>
 #include <kernel/log.h>
+#include <kernel/spinlock.h>
 
 #define PS2_DATA   0x60
 #define PS2_STATUS 0x64
@@ -61,6 +62,7 @@ static volatile uint32_t buf_head, buf_tail;
 
 static uint8_t modifiers;
 static bool extended_pending;
+static spinlock_t kbd_lock = SPINLOCK_INIT;
 
 static void push_char(char c)
 {
@@ -90,13 +92,8 @@ static const char *extended_sequence(uint8_t code)
     }
 }
 
-static void keyboard_irq(struct interrupt_frame *frame, void *ctx)
+static void feed(uint8_t sc)
 {
-    (void)frame;
-    (void)ctx;
-
-    uint8_t sc = inb(PS2_DATA);
-
     if (sc == SC_EXTENDED) {
         extended_pending = true;
         return;
@@ -164,9 +161,29 @@ static void keyboard_irq(struct interrupt_frame *frame, void *ctx)
     push_char(c);
 }
 
+static void keyboard_irq(struct interrupt_frame *frame, void *ctx)
+{
+    (void)frame;
+    (void)ctx;
+    uint8_t sc = inb(PS2_DATA);
+    spin_lock(&kbd_lock);
+    feed(sc);
+    spin_unlock(&kbd_lock);
+}
+
+void keyboard_feed(uint8_t scancode)
+{
+    uint64_t flags = spin_lock_irqsave(&kbd_lock);
+    feed(scancode);
+    spin_unlock_irqrestore(&kbd_lock, flags);
+}
+
 void keyboard_init(void)
 {
-
+    if (inb(PS2_STATUS) == 0xFF) {
+        log_info("kbd", "sem controlador PS/2 (i8042); o teclado vem do USB, se houver");
+        return;
+    }
     int guard = 64;
     while ((inb(PS2_STATUS) & PS2_STATUS_OUTPUT_FULL) && guard--)
         inb(PS2_DATA);

@@ -111,3 +111,79 @@ fn names() {
     assert_eq!(max_packet0_for(4), 512);
     assert_eq!(max_packet0_for(1), 8);
 }
+
+use crate::hid::*;
+
+fn diff(prev: [u8; 8], now: [u8; 8]) -> Vec<KeyEvent> {
+    let mut v = Vec::new();
+    keyboard_diff(&prev, &now, &mut v);
+    v
+}
+
+fn ev(scancode: u8, extended: bool, pressed: bool) -> KeyEvent {
+    KeyEvent { scancode, extended, pressed }
+}
+
+#[test]
+fn usages_map_to_set1_scancodes() {
+    assert_eq!(usage_to_scancode(0x04), Some((0x1E, false)));
+    assert_eq!(usage_to_scancode(0x1D), Some((0x2C, false)));
+    assert_eq!(usage_to_scancode(0x1E), Some((0x02, false)));
+    assert_eq!(usage_to_scancode(0x27), Some((0x0B, false)));
+    assert_eq!(usage_to_scancode(0x28), Some((0x1C, false)));
+    assert_eq!(usage_to_scancode(0x3A), Some((0x3B, false)));
+    assert_eq!(usage_to_scancode(0x43), Some((0x44, false)));
+    assert_eq!(usage_to_scancode(0x52), Some((0x48, true)));
+    assert_eq!(usage_to_scancode(0x4C), Some((0x53, true)));
+    assert_eq!(usage_to_scancode(0xE8), None);
+}
+
+#[test]
+fn press_and_release_one_key() {
+    let a = [0, 0, 0x04, 0, 0, 0, 0, 0];
+    assert_eq!(diff([0; 8], a), vec![ev(0x1E, false, true)]);
+    assert_eq!(diff(a, [0; 8]), vec![ev(0x1E, false, false)]);
+    assert!(diff(a, a).is_empty());
+}
+
+#[test]
+fn ctrl_c_presses_ctrl_before_the_letter_and_releases_it_after() {
+    let ctrl_c = [0x01, 0, 0x06, 0, 0, 0, 0, 0];
+    assert_eq!(diff([0; 8], ctrl_c), vec![ev(0x1D, false, true), ev(0x2E, false, true)]);
+    assert_eq!(diff(ctrl_c, [0; 8]), vec![ev(0x2E, false, false), ev(0x1D, false, false)]);
+}
+
+#[test]
+fn right_modifiers_and_arrows_are_extended() {
+    let r = [0x50, 0, 0x52, 0, 0, 0, 0, 0];
+    assert_eq!(diff([0; 8], r), vec![ev(0x1D, true, true), ev(0x38, true, true), ev(0x48, true, true)]);
+}
+
+#[test]
+fn rollover_error_report_is_ignored() {
+    assert!(diff([0, 0, 0x04, 0, 0, 0, 0, 0], [0, 0, 1, 1, 1, 1, 1, 1]).is_empty());
+}
+
+#[test]
+fn second_key_keeps_the_first_down() {
+    let a = [0, 0, 0x04, 0, 0, 0, 0, 0];
+    let ab = [0, 0, 0x04, 0x05, 0, 0, 0, 0];
+    assert_eq!(diff(a, ab), vec![ev(0x30, false, true)]);
+}
+
+#[test]
+fn mouse_reports() {
+    assert_eq!(parse_mouse(&[0x01, 10, 0xFB]), Some(MouseReport { buttons: 1, dx: 10, dy: -5, dz: 0 }));
+    assert_eq!(parse_mouse(&[0xFF, 0x80, 0x7F, 0x01]), Some(MouseReport { buttons: 7, dx: -128, dy: 127, dz: -1 }));
+    assert!(parse_mouse(&[0x01, 2]).is_none());
+}
+
+#[test]
+fn polling_interval_in_xhci_units() {
+    assert_eq!(interval_for(1, 10), 6);
+    assert_eq!(interval_for(1, 1), 3);
+    assert_eq!(interval_for(2, 255), 10);
+    assert_eq!(interval_for(3, 4), 3);
+    assert_eq!(interval_for(3, 0), 0);
+    assert_eq!(interval_for(4, 40), 15);
+}

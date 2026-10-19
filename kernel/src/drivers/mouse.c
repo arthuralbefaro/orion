@@ -41,6 +41,7 @@ static uint8_t last_buttons;
 static uint8_t packet_size = 3;
 static bool wheel;
 static bool available;
+static bool usb_mouse;
 static uint64_t packets;
 static uint64_t resyncs;
 
@@ -98,6 +99,21 @@ static void queue_push(const struct mouse_packet *p)
     queue_head = next;
 }
 
+static void deliver(const struct mouse_packet *p)
+{
+    uint64_t flags = spin_lock_irqsave(&lock);
+    packets++;
+    queue_push(p);
+    bool changed = p->buttons != last_buttons;
+    last_buttons = p->buttons;
+    spin_unlock_irqrestore(&lock, flags);
+
+    if (p->dx || p->dy || p->dz)
+        input_post_mouse_move(p->dx, p->dy, p->dz);
+    if (changed)
+        input_post_mouse_button(p->buttons);
+}
+
 static void decode_packet(void)
 {
     uint8_t flags = packet[0];
@@ -115,18 +131,14 @@ static void decode_packet(void)
             z |= (int8_t)0xF0;
         p.dz = z;
     }
+    deliver(&p);
+}
 
-    packets++;
-    spin_lock(&lock);
-    queue_push(&p);
-    spin_unlock(&lock);
-
-    if (p.dx || p.dy || p.dz)
-        input_post_mouse_move(p.dx, p.dy, p.dz);
-    if (p.buttons != last_buttons) {
-        last_buttons = p.buttons;
-        input_post_mouse_button(p.buttons);
-    }
+void mouse_inject(int32_t dx, int32_t dy, int32_t dz, uint8_t buttons)
+{
+    struct mouse_packet p = { dx, dy, dz, (uint8_t)(buttons & 0x07) };
+    usb_mouse = true;
+    deliver(&p);
 }
 
 static void mouse_irq(struct interrupt_frame *frame, void *ctx)
@@ -205,7 +217,7 @@ void mouse_init(void)
 
 bool mouse_available(void)
 {
-    return available;
+    return available || usb_mouse;
 }
 
 bool mouse_has_wheel(void)

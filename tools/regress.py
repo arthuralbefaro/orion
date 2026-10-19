@@ -56,6 +56,7 @@ def parse_sequences():
             bus = re.search(r"-Bus\s+(\S+)", c)
             seq["bus"] = bus.group(1) if bus else "ahci"
             seq["usb"] = bool(re.search(r"-Usb\b", c))
+            seq["no_ps2"] = bool(re.search(r"-NoPs2\b", c))
             hf = re.search(r"-HostFwd\s+@\(([^)]*)\)", c)
             if hf:
                 seq["hostfwd"] = [ps_string(s) for s in STRING.finditer(hf.group(1))]
@@ -239,7 +240,8 @@ def main():
                               boot_timeout=seq["boot"], command_delay=seq["delay"], log_path=seq["log"],
                               iso=seq.get("iso", False), iso_disk=seq.get("iso_disk", False),
                               bios=seq.get("bios", False), nic=seq.get("nic", "e1000e"),
-                              bus=seq.get("bus", "ahci"), usb=seq.get("usb", False))
+                              bus=seq.get("bus", "ahci"), usb=seq.get("usb", False),
+                              no_ps2=seq.get("no_ps2", False))
         finally:
             if web:
                 web.kill()

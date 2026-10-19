@@ -14,6 +14,7 @@ struct mouse_packet {
 };
 
 void mouse_init(void);
+void mouse_inject(int32_t dx, int32_t dy, int32_t dz, uint8_t buttons);
 bool mouse_available(void);
 bool mouse_has_wheel(void);
 bool mouse_poll(struct mouse_packet *out);

@@ -1,5 +1,7 @@
 #include <drivers/usb.h>
 #include <drivers/pci.h>
+#include <drivers/keyboard.h>
+#include <drivers/mouse.h>
 #include <arch/x86_64/cpu.h>
 #include <kernel/log.h>
 #include <kernel/sched.h>
@@ -11,6 +13,8 @@
 
 int32_t xhci_start(uint8_t *mmio);
 size_t xhci_report(uint8_t *buf, size_t cap);
+int32_t xhci_hid_count(void);
+void xhci_poll(void);
 
 void *usb_dma_alloc(size_t pages, uint64_t *phys)
 {
@@ -44,6 +48,27 @@ void usb_log(const uint8_t *msg, size_t len)
     log_info("usb", "%.*s", (int)len, (const char *)msg);
 }
 
+void usb_key(uint8_t scancode, bool extended, bool pressed)
+{
+    if (extended)
+        keyboard_feed(0xE0);
+    keyboard_feed((uint8_t)(scancode | (pressed ? 0 : 0x80)));
+}
+
+void usb_mouse(int32_t dx, int32_t dy, int32_t dz, uint8_t buttons)
+{
+    mouse_inject(dx, dy, dz, buttons);
+}
+
+static void poll_thread(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        xhci_poll();
+        thread_sleep_ms(4);
+    }
+}
+
 static bool present;
 
 bool usb_init(void)
@@ -66,6 +91,8 @@ bool usb_init(void)
     present = n >= 0;
     if (present)
         log_info("usb", "%d dispositivo(s) USB", n);
+    if (present && xhci_hid_count() > 0)
+        thread_create("usbd", poll_thread, NULL);
     return present;
 }
 

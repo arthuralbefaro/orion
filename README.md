@@ -307,8 +307,10 @@ raiz monta no NVMe e a fila de I/O usa MSI-X. A sequencia N roda assim.
 
 USB: o kernel liga o controlador xHCI (codigo em Rust, `kernel/rust/usb`),
 enumera os dispositivos e `lsusb` (ou `/proc/usb`) mostra fabricante, produto,
-versao USB, velocidade e classe; `test.ps1 -Usb` poe um xHCI com teclado e
-tablet USB no QEMU, e a sequencia U roda assim.
+versao USB, velocidade e classe. Teclado e mouse USB (HID, protocolo de boot)
+funcionam como os PS/2, inclusive numa maquina sem PS/2; `test.ps1 -Usb` poe um
+xHCI com teclado e mouse USB no QEMU, `-NoPs2` tira o controlador PS/2, e a
+sequencia U roda assim.
 O `ps`, o `top`, o `free`, o `uptime` e a janela de processos do `wm` leem
 daqui. `/proc/<pid>/fd/N` ainda e um arquivo com o caminho (vira link
 simbolico na 2.7).

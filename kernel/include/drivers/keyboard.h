@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 void keyboard_init(void);
+void keyboard_feed(uint8_t scancode);
 
 /* Retorna o próximo caractere ou -1 se não há nada pendente. */
 int keyboard_getchar(void);

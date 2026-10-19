@@ -28,25 +28,24 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 14:55, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+Estado (2026-10-19, 15:55, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
 `v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.6 (apps `imgview`, `monitor`,
 `arquivos`, `editor`, `config` e `terminal`) e 6.7 (barra de tarefas,
 Alt+Tab, minimizar e maximizar, lancador de apps): Fase 6 inteira; e a
 5.2 (MSI: AHCI na CPU 1, rede `e1000e` na CPU 2), a 5.3 (virtio-blk e
-virtio-net com MSI-X), a 5.4 (NVMe) e a 5.5 (xHCI e `lsusb`, em Rust).
-Versao 2.4.0-a20. O
+virtio-net com MSI-X), a 5.4 (NVMe), a 5.5 (xHCI e `lsusb`, em Rust) e a
+5.6 (teclado e mouse USB, inclusive sem PS/2). Versao 2.4.0-a21. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E,
 na ISO na F, no virtio (disco e rede) na V, no NVMe na N e com USB na U,
-com 518 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+com 526 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.6, teclado e mouse USB HID (criterio: QEMU com
-`usb-kbd` e sem PS/2 funciona); depois 5.7 a 5.9. Versao 2.4.0-a21 em
-diante.
+Proxima etapa: 5.7, armazenamento USB (Bulk-Only e SCSI; criterio: montar
+um pendrive FAT); depois 5.8 e 5.9. Versao 2.4.0-a22 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -135,7 +134,7 @@ e o notebook, que vem caindo com tela azul):
 | 5.3 | virtio-blk e virtio-net | [x] | 06:15 | 13:35 | ver `git log` (2 partes) |
 | 5.4 | NVMe | [x] | 13:35 | 14:10 | ver `git log` |
 | 5.5 | xHCI | [x] | 14:10 | 14:55 | ver `git log` |
-| 5.6 | USB HID | [ ] | | | |
+| 5.6 | USB HID | [x] | 14:55 | 15:55 | ver `git log` |
 | 5.7 | USB armazenamento | [ ] | | | |
 | 5.8 | Audio HDA | [ ] | | | |
 | 5.9 | Video BGA e virtio-gpu | [ ] | | | |
@@ -1467,6 +1466,28 @@ no Windows; o modulo passou a existir so no alvo do kernel.
 Ficou de fora: hubs USB, interrupcao do xHCI (os eventos sao lidos por laco),
 desligar slots, dispositivos ligados depois do boot, portas USB 3 de verdade
 (os dispositivos do QEMU sao USB 2).
+
+#### 5.6 Teclado e mouse USB HID - 14:55 a 15:55 - FEITO
+`orion_usb`: interfaces HID de boot (teclado e mouse) ganham `Set
+Configuration`, `Configure Endpoint` do endpoint de interrupcao, `Set
+Protocol` e `Set Idle`, e 8 TRBs Normal na fila; uma thread `usbd` le os
+eventos a cada 4 ms. `hid.rs` (novo, testado no hospedeiro) traduz o codigo
+HID para o scancode set 1 e compara relatorios (modificadores antes e depois
+das teclas). O C ganhou `keyboard_feed` (o tratamento do scancode, com trava,
+usado pela IRQ do PS/2 e pelo USB) e `mouse_inject`; sem controlador PS/2 o
+teclado so avisa. `test.ps1 -Usb` passou a ligar teclado e mouse USB e
+`-NoPs2` sobe o q35 sem i8042. Criterio: na sequencia U, sem PS/2, o
+`evtest` recebe tecla, Ctrl, seta, movimento e botao do USB. Verificacao: a
+sequencia U sozinha (15 verificacoes) e a regressao completa de fim de etapa,
+518 -> 526, verde na primeira rodada (32 minutos). Versao 2.4.0-a21. RAM livre:
+1,4 GB no primeiro teste (rodou e anotado), 0,8 GB depois (esperei 2 minutos e
+subiu para 3,5 GB, como combinado), 4,1 GB antes da completa.
+Problemas: a primeira rodada da sequencia U falhou numa verificacao minha (a
+expressao do botao do mouse esquecia o ` c=0` da linha); o comportamento
+estava certo e a expressao foi corrigida. O teclado e o mouse funcionaram de
+primeira.
+Ficou de fora: repeticao automatica de tecla, tablet e HID fora do protocolo
+de boot (descritor de relatorio), LEDs do teclado, interrupcao do xHCI.
 
 ### Sessao 2 - 2026-10-17
 

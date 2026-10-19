@@ -1005,11 +1005,13 @@ if ($runAll -or $OnlyN) {
 
 # ---------------- Sequencia U: USB ----------------
 if ($runAll -or $OnlyU) {
-    Write-Host "== Sequencia U (USB pelo xHCI) ==" -ForegroundColor Cyan
+    Write-Host "== Sequencia U (USB pelo xHCI, sem PS/2) ==" -ForegroundColor Cyan
     $stepsU = @(
-        "cmd:lsusb", "wait:2", "cmd:cat /proc/usb", "wait:1"
+        "cmd:lsusb", "wait:2", "cmd:cat /proc/usb", "wait:1",
+        "cmd:evtest 10", "wait:0.8", "mon:sendkey a", "mon:sendkey ctrl", "mon:sendkey up", "mon:mouse_move 10 5",
+        "mon:mouse_button 1", "mon:mouse_button 0", "until:20:evento(s)"
     )
-    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Usb -LogPath "out\reg-u.log" `
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Usb -NoPs2 -LogPath "out\reg-u.log" `
         -Script $stepsU -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $u = Get-Log "out\reg-u.log"
     if ($Verbose) { Write-Output $u }
@@ -1018,7 +1020,15 @@ if ($runAll -or $OnlyU) {
     Expect $u "usb\s+xHCI 1\.\d\d, 8 porta\(s\)" "xHCI reiniciado e ligado, com a versao e as portas"
     Expect $u "usb\s+2 dispositivo\(s\) USB" "dois dispositivos enumerados (Enable Slot e Address Device)"
     Expect $u "(?s)\$ lsusb\s*\n[^\n]*ID 0627:0001 QEMU QEMU USB Keyboard \(USB 2\.00, [a-z ]+speed, classe hid\)" "lsusb mostra o teclado USB com as strings do dispositivo"
-    Expect $u "(?s)\$ lsusb.*?ID 0627:0001 QEMU QEMU USB Tablet \(USB 2\.00, [a-z ]+speed, classe hid\)" "lsusb mostra o tablet USB"
+    Expect $u "(?s)\$ lsusb.*?ID 0627:0001 QEMU QEMU USB Mouse \(USB 2\.00, [a-z ]+speed, classe hid\)" "lsusb mostra o mouse USB"
+    Expect $u "kbd\s+sem controlador PS/2" "a maquina sobe sem o controlador PS/2"
+    Expect $u "usb\s+porta \d+: teclado HID pronto, protocolo de boot" "teclado USB configurado (endpoint de interrupcao)"
+    Expect $u "usb\s+porta \d+: mouse HID pronto, protocolo de boot" "mouse USB configurado"
+    Expect $u "tecla-desce\s+scancode=1e ascii=97 mods=0\s*\n\s*tecla-sobe\s+scancode=1e" "tecla do teclado USB chega ao /dev/input sem PS/2"
+    Expect $u "tecla-desce\s+scancode=1d ascii=0 mods=2" "Ctrl do teclado USB vira modificador"
+    Expect $u "tecla-desce\s+scancode=48 ascii=0 mods=10" "seta do teclado USB chega como tecla estendida"
+    Expect $u "mouse-move\s+a=10 b=5" "movimento do mouse USB chega ao /dev/input"
+    Expect $u "mouse-botao\s+a=1 b=0 c=0\s*\n\s*mouse-botao\s+a=0" "botao do mouse USB desce e sobe"
     ExpectNot $u "usb\s+porta \d+: (Enable|Address|descritor)" "nenhuma porta falhou na enumeracao"
     ExpectNot $u "PANIC|EXCECAO|rust: " "nenhum panico na sequencia U"
 }

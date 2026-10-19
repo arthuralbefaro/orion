@@ -3019,3 +3019,30 @@ Uma linha por decisao, na ordem em que foram tomadas.
   primeira interface). `test.ps1 -Usb` e `qrun.py --usb` ligam um `qemu-xhci`
   com `usb-kbd` e `usb-tablet`; a sequencia U nova confere o controlador, a
   enumeracao e o `lsusb`.
+
+## v2.4.0-a21 (etapa 5.6: teclado e mouse USB HID)
+
+- So o protocolo de boot do HID (subclasse 1, protocolo 1 teclado e 2 mouse):
+  relatorio fixo de 8 bytes no teclado e de 3 ou 4 no mouse, sem interpretar o
+  descritor de relatorio. Tablet e outros HID ficam de fora (o tablet do QEMU
+  nao e de boot; por isso o teste usa `usb-mouse`).
+- Para cada interface de boot: `Set Configuration`, `Configure Endpoint` do
+  endpoint de interrupcao (contexto do slot copiado do contexto de saida, com
+  o numero de entradas atualizado; intervalo convertido para as unidades do
+  xHCI conforme a velocidade), `Set Protocol` (boot) e `Set Idle`, e 8 TRBs
+  Normal de 64 bytes na fila. Cada evento de transferencia acha o buffer pelo
+  proprio TRB apontado e devolve o TRB a fila.
+- Os eventos sao lidos por uma thread do kernel (`usbd`) a cada 4 ms, so se
+  houver HID; leitura e relatorio do `/proc/usb` usam uma trava, porque as duas
+  mexem no estado do controlador. Interrupcao do xHCI ainda fica de fora.
+- O teclado USB entra pelo mesmo caminho do PS/2: o Rust compara o relatorio
+  com o anterior (`hid.rs`, testado no hospedeiro) e gera teclas do scancode
+  set 1 (com `0xE0` nas estendidas); modificadores que descem vem antes das
+  teclas e os que sobem vem depois, para Ctrl+C funcionar. O `keyboard.c`
+  passou a ter `keyboard_feed` com trava, chamado pela IRQ do PS/2 e pelo USB.
+  O mouse entra por `mouse_inject`, que usa a mesma fila e os mesmos eventos
+  do PS/2. Sem repeticao automatica de tecla.
+- Sem controlador PS/2 (a porta 0x64 le 0xFF), o `keyboard_init` avisa e nao
+  liga a IRQ 1. `test.ps1 -NoPs2` e `qrun.py --no-ps2` sobem o q35 com
+  `i8042=off`, e a sequencia U roda assim: o `evtest` recebe tecla, Ctrl, seta,
+  movimento e botao vindos do USB.
