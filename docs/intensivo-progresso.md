@@ -28,25 +28,25 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 17:55, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+Estado (2026-10-19, 18:20, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
 `v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.6 (apps `imgview`, `monitor`,
 `arquivos`, `editor`, `config` e `terminal`) e 6.7 (barra de tarefas,
 Alt+Tab, minimizar e maximizar, lancador de apps): Fase 6 inteira; e a
 5.2 (MSI: AHCI na CPU 1, rede `e1000e` na CPU 2), a 5.3 (virtio-blk e
 virtio-net com MSI-X), a 5.4 (NVMe), a 5.5 (xHCI e `lsusb`, em Rust) e a
-5.6 (teclado e mouse USB, inclusive sem PS/2) e as partes 1 a 3 da 5.7
-(pendrive USB). Versao 2.4.0-a24. O
+5.6 (teclado e mouse USB, inclusive sem PS/2) e a 5.7 inteira
+(pendrive USB: Bulk-Only, despachante unico, prazos, recuperacao, remocao e
+segundo plug). Versao 2.4.0-a24. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E,
 na ISO na F, no virtio (disco e rede) na V, no NVMe na N e com USB na U,
-com 526 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+com 565 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: terminar a regressao completa da etapa 5.7 (comecada as
-17:44) e marcar o `[x]`; depois a parte curta "regressao mais rapida"
+Proxima etapa: a parte curta "regressao mais rapida"
 (pedida pelo dono, ate 45 min: medir o tempo de cada sequencia e de cada
 espera, trocar esperas fixas por `until:` com prazo maximo, juntar boots
 repetidos sem perder verificacao, nenhuma verificacao a menos, tempo antes e
@@ -207,7 +207,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 5.4 | NVMe | [x] | 13:35 | 14:10 | ver `git log` |
 | 5.5 | xHCI | [x] | 14:10 | 14:55 | ver `git log` |
 | 5.6 | USB HID | [x] | 14:55 | 15:55 | ver `git log` |
-| 5.7 | USB armazenamento | [~] | 15:55 | | |
+| 5.7 | USB armazenamento | [x] | 15:55 | 18:16 | `05ee35e` |
 | 5.8 | Audio HDA | [ ] | | | |
 | 5.9 | Video BGA e virtio-gpu | [ ] | | | |
 | 5.10 | Hub USB 2 basico (extra, decidido em 2026-10-19) | [ ] | | | |
@@ -1649,6 +1649,14 @@ entao o prazo estourado e exercitado pelo `usbtimeout`, e nao pela remocao.
 (2) O QEMU apaga o `-drive` junto com o dispositivo no `device_del`; o
 segundo pendrive passou a usar `-blockdev`, que sobrevive, para o
 `device_add` ter o que ligar.
+
+#### Fecho da 5.7 - regressao completa - 17:44 a 18:16 - VERDE
+Regressao completa sobre o `05ee35e` (parte 3): 565 verificacoes, 0 falhas
+(eram 526 na 5.6; a U foi de 23 para 54 nas partes 1 a 3, e o resto e o que
+as partes anteriores ja tinham). RAM livre antes: 6,4 GB. Tempo por
+sequencia, pela hora de gravacao dos logs (inclui o build do comeco e o da
+imagem antes da F): A ~10,5 min (com o build), B ~5,5, C ~7, D ~3, F ~1,3,
+V ~1, N ~0,7, U ~2, E ~0,3; total ~32 min. A 5.7 recebe o `[x]`.
 
 ### Sessao 2 - 2026-10-17
 
