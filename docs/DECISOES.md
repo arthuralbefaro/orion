@@ -2768,3 +2768,26 @@ Uma linha por decisao, na ordem em que foram tomadas.
   com Ctrl+S e fecha com Ctrl+Q; depois do `wm`, o `cat /tmp/nota.txt` na
   serial confere o que foi gravado, e a captura confere o cursor no fim da
   primeira linha.
+
+## v2.4.0-a11 (etapa 6.6 parte 5: configuracoes)
+
+- `wm`: o papel de parede deixou de ser fixo. Ao iniciar, le `/etc/wm.conf`
+  (linhas `chave=valor`; por ora so `fundo=<imagem>` ou `fundo=nenhum`) e cai
+  no `orion.png` se nao houver arquivo. O socket de comandos ganhou
+  `fundo <imagem|nenhum>`: carrega a imagem, troca o fundo e redesenha a tela
+  inteira; imagem que nao existe ou nao decodifica responde `erro:` e deixa o
+  fundo como estava. O `wm` nao grava a configuracao; quem grava e o app.
+- Um arquivo de texto em `/etc` em vez de Lua: e uma chave so, e o formato
+  `chave=valor` deixa o `wm` sem depender do interpretador. Se as opcoes
+  crescerem (tema, fontes), a troca para Lua fica para a etapa que precisar.
+- `config` (novo): mostra versao (`/proc/version`), CPU (`/proc/cpuinfo`),
+  memoria e tempo ligado (`/proc/meminfo`, `/proc/uptime`, a cada segundo) e a
+  rede (`SIOCGIFCONF_ORION`, como o `ifconfig`); lista as imagens de
+  `/usr/share/imagens` e `/usr/share/wallpapers` mais o degrade, marca a atual
+  com `*`, e o Enter ou "Aplicar" manda `fundo` ao `wm` e so grava o
+  `/etc/wm.conf` se o `wm` aceitou. O nome do programa e curto (`config`)
+  porque o titulo do `wm` tem 31 caracteres.
+- Regressao B: o `config` aplica o `teste.jpg` (a captura confere os
+  quadrantes vermelho e verde no fundo da tela) e depois o `teste.png`, fecha
+  com `q`; depois do `wm`, o `cat /etc/wm.conf` confere o arquivo e um `wm`
+  novo, aberto e fechado pelo shell da serial, carrega o fundo dele.

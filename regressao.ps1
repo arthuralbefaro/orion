@@ -594,8 +594,11 @@ if ($runAll -or $OnlyB) {
         "mon:sendkey backspace", "mon:sendkey backspace", "mon:sendkey backspace", "mon:sendkey backspace", "mon:sendkey backspace",
         "type:vez", "mon:sendkey up", "mon:sendkey end", "type:.", "mon:sendkey ctrl-s", "wait:1.5",
         "shot:out\shots\reg-app-editor.ppm", "mon:sendkey ctrl-q", "wait:2",
+        "type:config &", "mon:sendkey ret", "wait:4", "mon:sendkey up", "mon:sendkey up", "mon:sendkey ret", "wait:2",
+        "shot:out\shots\reg-app-config.ppm", "mon:sendkey down", "mon:sendkey ret", "wait:2", "mon:sendkey q", "wait:2",
         "mon:sendkey ctrl-alt-x", "wait:5",
         "cmd:echo TTY-DE-VOLTA", "wait:1", "shot:out\shots\reg-wm-6-tty.ppm", "cmd:cat /tmp/nota.txt", "wait:1",
+        "cmd:cat /etc/wm.conf", "wait:1", "cmd:wm", "wait:4", "mon:sendkey ctrl-alt-x", "wait:5",
         "key:0B", "cmd:mem", "cmd:pty", "cmd:procs",
         "key:0B", "cmd:crash smep", "wait:4", "reboot:", "cmd:crash smap", "wait:4",
         "reboot:", "cmd:reboot", "wait:4", "monlog:info status",
@@ -646,6 +649,14 @@ if ($runAll -or $OnlyB) {
     Expect $b "(?s)'editor: salvou nota\.txt'.*?wm: app da janela \d+ saiu" "editor fecha com Ctrl+Q"
     Test-ShotPixel "out\shots\reg-app-editor.ppm" 520 245 0xffd060 30 "captura do editor: cursor no fim da primeira linha"
     Test-ShotPixel "out\shots\reg-app-editor.ppm" 700 450 0x141a26 12 "captura do editor: fundo da pagina"
+    Expect $b "wm: app abriu a janela \d+ \(640x400, 'config'\)" "config abre a janela"
+    Expect $b "(?s)wm: wmctl: fundo /usr/share/imagens/teste\.jpg.*?wm: papel de parede /usr/share/imagens/teste\.jpg \(JPEG 96x64\)" "config troca o papel de parede pelo comando fundo do wm"
+    Expect $b "(?s)agora se chama 'config: fundo teste\.jpg'.*?agora se chama 'config: fundo teste\.png'" "config aplica a escolha da lista com Enter"
+    Expect $b "(?s)'config: fundo teste\.png'.*?wm: app da janela \d+ saiu \(pediu para fechar\)" "config fecha com q"
+    Expect $b "cat /etc/wm\.conf\s*\nfundo=/usr/share/imagens/teste\.png" "config grava a escolha em /etc/wm.conf"
+    Expect $b "wm: fundo de /etc/wm\.conf: /usr/share/imagens/teste\.png\s*\n[\s\S]*?wm: papel de parede /usr/share/imagens/teste\.png \(PNG 48x32\)" "wm le o papel de parede de /etc/wm.conf ao iniciar"
+    Test-ShotPixel "out\shots\reg-app-config.ppm" 100 200 0xc82828 40 "captura do config: fundo novo, quadrante vermelho do JPEG"
+    Test-ShotPixel "out\shots\reg-app-config.ppm" 1100 200 0x28b33c 40 "captura do config: fundo novo, quadrante verde do JPEG"
     Expect $b 'crash: pedindo ao kernel para executar codigo de usuario \(SMEP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?busca de instrucao[\s\S]*?SMEP: o kernel tentou executar codigo de usuario \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMEP: kernel executando pagina de usuario vira panico controlado"
     Expect $b 'crash: pedindo ao kernel para ler memoria de usuario sem copy_from_user \(SMAP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?SMAP: o kernel acessou memoria de usuario fora das copias de uaccess \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMAP: kernel lendo memoria de usuario fora do uaccess vira panico controlado"
     ExpectNot $b 'crash: o kernel voltou' "o kernel nunca volta de um acesso proibido a memoria de usuario"

@@ -28,19 +28,19 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 01:45, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
-`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.5 e as partes 1 a 4 da 6.6
-(`imgview`, `monitor`, `arquivos` e `editor`). Versao 2.4.0-a10. O
+Estado (2026-10-19, 02:20, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.5 e as partes 1 a 5 da 6.6
+(`imgview`, `monitor`, `arquivos`, `editor` e `config`). Versao 2.4.0-a11. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E e
-na ISO na F, com 453 verificacoes; a sequencia A sobe o `tools/hostweb.py`
+na ISO na F, com 461 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 6.6 parte 5, configuracoes, com captura na sequencia B;
-depois o terminal, e a 6.7. Versao 2.4.0-a11 em diante.
+Proxima etapa: 6.6 parte 6, terminal como app, com captura na sequencia B;
+depois a 6.7. Versao 2.4.0-a12 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -1230,6 +1230,22 @@ antes da regressao terminar; foi tirada e so voltou depois da rodada verde.
 Ficou de fora: selecao, copiar e colar, desfazer, busca, perguntar antes de
 fechar com mudanca nao salva (o `wm` fecha sem consultar o app), caracteres
 fora do ASCII.
+
+#### 6.6 parte 5 Configuracoes - 01:45 a 02:20 - FEITO
+`wm`: o papel de parede vem do `/etc/wm.conf` (`fundo=<imagem>` ou
+`fundo=nenhum`; sem o arquivo, o `orion.png`) e o socket de comandos ganhou
+`fundo <imagem|nenhum>`, que troca o fundo na hora (o `wmctl` tambem usa).
+`config` (novo): versao, CPU, memoria, tempo ligado e rede, atualizados a cada
+segundo, e a lista de papeis de parede com a escolha atual marcada; Enter ou
+"Aplicar" troca o fundo pelo `wm` e grava o `/etc/wm.conf`. Criterio: na
+sequencia B o `config` aplica o `teste.jpg` (a captura tem os quadrantes
+vermelho e verde no fundo da tela) e o `teste.png` e fecha com `q`; depois, o
+`/etc/wm.conf` tem o `teste.png` e um `wm` novo carrega esse fundo ao
+iniciar. Regressao 453 -> 461, verde na primeira rodada completa (26
+minutos). Versao 2.4.0-a11. RAM livre antes da regressao: 6,7 GB.
+Problemas: nenhum; a sequencia B passou na primeira rodada com o app novo.
+Ficou de fora: tema e cores, fontes, teclado, data e hora, rede estatica pelo
+app (o `ifconfig` faz), usuarios e senhas (o `passwd` faz).
 
 ### Sessao 2 - 2026-10-17
 

@@ -8,7 +8,7 @@
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "uso: wmctl term | procs | files <caminho> | list | ping\n");
+        fprintf(stderr, "uso: wmctl term | procs | files <caminho> | list | ping | fundo <imagem|nenhum>\n");
         return 2;
     }
     char line[256] = "";

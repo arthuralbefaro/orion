@@ -38,6 +38,7 @@
 #define FONT_MONO      FONT_DIR "/DejaVuSansMono.ttf"
 #define FONT_SANS      FONT_DIR "/DejaVuSans.ttf"
 #define WALLPAPER      "/usr/share/wallpapers/orion.png"
+#define WM_CONF        "/etc/wm.conf"
 
 static struct gfx gfx;
 static struct desktop desk;
@@ -54,6 +55,7 @@ static struct window *drag_win;
 static int drag_dx, drag_dy;
 static long last_clock;
 static int spawned;
+static char wallpaper_path[256] = WALLPAPER;
 
 static void compose_cb(struct rect area)
 {
@@ -561,14 +563,34 @@ static void load_fonts(void)
         fprintf(stderr, "wm: sem fonte vetorial em %s; usando a 8x8\n", FONT_DIR);
 }
 
-static uint32_t *load_wallpaper(void)
+static void read_conf(void)
+{
+    FILE *f = fopen(WM_CONF, "r");
+    if (!f)
+        return;
+    char line[300];
+    while (fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        if (strncmp(line, "fundo=", 6) == 0 && line[6]) {
+            snprintf(wallpaper_path, sizeof(wallpaper_path), "%s", line + 6);
+            fprintf(stderr, "wm: fundo de %s: %s\n", WM_CONF, wallpaper_path);
+        }
+    }
+    fclose(f);
+}
+
+static uint32_t *load_wallpaper(const char *path)
 {
     struct image img, fit;
-    if (!image_load(WALLPAPER, &img)) {
-        fprintf(stderr, "wm: sem papel de parede em %s; usando o degrade\n", WALLPAPER);
+    if (strcmp(path, "nenhum") == 0) {
+        fprintf(stderr, "wm: papel de parede: nenhum, degrade\n");
         return NULL;
     }
-    fprintf(stderr, "wm: papel de parede %s (%s %dx%d)\n", WALLPAPER, img.format, img.w, img.h);
+    if (!image_load(path, &img)) {
+        fprintf(stderr, "wm: sem papel de parede em %s; usando o degrade\n", path);
+        return NULL;
+    }
+    fprintf(stderr, "wm: papel de parede %s (%s %dx%d)\n", path, img.format, img.w, img.h);
     if (img.w != gfx.width || img.h != gfx.height) {
         bool ok = image_scale(&img, gfx.width, gfx.height, &fit);
         image_free(&img);
@@ -584,7 +606,8 @@ static uint32_t *load_wallpaper(void)
 static void build_desktop(void)
 {
     desk_init(&desk, &gfx);
-    desk.wallpaper = load_wallpaper();
+    read_conf();
+    desk.wallpaper = load_wallpaper(wallpaper_path);
     desk.mono = mono_font.ok ? &mono_font : NULL;
     desk.sans = sans_font.ok ? &sans_font : NULL;
     new_terminal();
@@ -680,8 +703,24 @@ static void ctl_command(int fd, char *line)
         ctl_reply(fd, out);
     } else if (strcmp(line, "ping") == 0) {
         ctl_reply(fd, "pong\n");
+    } else if (strncmp(line, "fundo ", 6) == 0 && (line[6] == '/' || strcmp(line + 6, "nenhum") == 0)) {
+        struct stat st;
+        if (line[6] == '/' && stat(line + 6, &st) < 0) {
+            snprintf(out, sizeof(out), "erro: %s: %s\n", line + 6, orion_strerror(errno));
+        } else {
+            uint32_t *next = load_wallpaper(line + 6);
+            if (!next && line[6] == '/') {
+                snprintf(out, sizeof(out), "erro: %s nao e PNG nem JPEG\n", line + 6);
+            } else {
+                free(desk.wallpaper);
+                desk.wallpaper = next;
+                snprintf(wallpaper_path, sizeof(wallpaper_path), "%s", line + 6);
+                snprintf(out, sizeof(out), "ok: fundo %s\n", wallpaper_path);
+            }
+        }
+        ctl_reply(fd, out);
     } else {
-        ctl_reply(fd, "erro: comandos: term, procs, files <caminho>, list, ping\n");
+        ctl_reply(fd, "erro: comandos: term, procs, files <caminho>, list, ping, fundo <imagem|nenhum>\n");
     }
     gfx_damage(&gfx, rect_make(0, 0, gfx.width, gfx.height));
 }
