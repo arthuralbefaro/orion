@@ -5,6 +5,7 @@ extern crate alloc;
 
 pub mod desc;
 pub mod hid;
+pub mod msc;
 
 #[cfg(target_os = "none")]
 mod xhci;

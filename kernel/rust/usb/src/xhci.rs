@@ -1,5 +1,6 @@
 use crate::desc::{self, Config, DeviceDesc};
 use crate::hid;
+use crate::msc;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -14,11 +15,14 @@ extern "C" {
     fn usb_log(msg: *const u8, len: usize);
     fn usb_key(scancode: u8, extended: bool, pressed: bool);
     fn usb_mouse(dx: i32, dy: i32, dz: i32, buttons: u8);
+    fn usb_disk_add(index: u32, blocks: u64, name: *const u8, len: usize);
 }
 
 const RING_TRBS: usize = 256;
 const HID_TRBS: usize = 8;
 const HID_BUF: usize = 64;
+const MSC_PAGES: usize = 16;
+const MSC_BLOCKS: u32 = (MSC_PAGES * 4096 / 512) as u32;
 
 const TRB_NORMAL: u32 = 1;
 const TRB_SETUP: u32 = 2;
@@ -82,6 +86,10 @@ impl Dma {
 
     fn clear(&self, len: usize) {
         unsafe { core::ptr::write_bytes(self.virt, 0, len) }
+    }
+
+    fn put(&self, off: usize, data: &[u8]) {
+        unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), self.virt.add(off), data.len()) }
     }
 }
 
@@ -156,6 +164,28 @@ struct Hid {
     prev: [u8; 8],
 }
 
+struct Storage {
+    dci_in: u32,
+    dci_out: u32,
+    ring_in: Ring,
+    ring_out: Ring,
+    data: Dma,
+    cmd: Dma,
+    tag: u32,
+    blocks: u64,
+    vendor: String,
+    model: String,
+}
+
+#[derive(Clone, Copy)]
+struct EpSetup {
+    dci: u32,
+    kind: u32,
+    mps: u16,
+    interval: u32,
+    ring: u64,
+}
+
 pub struct Device {
     pub port: u8,
     pub slot: u8,
@@ -168,6 +198,7 @@ pub struct Device {
     input: Dma,
     output: Dma,
     hid: Option<Hid>,
+    msc: Option<Storage>,
 }
 
 pub struct Xhci {
@@ -184,6 +215,7 @@ pub struct Xhci {
     ev_cycle: u32,
     buffer: Dma,
     pub devices: Vec<Device>,
+    disks: Vec<usize>,
 }
 
 unsafe fn rd(base: *mut u8, off: usize) -> u32 {
@@ -304,6 +336,7 @@ impl Xhci {
             ev_cycle: 1,
             buffer,
             devices: Vec::new(),
+            disks: Vec::new(),
         }))
     }
 
@@ -335,6 +368,9 @@ impl Xhci {
             while let Some(ev) = self.next_event() {
                 if want(&ev) {
                     return Some(ev);
+                }
+                if ev.kind() == TRB_TRANSFER_EVENT {
+                    self.handle_transfer(&ev);
                 }
             }
             if unsafe { usb_now_us() } > end {
@@ -380,23 +416,33 @@ impl Xhci {
         )
     }
 
-    fn configure_interrupt_in(&mut self, dev: usize, dci: u32, mps: u16, interval: u32, ring: u64) -> bool {
+    fn configure_endpoints(&mut self, dev: usize, eps: &[EpSetup]) -> bool {
         let c = self.ctx_size;
         let slot = self.devices[dev].slot as u32;
         let input = &self.devices[dev].input;
         let output = &self.devices[dev].output;
         input.clear(4096);
-        input.write32(4, 1 | (1 << dci));
+        let mut add = 1u32;
+        let mut last = 1u32;
+        for e in eps {
+            add |= 1 << e.dci;
+            last = last.max(e.dci);
+        }
+        input.write32(4, add);
         for off in (0..c).step_by(4) {
             input.write32(c + off, output.read32(off));
         }
         let slot0 = input.read32(c);
-        input.write32(c, (slot0 & !(0x1F << 27)) | (dci << 27));
-        let ep = (dci as usize + 1) * c;
-        input.write32(ep, interval << 16);
-        input.write32(ep + 4, (3 << 1) | (7 << 3) | ((mps as u32) << 16));
-        input.write64(ep + 8, ring | 1);
-        input.write32(ep + 16, mps as u32 | ((mps as u32) << 16));
+        let entries = ((slot0 >> 27) & 0x1F).max(last);
+        input.write32(c, (slot0 & !(0x1F << 27)) | (entries << 27));
+        for e in eps {
+            let ep = (e.dci as usize + 1) * c;
+            input.write32(ep, e.interval << 16);
+            input.write32(ep + 4, (3 << 1) | (e.kind << 3) | ((e.mps as u32) << 16));
+            input.write64(ep + 8, e.ring | 1);
+            let esit = if e.kind == 7 { e.mps as u32 } else { 0 };
+            input.write32(ep + 16, e.mps as u32 | (esit << 16));
+        }
         let phys = input.phys;
         matches!(self.command(phys, (TRB_CONFIGURE_EP << 10) | (slot << 24)), Some(ev) if ev.code() == CC_SUCCESS)
     }
@@ -428,7 +474,8 @@ impl Xhci {
             return Err("Set Configuration recusado");
         }
         let interval = hid::interval_for(self.devices[dev].speed, ep.interval);
-        if !self.configure_interrupt_in(dev, dci, mps, interval, ring.mem.phys) {
+        let ep = EpSetup { dci, kind: 7, mps, interval, ring: ring.mem.phys };
+        if !self.configure_endpoints(dev, &[ep]) {
             return Err("Configure Endpoint recusado");
         }
         self.control_out(dev, [0x21, 0x0B, 0, 0, iface.number, 0, 0, 0]);
@@ -442,6 +489,133 @@ impl Xhci {
         self.devices[dev].hid = Some(hid);
         unsafe { wr(self.db, slot * 4, dci) };
         Ok(Some(kind))
+    }
+
+    fn bulk(&mut self, dev: usize, data_in: bool, phys: u64, len: usize) -> Option<usize> {
+        let slot = self.devices[dev].slot as u32;
+        let db = self.db;
+        let st = self.devices[dev].msc.as_mut()?;
+        let (ring, dci) = if data_in { (&mut st.ring_in, st.dci_in) } else { (&mut st.ring_out, st.dci_out) };
+        let at = ring.push(phys, len as u32, (TRB_NORMAL << 10) | (1 << 5) | (1 << 2));
+        unsafe { wr(db, slot as usize * 4, dci) };
+        let ev = self.wait_event(5000, |ev| ev.kind() == TRB_TRANSFER_EVENT && ev.slot() == slot && ev.param == at)?;
+        if ev.code() != CC_SUCCESS && ev.code() != CC_SHORT_PACKET {
+            return None;
+        }
+        Some(len.saturating_sub((ev.status & 0x00FF_FFFF) as usize))
+    }
+
+    fn scsi(&mut self, dev: usize, cdb: &[u8], data_in: bool, len: usize) -> Option<usize> {
+        let (cmd, data, tag) = {
+            let st = self.devices[dev].msc.as_mut()?;
+            st.tag = st.tag.wrapping_add(1);
+            st.cmd.put(0, &msc::cbw(st.tag, len as u32, data_in, cdb));
+            (st.cmd.phys, st.data.phys, st.tag)
+        };
+        self.bulk(dev, false, cmd, msc::CBW_LEN)?;
+        let got = if len > 0 { self.bulk(dev, data_in, data, len)? } else { 0 };
+        self.bulk(dev, true, cmd + 512, msc::CSW_LEN)?;
+        let st = self.devices[dev].msc.as_ref()?;
+        msc::check_csw(&st.cmd.bytes(512 + msc::CSW_LEN)[512..], tag).ok()?;
+        Some(got)
+    }
+
+    fn start_msc(&mut self, dev: usize) -> Result<bool, &'static str> {
+        let Some(cfg) = self.devices[dev].config.clone() else { return Ok(false) };
+        let Some(iface) = cfg.interfaces.iter().find(|i| i.class == 8 && i.subclass == 6 && i.protocol == 0x50).copied()
+        else {
+            return Ok(false);
+        };
+        let bulk = |dir_in: bool| {
+            cfg.endpoints
+                .iter()
+                .find(|e| e.interface == iface.number && e.attributes & 3 == 2 && (e.address & 0x80 != 0) == dir_in)
+                .copied()
+        };
+        let (Some(ep_in), Some(ep_out)) = (bulk(true), bulk(false)) else { return Ok(false) };
+        let dci_in = ((ep_in.address & 0x0F) as u32) * 2 + 1;
+        let dci_out = ((ep_out.address & 0x0F) as u32) * 2;
+        let st = Storage {
+            dci_in,
+            dci_out,
+            ring_in: Ring::new().ok_or("sem memoria")?,
+            ring_out: Ring::new().ok_or("sem memoria")?,
+            data: Dma::new(MSC_PAGES).ok_or("sem memoria")?,
+            cmd: Dma::new(1).ok_or("sem memoria")?,
+            tag: 0,
+            blocks: 0,
+            vendor: String::new(),
+            model: String::new(),
+        };
+        if !self.control_out(dev, [0x00, 9, cfg.value, 0, 0, 0, 0, 0]) {
+            return Err("Set Configuration recusado");
+        }
+        let eps = [
+            EpSetup { dci: dci_out, kind: 2, mps: ep_out.max_packet, interval: 0, ring: st.ring_out.mem.phys },
+            EpSetup { dci: dci_in, kind: 6, mps: ep_in.max_packet, interval: 0, ring: st.ring_in.mem.phys },
+        ];
+        if !self.configure_endpoints(dev, &eps) {
+            return Err("Configure Endpoint recusado");
+        }
+        self.devices[dev].msc = Some(st);
+        if self.scsi(dev, &msc::inquiry(36), true, 36).is_some() {
+            let names = self.devices[dev].msc.as_ref().and_then(|s| msc::inquiry_name(s.data.bytes(36)));
+            if let (Some((v, m)), Some(st)) = (names, self.devices[dev].msc.as_mut()) {
+                st.vendor = v;
+                st.model = m;
+            }
+        }
+        let mut ready = false;
+        for _ in 0..5 {
+            if self.scsi(dev, &msc::test_unit_ready(), false, 0).is_some() {
+                ready = true;
+                break;
+            }
+            unsafe { usb_sleep_ms(50) };
+        }
+        if !ready {
+            return Err("o pendrive nao ficou pronto");
+        }
+        self.scsi(dev, &msc::read_capacity10(), true, 8).ok_or("READ CAPACITY falhou")?;
+        let cap = self.devices[dev].msc.as_ref().and_then(|s| msc::parse_capacity(s.data.bytes(8)));
+        let (blocks, size) = cap.ok_or("capacidade invalida")?;
+        if size != 512 {
+            return Err("so blocos de 512 bytes");
+        }
+        if let Some(st) = self.devices[dev].msc.as_mut() {
+            st.blocks = blocks;
+        }
+        self.disks.push(dev);
+        Ok(true)
+    }
+
+    fn msc_rw(&mut self, disk: usize, mut lba: u64, mut count: u32, mut buf: *mut u8, write: bool) -> bool {
+        let Some(&dev) = self.disks.get(disk) else { return false };
+        if lba + count as u64 > u32::MAX as u64 {
+            return false;
+        }
+        while count > 0 {
+            let n = count.min(MSC_BLOCKS);
+            let bytes = n as usize * 512;
+            let data = match self.devices[dev].msc.as_ref() {
+                Some(st) => st.data.virt,
+                None => return false,
+            };
+            if write {
+                unsafe { core::ptr::copy_nonoverlapping(buf, data, bytes) };
+            }
+            let cdb = if write { msc::write10(lba as u32, n as u16) } else { msc::read10(lba as u32, n as u16) };
+            if self.scsi(dev, &cdb, !write, bytes) != Some(bytes) {
+                return false;
+            }
+            if !write {
+                unsafe { core::ptr::copy_nonoverlapping(data, buf, bytes) };
+            }
+            buf = unsafe { buf.add(bytes) };
+            lba += n as u64;
+            count -= n;
+        }
+        true
     }
 
     fn handle_transfer(&mut self, ev: &Event) {
@@ -568,6 +742,7 @@ impl Xhci {
             input,
             output,
             hid: None,
+            msc: None,
         });
         let dev = self.devices.len() - 1;
         let raw = self.get_descriptor(dev, desc::DT_DEVICE, 0, 0, 18).ok_or("descritor do dispositivo nao veio")?;
@@ -602,6 +777,29 @@ impl Xhci {
             Err(why) => {
                 let mut msg = String::new();
                 let _ = write!(msg, "porta {}: HID nao iniciou: {}", port, why);
+                log(&msg);
+            }
+        }
+        match self.start_msc(dev) {
+            Ok(true) => {
+                if let Some(st) = self.devices[dev].msc.as_ref() {
+                    let mut msg = String::new();
+                    let _ = write!(
+                        msg,
+                        "porta {}: armazenamento '{} {}', {} blocos de 512 bytes ({} MiB)",
+                        port,
+                        st.vendor,
+                        st.model,
+                        st.blocks,
+                        st.blocks / 2048
+                    );
+                    log(&msg);
+                }
+            }
+            Ok(false) => {}
+            Err(why) => {
+                let mut msg = String::new();
+                let _ = write!(msg, "porta {}: armazenamento nao iniciou: {}", port, why);
                 log(&msg);
             }
         }
@@ -684,7 +882,22 @@ pub unsafe extern "C" fn xhci_start(mmio: *mut u8) -> i32 {
                 );
                 log(&line);
             }
+            let disks: Vec<(u32, u64, String)> = hc
+                .disks
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &d)| {
+                    hc.devices[d].msc.as_ref().map(|s| {
+                        let mut name = String::new();
+                        let _ = write!(name, "{} {}", s.vendor, s.model);
+                        (i as u32, s.blocks, name)
+                    })
+                })
+                .collect();
             CONTROLLER.store(Box::into_raw(hc), Ordering::Release);
+            for (index, blocks, name) in disks {
+                usb_disk_add(index, blocks, name.as_ptr(), name.len());
+            }
             n
         }
         Err(why) => {
@@ -723,4 +936,14 @@ pub extern "C" fn xhci_poll() {
 #[no_mangle]
 pub extern "C" fn xhci_hid_count() -> i32 {
     with_controller(|hc| hc.map(|hc| hc.devices.iter().filter(|d| d.hid.is_some()).count() as i32).unwrap_or(0))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn xhci_msc_read(disk: u32, lba: u64, count: u32, buf: *mut u8) -> bool {
+    with_controller(|hc| hc.map(|hc| hc.msc_rw(disk as usize, lba, count, buf, false)).unwrap_or(false))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn xhci_msc_write(disk: u32, lba: u64, count: u32, buf: *const u8) -> bool {
+    with_controller(|hc| hc.map(|hc| hc.msc_rw(disk as usize, lba, count, buf as *mut u8, true)).unwrap_or(false))
 }

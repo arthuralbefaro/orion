@@ -1006,22 +1006,36 @@ if ($runAll -or $OnlyN) {
 # ---------------- Sequencia U: USB ----------------
 if ($runAll -or $OnlyU) {
     Write-Host "== Sequencia U (USB pelo xHCI, sem PS/2) ==" -ForegroundColor Cyan
+    Remove-Item (Join-Path $Root "out\stick.img") -ErrorAction SilentlyContinue
     $stepsU = @(
         "cmd:lsusb", "wait:2", "cmd:cat /proc/usb", "wait:1",
         "cmd:evtest 10", "wait:0.8", "mon:sendkey a", "mon:sendkey ctrl", "mon:sendkey up", "mon:mouse_move 10 5",
-        "mon:mouse_button 1", "mon:mouse_button 0", "until:20:evento(s)"
+        "mon:mouse_button 1", "mon:mouse_button 0", "until:20:evento(s)",
+        "cmd:mkfs /dev/sdb PENDRIVE", "wait:6", "cmd:mkdir /tmp/pen", "cmd:mount -t vfat /dev/sdb /tmp/pen", "wait:1",
+        "cmd:echo ola-do-pendrive > /tmp/pen/nota.txt", "cmd:cp /bin/hello /tmp/pen/h", "wait:2",
+        "cmd:umount /tmp/pen", "wait:1", "cmd:mount -t vfat /dev/sdb /tmp/pen", "wait:1",
+        "cmd:cat /tmp/pen/nota.txt", "cmd:/tmp/pen/h pendrive", "wait:2", "cmd:cat /proc/mounts", "wait:1",
+        "cmd:umount /tmp/pen", "wait:1"
     )
-    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Usb -NoPs2 -LogPath "out\reg-u.log" `
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Usb -UsbDisk -NoPs2 -LogPath "out\reg-u.log" `
         -Script $stepsU -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $u = Get-Log "out\reg-u.log"
     if ($Verbose) { Write-Output $u }
 
     Expect $u "usb\s+controlador xHCI 1b36:000d em " "xHCI achado no PCI"
     Expect $u "usb\s+xHCI 1\.\d\d, 8 porta\(s\)" "xHCI reiniciado e ligado, com a versao e as portas"
-    Expect $u "usb\s+2 dispositivo\(s\) USB" "dois dispositivos enumerados (Enable Slot e Address Device)"
-    Expect $u "(?s)\$ lsusb\s*\n[^\n]*ID 0627:0001 QEMU QEMU USB Keyboard \(USB 2\.00, [a-z ]+speed, classe hid\)" "lsusb mostra o teclado USB com as strings do dispositivo"
+    Expect $u "usb\s+3 dispositivo\(s\) USB" "tres dispositivos enumerados (Enable Slot e Address Device)"
+    Expect $u "(?s)\$ lsusb.*?ID 0627:0001 QEMU QEMU USB Keyboard \(USB 2\.00, [a-z ]+speed, classe hid\)" "lsusb mostra o teclado USB com as strings do dispositivo"
     Expect $u "(?s)\$ lsusb.*?ID 0627:0001 QEMU QEMU USB Mouse \(USB 2\.00, [a-z ]+speed, classe hid\)" "lsusb mostra o mouse USB"
     Expect $u "kbd\s+sem controlador PS/2" "a maquina sobe sem o controlador PS/2"
+    Expect $u "(?s)\$ lsusb.*?ID 46f4:0001 QEMU QEMU USB HARDDRIVE \(USB \d\.00, [a-z ]+speed, classe armazenamento\)" "lsusb mostra o pendrive"
+    Expect $u "usb\s+porta \d+: armazenamento 'QEMU QEMU HARDDISK', 32768 blocos de 512 bytes \(16 MiB\)" "pendrive: Bulk-Only, INQUIRY e READ CAPACITY"
+    Expect $u "usb\s+sdb: pendrive 'QEMU QEMU HARDDISK', 32768 setores \(16 MiB\)" "pendrive vira o disco sdb"
+    Expect $u "mkfs: /dev/sdb, 32768 setores" "mkfs formata o pendrive em FAT"
+    Expect $u "(?s)umount /tmp/pen.*?mount -t vfat /dev/sdb /tmp/pen.*?cat /tmp/pen/nota\.txt\s*\nola-do-pendrive" "o que foi gravado no pendrive volta depois de desmontar e montar de novo"
+    Expect $u "argv\[0\] = /tmp/pen/h\s*\n\s*argv\[1\] = pendrive" "programa copiado para o pendrive roda de la"
+    Expect $u "/dev/sdb /tmp/pen vfat rw 0 0" "/proc/mounts mostra o pendrive FAT montado"
+    ExpectNot $u "usb\s+sdb: erro" "nenhum erro de leitura ou escrita no pendrive"
     Expect $u "usb\s+porta \d+: teclado HID pronto, protocolo de boot" "teclado USB configurado (endpoint de interrupcao)"
     Expect $u "usb\s+porta \d+: mouse HID pronto, protocolo de boot" "mouse USB configurado"
     Expect $u "tecla-desce\s+scancode=1e ascii=97 mods=0\s*\n\s*tecla-sobe\s+scancode=1e" "tecla do teclado USB chega ao /dev/input sem PS/2"

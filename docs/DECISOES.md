@@ -3046,3 +3046,28 @@ Uma linha por decisao, na ordem em que foram tomadas.
   liga a IRQ 1. `test.ps1 -NoPs2` e `qrun.py --no-ps2` sobem o q35 com
   `i8042=off`, e a sequencia U roda assim: o `evtest` recebe tecla, Ctrl, seta,
   movimento e botao vindos do USB.
+
+## v2.4.0-a22 (etapa 5.7: pendrive USB)
+
+- Armazenamento USB so pelo Bulk-Only (interface 08/06/50, SCSI
+  transparente), que e o que pendrives usam. `msc.rs` (testado no hospedeiro)
+  monta o CBW de 31 bytes e confere o CSW de 13 (assinatura, tag e status) e
+  os comandos SCSI (INQUIRY, TEST UNIT READY, READ CAPACITY(10), READ(10),
+  WRITE(10)); READ(10) limita o disco a 2 TiB, o que basta para pendrive.
+- `Configure Endpoint` ficou geral (varios endpoints num comando so: os dois
+  bulk aqui, o de interrupcao no HID) e o numero de contextos do slot vira o
+  maior DCI configurado.
+- Um pedido SCSI e tres transferencias bulk sincronas (CBW, dados, CSW) com
+  um buffer de 64 KiB; leitura e escrita maiores vao em pedaços de 128 blocos.
+  Tudo roda com a trava do controlador; a espera de uma transferencia trata,
+  em vez de descartar, os eventos de teclado e mouse que chegarem no meio.
+  Erro ou STALL falham o pedido (sem a recuperacao de reset do Bulk-Only).
+- O disco so e registrado depois que o controlador fica publicado, porque o
+  registro ja le a tabela de particoes, e essa leitura passa pela trava do
+  controlador. O nome e o primeiro `sdX` livre, como o Linux faz com pendrive;
+  o C serializa leitura e escrita com um mutex por disco. So blocos de 512.
+- Regressao U: um `usb-storage` em branco (`-UsbDisk`, imagem de 16 MiB
+  recriada a cada rodada) e formatado pelo `mkfs`, montado, gravado,
+  desmontado e montado de novo, e um programa copiado para ele roda de la. O
+  pendrive do QEMU e USB 3, entao a enumeracao numa porta USB 3 tambem ficou
+  coberta.

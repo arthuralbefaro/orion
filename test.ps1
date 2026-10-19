@@ -26,6 +26,7 @@ param(
     [string]$Bus = "ahci",
     [switch]$Usb,
     [switch]$NoPs2,
+    [switch]$UsbDisk,
     [string]$LoginUser = "root",
     [string]$LoginPassword = "orion"
 )
@@ -57,6 +58,14 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 if (-not (Test-Path $ovmfVars)) { Copy-Item $ovmfVarsTemplate $ovmfVars }
 
 
+if ($UsbDisk) {
+    $stick = Join-Path $OutDir "stick.img"
+    if (-not (Test-Path $stick)) {
+        $fs = [System.IO.File]::Create($stick)
+        $fs.SetLength(16MB)
+        $fs.Close()
+    }
+}
 if ($Disk) {
     $img = Join-Path $OutDir "disk.img"
     if (-not (Test-Path $img)) {
@@ -117,6 +126,7 @@ function Get-QemuArgs {
     $a += @("-netdev", $netdev, "-device", "$Nic,netdev=n0",
             "-object", "filter-dump,id=d0,netdev=n0,file=out/net.pcap")
     if ($Usb) { $a += @("-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0", "-device", "usb-mouse,bus=xhci.0") }
+    if ($Usb -and $UsbDisk) { $a += @("-drive", "if=none,id=stick,format=raw,file=out/stick.img", "-device", "usb-storage,bus=xhci.0,drive=stick") }
     if ($Disk) { $a += @("-drive", "format=raw,file=out/disk.img") }
     foreach ($extra in $ExtraDisks) { $a += @("-drive", "format=raw,file=$extra") }
     return $a | Where-Object { $_ } | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }

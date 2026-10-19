@@ -28,13 +28,14 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 15:55, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+Estado (2026-10-19, 17:05, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
 `v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.6 (apps `imgview`, `monitor`,
 `arquivos`, `editor`, `config` e `terminal`) e 6.7 (barra de tarefas,
 Alt+Tab, minimizar e maximizar, lancador de apps): Fase 6 inteira; e a
 5.2 (MSI: AHCI na CPU 1, rede `e1000e` na CPU 2), a 5.3 (virtio-blk e
 virtio-net com MSI-X), a 5.4 (NVMe), a 5.5 (xHCI e `lsusb`, em Rust) e a
-5.6 (teclado e mouse USB, inclusive sem PS/2). Versao 2.4.0-a21. O
+5.6 (teclado e mouse USB, inclusive sem PS/2) e a parte 1 da 5.7 (pendrive
+USB). Versao 2.4.0-a22. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
@@ -44,8 +45,11 @@ na ISO na F, no virtio (disco e rede) na V, no NVMe na N e com USB na U,
 com 526 verificacoes; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.7, armazenamento USB (Bulk-Only e SCSI; criterio: montar
-um pendrive FAT); depois 5.8 e 5.9. Versao 2.4.0-a22 em diante.
+Proxima etapa: 5.7 parte 2, pendrive robusto (requisitos logo abaixo das
+regras: despachante unico, prazos, recuperacao do Bulk-Only, remocao e
+segundo plug, imagem FAT de fora), e no fim dela a regressao completa da
+etapa 5.7; depois 5.8 (requisitos tambem abaixo) e 5.9. Versao 2.4.0-a23 em
+diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -86,6 +90,66 @@ e o notebook, que vem caindo com tela azul):
 - Continuam: RAM livre medida antes de rodar QEMU (2 GB; entre 1 e 2 GB roda e
   anota; abaixo de 1 GB depois de esperar, para), commit por parte logo depois
   da verificacao verde, e a entrada do diario so depois dela.
+- Enquanto uma regressao roda, so documentos e planejamento: nenhum codigo-fonte
+  (nem build, nem `test.ps1`), porque a regressao reconstroi a imagem no meio
+  (depois da D e antes da F) e testaria codigo pela metade. Cada commit leva
+  so os arquivos da parte dele.
+
+Requisitos da 5.7 parte 2 (pendrive robusto), decididos pelo dono em
+2026-10-19:
+1. Prazo em toda transferencia bulk e em todo comando do xHCI. Estourou:
+   `Stop Endpoint` e `Set TR Dequeue` para depois do TRB cancelado (nada de
+   DMA pendente no buffer reaproveitado), devolve EIO, solta a trava e o disco
+   passa a responder EIO, sem travar teclado nem mouse.
+2. Despachante unico do anel de eventos, rodando na interrupcao: trava de spin
+   com interrupcoes desligadas (nunca mutex) e acordar que funcione de dentro
+   da interrupcao. Entrega cada conclusao a transferencia dona pelo endereco
+   do TRB (nao so por slot e endpoint) e ignora, com registro no log, conclusao
+   de transferencia ja cancelada. Ordem de travas: despachante antes de
+   teclado e mouse, e nada ali dentro toma a trava do controlador (registrar no
+   `DECISOES.md`). O disco dorme esperando a sua conclusao sem segurar a trava
+   do controlador; o HID deixa de ser tratado dentro da espera do disco.
+3. CSW com status 1: REQUEST SENSE, sense no log. CSW invalido ou STALL: Bulk-Only
+   Mass Storage Reset, CLEAR_FEATURE(ENDPOINT_HALT) nos dois endpoints e a
+   sequencia do endpoint zerada no xHCI (`Reset Endpoint` se halted; se nao,
+   parar e reconfigurar), repetindo o pedido uma vez. Teste: forcar um STALL e
+   conferir que a transferencia seguinte funciona.
+4. Bloco diferente de 512: recusar com mensagem clara (sem arriscar 4096).
+5. Imagem FAT criada fora do Orion com um arquivo conhecido: ler, gravar outro
+   e conferir no hospedeiro.
+6. Remocao (`device_del` com o disco montado): shell e teclado seguem
+   respondendo; o disco morto existe ate o ultimo usuario soltar (contagem de
+   referencia); `umount` dele funciona sem panico; `Disable Slot` e o slot
+   liberado; um segundo plug do mesmo pendrive (`device_add`) e reconhecido de
+   novo.
+7. Atualizar no `DECISOES.md` a entrada da 5.7 (o que mudou e por que).
+
+Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
+1. Verificacao pelo WAV do QEMU (`-audiodev wav`): o `play` toca um sinal
+   gerado e conhecido (por exemplo 1 kHz, 2 s, so no canal esquerdo) e o
+   teste confere no hospedeiro que nao esta mudo, que a duracao esta na
+   margem, que a frequencia e ~1 kHz (cruzamentos de zero) e que o canal
+   direito esta em silencio; nada de comparar amostra por amostra. Fechar o
+   QEMU com `quit` pelo monitor antes de ler o WAV, para o cabecalho sair
+   certo. Audio ligado so na sequencia que testa audio.
+2. Codec sem IDs de no fixos do QEMU: percorrer o grafo (AFG, pinos pela
+   configuracao padrao: alto-falante, fone, line out; conexoes ate um DAC) e,
+   em cada no do caminho, tirar o mudo e ajustar o ganho, ligar a energia (D0)
+   e o EAPD no pino. Registrar no `DECISOES.md` o que foi feito pensando em
+   hardware real (7.4).
+3. Stream: BDL alinhada em 128 bytes, IOC por entrada, LVI, o mesmo formato no
+   stream e no conversor, stream tag no conversor e interrupcao (MSI) para
+   repor os buffers.
+4. `/dev/dsp` no estilo OSS (`SNDCTL_DSP_SPEED`, `SETFMT`, `CHANNELS`,
+   `GETOSPACE` e `O_NONBLOCK`): o `write` dorme com a fila cheia; com a fila
+   vazia o driver preenche com silencio (sem repetir o ultimo trecho); converte
+   a taxa no software quando o codec nao aceitar a pedida (44,1 kHz para
+   48 kHz, por exemplo); um processo por vez (`EBUSY`); no `close`, toca o que
+   falta e para o stream.
+5. Doom (parte 2): so efeitos sonoros (8 canais mixados, de 11025 Hz para
+   48 kHz), com escrita sem bloqueio para o jogo nunca travar no audio. A
+   musica (MUS/OPL) fica como parte opcional a parte ou de fora; se ficar de
+   fora, registrar no diario.
 
 ## Checklist
 
@@ -135,7 +199,7 @@ e o notebook, que vem caindo com tela azul):
 | 5.4 | NVMe | [x] | 13:35 | 14:10 | ver `git log` |
 | 5.5 | xHCI | [x] | 14:10 | 14:55 | ver `git log` |
 | 5.6 | USB HID | [x] | 14:55 | 15:55 | ver `git log` |
-| 5.7 | USB armazenamento | [ ] | | | |
+| 5.7 | USB armazenamento | [~] | 15:55 | | |
 | 5.8 | Audio HDA | [ ] | | | |
 | 5.9 | Video BGA e virtio-gpu | [ ] | | | |
 | 6.1 | Protocolo de janelas | [x] | 11:06 | 11:47 | ver `git log` |
@@ -1488,6 +1552,28 @@ estava certo e a expressao foi corrigida. O teclado e o mouse funcionaram de
 primeira.
 Ficou de fora: repeticao automatica de tecla, tablet e HID fora do protocolo
 de boot (descritor de relatorio), LEDs do teclado, interrupcao do xHCI.
+
+#### 5.7 parte 1 Pendrive USB - 15:55 a 17:05 - FEITO
+`orion_usb`: `msc.rs` (novo, testado no hospedeiro) monta o CBW e confere o
+CSW e os comandos SCSI; `xhci.rs` acha a interface Bulk-Only, configura os
+dois endpoints bulk (o `Configure Endpoint` ficou geral), faz INQUIRY, TEST
+UNIT READY e READ CAPACITY, e le e grava em pedacos de 64 KiB com tres
+transferencias sincronas por pedido. O C registra o disco no primeiro `sdX`
+livre (depois que o controlador fica publicado) e serializa o acesso por
+mutex. `test.ps1 -UsbDisk` liga um `usb-storage` em branco. Criterio: na
+sequencia U o pendrive vira `sdb`, o `mkfs` o formata em FAT, ele e montado,
+gravado, desmontado, montado de novo e um programa copiado roda de la.
+Verificacao (criterio novo de parte): a sequencia U, 23 verificacoes, verde.
+Versao 2.4.0-a22. RAM livre antes da sequencia U: 2,6 GB.
+Problemas: (1) a primeira rodada da U falhou numa expressao minha (o teclado
+deixou de ser a primeira linha do `lsusb`, porque o pendrive entra na porta
+3); afrouxada. (2) A regressao completa da etapa foi comecada as 16:02 e o
+Windows caiu as 16:19:22 (Kernel-Power 41) no meio da sequencia C; os arquivos
+ficaram integros. Como a 5.7 ganhou uma parte 2 (pedida pelo dono), a
+regressao completa fica para o fim dela, como no criterio novo.
+Ficou de fora nesta parte (vai para a parte 2): prazo com cancelamento,
+despachante unico com interrupcao, REQUEST SENSE e recuperacao do Bulk-Only,
+remocao e segundo plug, imagem FAT criada fora do Orion.
 
 ### Sessao 2 - 2026-10-17
 

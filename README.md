@@ -310,7 +310,9 @@ enumera os dispositivos e `lsusb` (ou `/proc/usb`) mostra fabricante, produto,
 versao USB, velocidade e classe. Teclado e mouse USB (HID, protocolo de boot)
 funcionam como os PS/2, inclusive numa maquina sem PS/2; `test.ps1 -Usb` poe um
 xHCI com teclado e mouse USB no QEMU, `-NoPs2` tira o controlador PS/2, e a
-sequencia U roda assim.
+sequencia U roda assim. Pendrive USB (Bulk-Only, SCSI) vira um disco `sdX`
+comum: `mkfs /dev/sdb` formata em FAT e `mount -t vfat /dev/sdb /tmp/pen`
+monta; `test.ps1 -Usb -UsbDisk` liga um pendrive de 16 MiB (`out/stick.img`).
 O `ps`, o `top`, o `free`, o `uptime` e a janela de processos do `wm` leem
 daqui. `/proc/<pid>/fd/N` ainda e um arquivo com o caminho (vira link
 simbolico na 2.7).

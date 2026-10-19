@@ -187,3 +187,55 @@ fn polling_interval_in_xhci_units() {
     assert_eq!(interval_for(3, 0), 0);
     assert_eq!(interval_for(4, 40), 15);
 }
+use crate::msc;
+
+#[test]
+fn cbw_layout() {
+    let b = msc::cbw(7, 512, true, &msc::read10(0x0102_0304, 1));
+    assert_eq!(&b[0..4], b"USBC");
+    assert_eq!(u32::from_le_bytes([b[4], b[5], b[6], b[7]]), 7);
+    assert_eq!(u32::from_le_bytes([b[8], b[9], b[10], b[11]]), 512);
+    assert_eq!(b[12], 0x80);
+    assert_eq!(b[13], 0);
+    assert_eq!(b[14], 10);
+    assert_eq!(&b[15..25], &[0x28, 0, 1, 2, 3, 4, 0, 0, 1, 0]);
+    assert!(b[25..].iter().all(|&x| x == 0));
+    assert_eq!(msc::cbw(1, 0, false, &msc::test_unit_ready())[12], 0);
+}
+
+#[test]
+fn csw_checks_signature_tag_and_status() {
+    let mut ok = [0u8; 13];
+    ok[0..4].copy_from_slice(b"USBS");
+    ok[4..8].copy_from_slice(&9u32.to_le_bytes());
+    ok[8..12].copy_from_slice(&3u32.to_le_bytes());
+    assert_eq!(msc::check_csw(&ok, 9), Ok(3));
+    assert_eq!(msc::check_csw(&ok, 8), Err(msc::CswError::Tag));
+    assert_eq!(msc::check_csw(&ok[..12], 9), Err(msc::CswError::Short));
+    let mut bad = ok;
+    bad[0] = b'X';
+    assert_eq!(msc::check_csw(&bad, 9), Err(msc::CswError::Signature));
+    let mut failed = ok;
+    failed[12] = 1;
+    assert_eq!(msc::check_csw(&failed, 9), Err(msc::CswError::Failed(1)));
+}
+
+#[test]
+fn write10_and_capacity() {
+    assert_eq!(msc::write10(5, 128), [0x2A, 0, 0, 0, 0, 5, 0, 0, 128, 0]);
+    assert_eq!(msc::parse_capacity(&[0, 0, 0x7F, 0xFF, 0, 0, 2, 0]), Some((32768, 512)));
+    assert_eq!(msc::parse_capacity(&[0, 0, 0, 0, 0, 0, 0, 0]), None);
+    assert_eq!(msc::parse_capacity(&[0, 0, 0]), None);
+}
+
+#[test]
+fn inquiry_names() {
+    let mut b = [0x20u8; 36];
+    b[8..12].copy_from_slice(b"QEMU");
+    b[16..29].copy_from_slice(b"QEMU HARDDISK");
+    b[30] = 0xFF;
+    let (v, p) = msc::inquiry_name(&b).unwrap();
+    assert_eq!(v, "QEMU");
+    assert_eq!(p, "QEMU HARDDISK ?");
+    assert!(msc::inquiry_name(&b[..20]).is_none());
+}

@@ -2,6 +2,9 @@
 #include <drivers/pci.h>
 #include <drivers/keyboard.h>
 #include <drivers/mouse.h>
+#include <fs/block.h>
+#include <kernel/mutex.h>
+#include <lib/printf.h>
 #include <arch/x86_64/cpu.h>
 #include <kernel/log.h>
 #include <kernel/sched.h>
@@ -15,6 +18,18 @@ int32_t xhci_start(uint8_t *mmio);
 size_t xhci_report(uint8_t *buf, size_t cap);
 int32_t xhci_hid_count(void);
 void xhci_poll(void);
+bool xhci_msc_read(uint32_t disk, uint64_t lba, uint32_t count, uint8_t *buf);
+bool xhci_msc_write(uint32_t disk, uint64_t lba, uint32_t count, const uint8_t *buf);
+
+#define USB_DISKS 4
+
+struct usb_disk {
+    uint32_t index;
+    struct mutex lock;
+    char lock_name[12];
+};
+
+static struct usb_disk disks[USB_DISKS];
 
 void *usb_dma_alloc(size_t pages, uint64_t *phys)
 {
@@ -58,6 +73,50 @@ void usb_key(uint8_t scancode, bool extended, bool pressed)
 void usb_mouse(int32_t dx, int32_t dy, int32_t dz, uint8_t buttons)
 {
     mouse_inject(dx, dy, dz, buttons);
+}
+
+static bool msc_read(struct blockdev *dev, uint64_t lba, uint32_t count, void *buf)
+{
+    struct usb_disk *d = dev->priv;
+    mutex_lock(&d->lock);
+    bool ok = xhci_msc_read(d->index, lba, count, buf);
+    mutex_unlock(&d->lock);
+    if (!ok)
+        log_error("usb", "%s: erro lendo LBA %lu", dev->name, lba);
+    return ok;
+}
+
+static bool msc_write(struct blockdev *dev, uint64_t lba, uint32_t count, const void *buf)
+{
+    struct usb_disk *d = dev->priv;
+    mutex_lock(&d->lock);
+    bool ok = xhci_msc_write(d->index, lba, count, buf);
+    mutex_unlock(&d->lock);
+    if (!ok)
+        log_error("usb", "%s: erro escrevendo LBA %lu", dev->name, lba);
+    return ok;
+}
+
+void usb_disk_add(uint32_t index, uint64_t blocks, const uint8_t *name, size_t len)
+{
+    if (index >= USB_DISKS)
+        return;
+    char dev_name[BLOCK_NAME_MAX];
+    for (char c = 'a'; c <= 'z'; c++) {
+        ksnprintf(dev_name, sizeof(dev_name), "sd%c", c);
+        if (!blockdev_find(dev_name))
+            break;
+    }
+    struct usb_disk *d = &disks[index];
+    d->index = index;
+    ksnprintf(d->lock_name, sizeof(d->lock_name), "usbdisk%u", index);
+    mutex_init(&d->lock, d->lock_name);
+    struct blockdev *dev = blockdev_register(dev_name, 512, blocks, msc_read, msc_write, d);
+    if (!dev)
+        return;
+    log_info("usb", "%s: pendrive '%.*s', %lu setores (%lu MiB)", dev_name, (int)len, (const char *)name, blocks,
+             blocks / 2048);
+    blockdev_scan_partitions(dev);
 }
 
 static void poll_thread(void *arg)
