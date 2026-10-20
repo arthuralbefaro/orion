@@ -12,6 +12,7 @@ param(
     [switch]$OnlyU,
     [switch]$OnlyS,
     [switch]$OnlyG,
+    [switch]$OnlyW,
     [switch]$SlowWaits,
     [int]$StressRuns = 1,
     [switch]$Verbose
@@ -23,7 +24,7 @@ $failures = @()
 $checks = 0
 if ($SlowWaits) { $env:ORION_SLOW_WAITS = "1" } else { Remove-Item Env:ORION_SLOW_WAITS -ErrorAction SilentlyContinue }
 $regStart = Get-Date
-$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG)
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG -or $OnlyW)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -1213,6 +1214,34 @@ if ($runAll -or $OnlyG) {
     Expect $vid "fbset: 800x600: o framebuffer esta em uso por um programa grafico" "com um programa grafico no framebuffer a troca da EBUSY"
     Expect $vid "(?s)fbset 1280x800.*?fbset: 1280x800, 32 bpp, 5120 bytes por linha" "volta ao modo do boot"
     ExpectNot $vid "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico na sequencia G"
+}
+
+# ---------------- Sequencia W: virtio-gpu ----------------
+if ($runAll -or $OnlyW) {
+    Write-Host "== Sequencia W (virtio-gpu 2D) ==" -ForegroundColor Cyan
+    Remove-Item (Join-Path $Root "out\shots\reg-vgpu-*.ppm") -ErrorAction SilentlyContinue
+    $stepsW = @(
+        "cmd:fbset", "wait:1", "shot:out\shots\reg-vgpu-boot.ppm", "cmd:fbset 1920x1080", "wait:1",
+        "shot:out\shots\reg-vgpu-1920.ppm", "cmd:fbtest 5", "wait:2.5", "shot:out\shots\reg-vgpu-fbtest.ppm",
+        "until:10:fbtest: grad", "wait:1", "cmd:fbset 1280x800", "cmd:fbset"
+    )
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Vga virtio -LogPath "out\reg-w.log" `
+        -Script $stepsW -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
+    $vg = Get-Log "out\reg-w.log"
+    if ($Verbose) { Write-Output $vg }
+
+    Expect $vg "virtio-gpu\s+virtio-gpu 2D: tela 1280x800 no recurso 1, flush a cada \d+ ms quando muda" "virtio-gpu assume a tela do GOP (recurso 2D, backing, scanout)"
+    ExpectNot $vg "bga\s+Bochs/BGA" "sem VGA padrao nao ha Bochs/BGA"
+    Expect $vg "fbset\s*\nfbset: 1280x800, 32 bpp, 5120 bytes por linha" "fbset mostra o modo do boot no virtio-gpu"
+    Test-ShotSize "out\shots\reg-vgpu-boot.ppm" 1280 800 "captura do boot no tamanho do GOP"
+    Test-ShotColors "out\shots\reg-vgpu-boot.ppm" "o console aparece na tela (transferencia e flush depois do boot)" 3
+    Expect $vg "virtio-gpu\s+modo 1920x1080 no recurso 2\s*\nfbset: 1920x1080, 32 bpp, 7680 bytes por linha" "fbset 1920x1080 cria um recurso novo e troca o scanout"
+    Test-ShotSize "out\shots\reg-vgpu-1920.ppm" 1920 1080 "a tela do QEMU passa a ter 1920x1080 no virtio-gpu"
+    Test-ShotColors "out\shots\reg-vgpu-fbtest.ppm" "programa grafico desenhando pelo mmap aparece na tela (flush continuo)" 20
+    Test-ShotPixel "out\shots\reg-vgpu-fbtest.ppm" 960 540 0xe6c84c 12 "captura do fbtest no virtio-gpu: retangulo amarelo no centro da tela de 1920x1080"
+    Expect $vg "fbtest: gradiente \+ retangulo desenhados" "fbtest desenha no framebuffer do virtio-gpu"
+    Expect $vg "(?s)fbset 1280x800.*?fbset: 1280x800, 32 bpp, 5120 bytes por linha" "volta ao modo do boot"
+    ExpectNot $vg "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico na sequencia W"
 }
 
 # ---------------- Sequencia E: estresse de processos ----------------

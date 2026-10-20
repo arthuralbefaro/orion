@@ -1,6 +1,7 @@
 #include <drivers/fbdev.h>
 #include <drivers/console.h>
 #include <drivers/bga.h>
+#include <drivers/virtio_gpu.h>
 #include <kernel/file.h>
 #include <kernel/process.h>
 #include <kernel/syscall.h>
@@ -61,9 +62,11 @@ static long fb_ioctl(struct file *f, uint64_t request, uint64_t arg)
             return -EFAULT;
         if (__atomic_load_n(&graphics_users, __ATOMIC_ACQUIRE))
             return -EBUSY;
-        if (!bga_present())
-            return -ENODEV;
-        return bga_set_mode(mode.width, mode.height);
+        if (bga_present())
+            return bga_set_mode(mode.width, mode.height);
+        if (virtio_gpu_present())
+            return virtio_gpu_set_mode(mode.width, mode.height);
+        return -ENODEV;
     }
     if (request != FBIOGET_INFO)
         return -EINVAL;

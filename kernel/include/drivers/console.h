@@ -37,6 +37,7 @@ struct framebuffer {
 
 void console_init(const struct framebuffer *fb);
 bool console_set_framebuffer(const struct framebuffer *fb);
+uint64_t console_generation(void);
 bool console_available(void);
 
 void console_putc(char c);

@@ -46,10 +46,11 @@ na ISO na F, no virtio (disco e rede) na V, no NVMe na N e com USB na U,
 com 585 verificacoes em ~18 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.9 parte 2, virtio-gpu (2D: recurso, backing, scanout,
-transferencia e flush; troca de modo pelo mesmo `FBIOSET_MODE`), depois
-5.10 (hub USB 2); a regressao completa volta no fim da Fase 5. Versao
-2.4.0-a30 em diante.
+Proxima etapa: 5.10, hub USB 2 basico (extra da Fase 5; descritor do hub,
+energia, reset e estado das portas, endpoint de mudanca de estado, contexto
+do slot com Hub e route string, TT para full/low speed atras de hub high
+speed; criterio: teclado e pendrive atras de `-device usb-hub` no QEMU),
+depois a regressao completa do fim da Fase 5. Versao 2.4.0-a31 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -250,7 +251,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 5.6 | USB HID | [x] | 14:55 | 15:55 | ver `git log` |
 | 5.7 | USB armazenamento | [x] | 15:55 | 18:16 | `05ee35e` |
 | 5.8 | Audio HDA | [x] | 10:54 | 11:40 | `3c0cacd` |
-| 5.9 | Video BGA e virtio-gpu | [~] | 11:42 | | |
+| 5.9 | Video BGA e virtio-gpu | [x] | 11:42 | 12:05 | (parte 2) |
 | 5.10 | Hub USB 2 basico (extra, decidido em 2026-10-19) | [ ] | | | |
 | 6.1 | Protocolo de janelas | [x] | 11:06 | 11:47 | ver `git log` |
 | 6.2 | libgui | [x] | 11:48 | 12:27 | ver `git log` |
@@ -1846,6 +1847,28 @@ fbdev), verdes: `fbset 1920x1080` muda a tela (a captura do QEMU sai
 1920x1080, o criterio da etapa), 1024x768 tambem, modos invalidos recusados,
 EBUSY com o `fbtest` no framebuffer, volta a 1280x800. Versao 2.4.0-a29. RAM
 livre antes: 3,8 GB.
+
+#### 5.9 parte 2 virtio-gpu - 12:05 a 12:05 - FEITO
+`drivers/virtio_gpu.c` (novo): virtio-gpu 2D pela camada virtio que ja
+existia; recurso B8G8R8X8 com backing de memoria contigua do kernel,
+scanout 0, thread de flush a cada 33 ms quando o console mudou (contador de
+geracao novo no console) ou ha programa grafico no framebuffer; troca de
+modo com recurso novo e o antigo liberado depois. O `FBIOSET_MODE` vai para
+o BGA ou para o virtio-gpu, o que houver. `test.ps1 -Vga virtio` /
+`qrun.py --vga virtio`. Sequencia W (nova). Detalhes: `docs/DECISOES.md`,
+v2.4.0-a30.
+Verificacao: sequencias W (12 verificacoes) e G (13), verdes: tela do boot
+visivel pelo flush, 1920x1080 pela captura, o `fbtest` desenhando pelo mmap
+aparece a 1920x1080 (pixel amarelo no centro), volta a 1280x800. Versao
+2.4.0-a30. RAM livre antes: 4,0 a 4,2 GB.
+Problema em aberto: na primeira versao da W o `fbtest` rodava em segundo
+plano (`fbtest 3 &`) e a captura de 1,5 s depois saiu com o console ja com a
+mensagem que o `fbtest` so imprime ao terminar (depois dos 3 s), como se a
+captura tivesse atrasado; em primeiro plano funciona sempre. Nao investiguei
+a fundo (suspeita: o `screendump` do QEMU com virtio-gpu espera a proxima
+atualizacao de tela); a W usa o primeiro plano. Fica anotado para a 7.x.
+A 5.9 fecha com as duas partes; a regressao completa fica para o fim da
+Fase 5.
 
 ### Sessao 2 - 2026-10-17
 

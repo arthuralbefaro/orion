@@ -62,6 +62,8 @@ def parse_sequences():
             seq["usb_fat"] = bool(re.search(r"-UsbFat\b", c))
             seq["no_strict"] = bool(re.search(r"-NoStrict\b", c))
             seq["audio"] = bool(re.search(r"-Audio\b", c))
+            vga = re.search(r"-Vga\s+(\S+)", c)
+            seq["vga"] = vga.group(1) if vga else ""
             hf = re.search(r"-HostFwd\s+@\(([^)]*)\)", c)
             if hf:
                 seq["hostfwd"] = [ps_string(s) for s in STRING.finditer(hf.group(1))]
@@ -219,7 +221,7 @@ def run_stress(seq, rep, runs, smp, image=False):
 
 def main():
     ap = argparse.ArgumentParser(description="Regressao do Orion (le os passos do regressao.ps1)")
-    ap.add_argument("which", nargs="?", default="ABCDFVNUSGE", help="sequencias, ex.: ABCDFVNUSGE ou AC")
+    ap.add_argument("which", nargs="?", default="ABCDFVNUSGWE", help="sequencias, ex.: ABCDFVNUSGWE ou AC")
     ap.add_argument("--smp", type=int, default=4)
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--stress-runs", type=int, default=1)
@@ -273,7 +275,7 @@ def main():
                               bus=seq.get("bus", "ahci"), usb=seq.get("usb", False),
                               no_ps2=seq.get("no_ps2", False), usb_disk=seq.get("usb_disk", False),
                               usb_fat=seq.get("usb_fat", False), no_strict=seq.get("no_strict", False),
-                              audio=seq.get("audio", False))
+                              audio=seq.get("audio", False), vga=seq.get("vga", ""))
         finally:
             if web:
                 web.kill()

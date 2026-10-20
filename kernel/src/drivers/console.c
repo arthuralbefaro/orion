@@ -19,6 +19,7 @@ struct cell {
 };
 
 static struct framebuffer fb;
+static uint64_t generation;
 static bool     initialized = false;
 static uint32_t scale = 1;          /* fator de zoom da fonte */
 static uint32_t cell_w, cell_h;     /* tamanho da célula em pixels */
@@ -403,8 +404,14 @@ static bool consume_escape(char c)
     return false;
 }
 
+uint64_t console_generation(void)
+{
+    return __atomic_load_n(&generation, __ATOMIC_RELAXED);
+}
+
 void console_putc(char c)
 {
+    __atomic_add_fetch(&generation, 1, __ATOMIC_RELAXED);
     if (!initialized)
         return;
 
@@ -455,6 +462,7 @@ void console_write(const char *s)
 
 void console_clear(void)
 {
+    __atomic_add_fetch(&generation, 1, __ATOMIC_RELAXED);
     if (!initialized)
         return;
     for (uint32_t r = 0; r < rows; r++)
@@ -468,6 +476,7 @@ void console_clear(void)
 
 void console_redraw(void)
 {
+    __atomic_add_fetch(&generation, 1, __ATOMIC_RELAXED);
     if (!initialized)
         return;
     graphics_mode = false;
@@ -478,6 +487,7 @@ void console_redraw(void)
 
 void console_set_graphics(bool on)
 {
+    __atomic_add_fetch(&generation, 1, __ATOMIC_RELAXED);
     if (graphics_mode == on)
         return;
     if (on)

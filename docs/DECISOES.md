@@ -3521,3 +3521,31 @@ O que mudou na 5.7 e por que:
   1024x768 conferidos pelo tamanho da captura do QEMU (`Test-ShotSize`, nos
   dois harnesses), recusas por EINVAL e o EBUSY com o `fbtest` segurando o
   framebuffer.
+
+## v2.4.0-a30 (etapa 5.9 parte 2: virtio-gpu)
+
+- Com virtio-gpu, o framebuffer do GOP e memoria comum que o OVMF copiava
+  para a tela; depois do `ExitBootServices` ninguem mais copia, entao sem
+  driver a tela congela no ultimo quadro do firmware. O driver (2D, so a
+  fila de controle, sem virgl nem EDID) cria um recurso B8G8R8X8 do tamanho
+  do modo do GOP, liga a ele uma faixa contigua de memoria do kernel como
+  backing (`ATTACH_BACKING` com uma entrada), aponta o scanout 0 para ele e
+  passa o console para essa memoria.
+- Copia para a tela: uma thread (`gpuflush`) a cada 33 ms manda
+  `TRANSFER_TO_HOST_2D` e `RESOURCE_FLUSH` da tela inteira, mas so quando o
+  console mudou (contador de geracao no console, novo) ou quando algum
+  programa grafico esta com o framebuffer mapeado (nao ha como saber o que um
+  programa mudou na memoria dele). Comandos esperam a resposta por consulta
+  na fila: so a configuracao e esses flushes usam a fila.
+- Troca de modo (`FBIOSET_MODE`, o mesmo do Bochs/BGA): memoria e recurso
+  novos, scanout trocado, console refeito, e so depois o recurso antigo e
+  liberado (`RESOURCE_UNREF`) e a memoria dele devolvida, para a tela nunca
+  apontar para memoria solta. Limite de 2560x1600.
+- Ficou de fora: tela que muda sozinha (evento de configuracao do
+  dispositivo), mais de um scanout, cursor por hardware e qualquer 3D. Se o
+  kernel entrar em panico com virtio-gpu, o texto do panico vai so para a
+  serial (a thread de flush ja nao roda).
+- `test.ps1 -Vga virtio` / `qrun.py --vga virtio` trocam a VGA padrao por
+  `virtio-gpu-pci`. Sequencia W (nova): tela do boot visivel (o flush
+  funciona), 1920x1080 pelo tamanho da captura e o `fbtest` desenhando pelo
+  mmap aparecendo na tela.
