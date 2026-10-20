@@ -46,9 +46,10 @@ hub na H, com audio na S e com troca de video na G (BGA) e na W
 (virtio-gpu), com 646 verificacoes em ~20 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: regressao completa do fim da Fase 5 (todas as sequencias,
-inclusive S, G, W e H); depois 7.3, 7.4 (fazer so o possivel sem PC de
-verdade e marcar `[!]`), 7.5 e a Fase 8. Versao 2.4.0-a32 em diante.
+Proxima etapa: 7.3, instalador (`instalar /dev/sdX`: GPT, FAT e ext2, copia
+da raiz e da particao EFI, `BLKRRPART` no kernel; criterio: instalar no QEMU,
+tirar a ISO e bootar do disco), depois 7.4 (so o possivel sem PC de verdade,
+marcada `[!]`), 7.5 e a Fase 8. Versao 2.4.0-a32 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
