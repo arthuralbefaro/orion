@@ -251,7 +251,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 7.4 | Hardware real | [ ] | | | |
 | 7.5 | Pacotes | [ ] | | | |
 | 8.1 | Fila por CPU e nice | [ ] | | | |
-| 8.2 | Kernel preemptivo (comeco: contador de travas de spin por thread, na 5.7 parte 4) | [ ] | | | |
+| 8.2 | Kernel preemptivo (comeco: contador de travas de spin por thread, na 5.7 parte 4; falta: troca adiada marca `need_resched` e o `spin_unlock`, ao zerar o `spin_count` com interrupcoes ligadas e a flag marcada, chama o escalonador na hora; ver "Requisitos da 8.2") | [ ] | | | |
 | 8.3 | Fuzzer de syscalls | [ ] | | | |
 | 8.4 | OOM | [ ] | | | |
 | 8.5 | Perfilador | [ ] | | | |
