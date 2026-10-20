@@ -37,7 +37,7 @@ barra de tarefas e lancador. Mais 8.7, 7.1 e 7.2, e o comeco da 8.2 (contador
 de travas de spin por thread). Contexto de interrupcao vigiado (aviso e, na
 regressao, panico). Fase 7: 7.1 a 7.3 feitas (ISO, live, instalador); 7.4
 `[!]`, aguardando teste do usuario em hardware real, roteiro em
-docs/teste-hardware-real.md. Versao 3.0.0-a2. O
+docs/teste-hardware-real.md. 7.5 feita (pacotes). Versao 3.0.0-a3. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
@@ -48,11 +48,9 @@ hub na H, com audio na S e com troca de video na G (BGA) e na W
 (virtio-gpu), com 646 verificacoes em ~20 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 7.5, pacotes (formato tar com manifesto, `pkg install`
-baixando por HTTP de um repositorio estatico; criterio: `pkg install lua`
-num sistema recem-instalado), depois a regressao completa do fim da Fase 7
-e a Fase 8. A 7.4 volta quando o dono mandar o resultado do teste. Versao
-3.0.0-a3 em diante.
+Proxima etapa: regressao completa do fim da Fase 7 (7.1 a 7.5) e tag,
+depois a Fase 8. A 7.4 volta quando o dono mandar o resultado do
+teste. Versao 3.0.0-a3 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -266,7 +264,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 7.2 | Live | [x] | 09:44 | 10:13 | ver `git log` |
 | 7.3 | Instalador | [x] | 12:44 | 12:58 | `eb5abed` |
 | 7.4 | Hardware real | [!] | 13:00 | 13:08 | aguardando teste do usuario em hardware real, roteiro em docs/teste-hardware-real.md |
-| 7.5 | Pacotes | [ ] | | | |
+| 7.5 | Pacotes | [x] | 13:10 | 13:30 | |
 | 8.1 | Fila por CPU e nice | [ ] | | | |
 | 8.2 | Kernel preemptivo (comeco: contador de travas de spin por thread, na 5.7 parte 4; falta: troca adiada marca `need_resched` e o `spin_unlock`, ao zerar o `spin_count` com interrupcoes ligadas e a flag marcada, chama o escalonador na hora; ver "Requisitos da 8.2") | [ ] | | | |
 | 8.3 | Fuzzer de syscalls | [ ] | | | |
@@ -1935,6 +1933,24 @@ verificado na rodada da 7.3. Versao 3.0.0-a2. RAM livre antes: 3,4 GB.
 A 7.4 fica `[!]` com a nota "aguardando teste do usuario em hardware real,
 roteiro em docs/teste-hardware-real.md" e volta quando o dono mandar o
 resultado.
+
+#### 7.5 Pacotes - 13:10 a 13:30 - FEITO
+Pacote e um `.tar` ustar com `MANIFEST` na frente; o repositorio e estatico
+(`INDEX` + `.tar`), gerado por `tools/mkrepo.py` a partir do `out/esp` e
+servido pelo `tools/hostweb.py` em `/repo` (o hostweb gera ao subir). O
+`pkg` (novo; `update`, `install`, `remove`, `list`, `disponiveis`) baixa
+pelo `wget`, confere tamanho e SHA-256, recusa caminho absoluto ou com
+`..`, grava por `rename` e registra os arquivos em `/var/lib/pkg`.
+Teste na sequencia I, no sistema recem-instalado no NVMe, depois do
+segundo reboot: tira o `/bin/lua` (o `lua` deixa de rodar), `pkg update`,
+`pkg disponiveis`, `pkg install lua` e o `lua` roda (`42 Lua 5.4`) com o
+modo 0755 do pacote, `pkg list`, `pkg install quebrado` recusado pela soma
+e sem deixar arquivo, usuario comum nao remove, `pkg remove lua` e o `lua`
+some. Primeira rodada: 2 falhas, as duas do teste (o `sh` do Orion nao
+trata aspas: `lua -e "..."` e `su -c '...'` chegavam partidos); trocado
+por argumento sem espaco e por um script do `dash`. Segunda: 29
+verificacoes, verde, 4,5 min. `check.ps1` limpo. Versao 3.0.0-a3. RAM livre
+antes: 3,3 GB e 2,9 GB.
 
 ### Sessao 2 - 2026-10-17
 

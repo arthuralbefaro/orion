@@ -1008,10 +1008,16 @@ if ($runAll -or $OnlyI) {
         "cmd:mount", "cmd:ls /boot/efi/boot", "cmd:hello instalado", "cmd:ls -l /etc/shadow /bin/su /home",
         "cmd:echo persiste-no-disco > /root/nota.txt", "cmd:sync", "wait:2",
         "reboot:uefi,nenhuma",
-        "cmd:cat /root/nota.txt", "cmd:lsblk", "wait:1"
+        "cmd:cat /root/nota.txt", "cmd:lsblk", "wait:1",
+        "cmd:rm /bin/lua", "cmd:lua -v", "cmd:pkg update", "until:30:pkg: ", "cmd:pkg disponiveis",
+        "cmd:pkg install lua", "until:60:pkg: ", "cmd:lua -e print(6*7,_VERSION)", "cmd:ls -l /bin/lua", "cmd:pkg list",
+        "cmd:pkg install quebrado", "until:30:pkg: ", "cmd:ls /bin/quebrado",
+        "cmd:echo su orion -c 'pkg remove lua' > /tmp/rmlua.sh", "cmd:dash /tmp/rmlua.sh", "cmd:pkg remove lua", "cmd:lua -v", "cmd:pkg list", "cmd:ls /var/lib/pkg/installed", "wait:1"
     )
+    $web = Start-HostWeb 8088
     & (Join-Path $Root "test.ps1") -Smp $Smp -Iso -NoBuild -ExtraNvme "out/inst.img" -LogPath "out\reg-i.log" `
         -Script $stepsI -CommandDelay 1.5 -BootTimeout 90 -NoPrint | Out-Null
+    Stop-Process -Id $web.Id -Force -ErrorAction SilentlyContinue
     $ins = Get-Log "out\reg-i.log"
     if ($Verbose) { Write-Output $ins }
 
@@ -1029,6 +1035,19 @@ if ($runAll -or $OnlyI) {
     Expect $ins "-rw-------\s+1\s+root\s+root[^\n]*/etc/shadow" "o /etc/shadow instalado continua 0600 de root"
     Expect $ins "-rwsr-xr-x\s+1\s+root\s+root[^\n]*/bin/su" "o su instalado continua setuid root"
     Expect $ins "cat /root/nota\.txt\s*\npersiste-no-disco" "o que foi gravado no disco instalado sobrevive ao reboot"
+    Expect $ins "lua -v\s*\nsh: lua: " "sem o /bin/lua o lua nao roda"
+    Expect $ins "pkg: indice atualizado de http://10\.0\.2\.2:8088/repo, 3 pacote\(s\)" "pkg update baixa o indice do repositorio"
+    Expect $ins "lua\s+5\.4\.9\s+-\s+Interpretador da linguagem Lua" "pkg disponiveis lista o lua ainda nao instalado"
+    Expect $ins "pkg: lua 5\.4\.9 instalado \(1 arquivo\(s\), 358400 bytes, sha256 [0-9a-f]{16}" "pkg install lua baixa, confere a SHA-256 e instala"
+    Expect $ins "_VERSION\)\s*\n42\s+Lua 5\.4" "o lua instalado pelo pkg roda"
+    Expect $ins "-rwxr-xr-x\s+1\s+root\s+root[^\n]*/bin/lua" "o arquivo instalado sai com o modo do pacote"
+    Expect $ins "pkg list\s*\nlua\s+5\.4\.9\s+instalado" "pkg list mostra o lua instalado"
+    Expect $ins "pkg: quebrado-1\.0\.tar: a soma SHA-256 \(ou o tamanho\) nao confere com o indice; nada foi instalado" "pacote com a soma errada e recusado"
+    Expect $ins "ls /bin/quebrado\s*\n[^\n]*quebrado: " "o pacote recusado nao deixa arquivo"
+    Expect $ins "pkg: so o root instala ou remove pacotes" "usuario comum nao remove pacote"
+    Expect $ins "pkg: lua removido \(1 arquivo\(s\)\)" "pkg remove lua"
+    Expect $ins "(?s)pkg: lua removido.*?lua -v\s*\nsh: lua: " "depois do pkg remove o lua some"
+    Expect $ins "(?s)pkg: lua removido.*?pkg list\s*\npkg: nenhum pacote instalado" "pkg list vazio depois da remocao"
     ExpectNot $ins "instalar: [^\n]*(falhou|erros|nao releu|nao apareceram)" "nenhum erro no instalador"
     ExpectNot $ins "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico na sequencia I"
 }

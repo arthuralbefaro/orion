@@ -3637,3 +3637,34 @@ O que mudou na 5.7 e por que:
   nomear. Uma particao e reconhecida pelo nome (para `sdX`/`vdX`, digito no
   fim; para NVMe, um `p` depois do `n`) antes de qualquer outra checagem,
   inclusive para uma particao que ainda nao existe.
+
+## v3.0.0-a3 (etapa 7.5: pacotes)
+
+- Formato: um `.tar` ustar por pacote, com `MANIFEST` como primeiro membro
+  (`nome`, `versao`, `descricao` e uma linha `arquivo <caminho> <modo>
+  <sha256>` por arquivo) e os arquivos com caminho relativo a `/`. Tar porque
+  o hospedeiro ja gera com a biblioteca padrao do Python e o formato e
+  trivial de ler em C, sem compressao (os pacotes de teste tem poucas
+  centenas de KiB e o Orion ainda nao tem zlib no espaco de usuario).
+- Repositorio estatico: um diretorio servido por HTTP com `INDEX` (uma linha
+  por pacote: nome, versao, arquivo, tamanho, SHA-256 do `.tar`, descricao)
+  e os `.tar`. `tools/mkrepo.py` gera a partir do `out/esp`, e o
+  `tools/hostweb.py` chama o mesmo gerador ao subir, em `out/http/repo`, para
+  as duas regressoes (PowerShell e Python) terem o repositorio sem passo a
+  mais. O repositorio de teste tem `quebrado`, com a soma errada no indice,
+  para provar a recusa.
+- `pkg` baixa pelo `wget` que ja existe (sem um segundo cliente HTTP), confere
+  tamanho e SHA-256 contra o indice antes de abrir o tar (SHA-256 em C no
+  proprio `pkg`), recusa caminho absoluto ou com `..`, grava cada arquivo
+  como `<destino>.pkg-novo` e troca por `rename`, para um pacote pela metade
+  nao deixar um programa truncado no lugar do antigo. Os arquivos instalados
+  ficam listados em `/var/lib/pkg/installed/<nome>`, que e o que o `remove`
+  apaga. O repositorio vem de `/etc/pkg.conf` (`repo <url>`), com
+  `http://10.0.2.2:8088/repo` (o hospedeiro no QEMU) quando nao ha arquivo.
+- So o root instala e remove (checagem no `pkg`; o kernel tambem nega a
+  escrita em `/bin` para os outros). Sem dependencias entre pacotes, sem
+  assinatura (a SHA-256 vem do mesmo servidor que o pacote: protege contra
+  download corrompido, nao contra servidor malicioso; assinatura fica para
+  depois da Fase 8).
+- O `sh` do Orion nao trata aspas; nos testes, comando com espaco dentro de
+  argumento vai por um script do `dash`.

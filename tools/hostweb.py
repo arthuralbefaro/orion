@@ -60,6 +60,12 @@ def main():
     ap.add_argument('--dir', default=os.path.join(ROOT, 'out', 'http'))
     a = ap.parse_args()
     crc = prepare(a.dir)
+    esp = os.path.join(ROOT, 'out', 'esp')
+    if os.path.exists(os.path.join(esp, 'bin', 'lua')):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import mkrepo
+        n = mkrepo.make_repo(esp, os.path.join(a.dir, 'repo'))
+        sys.stderr.write('hostweb: repositorio de pacotes com %d pacote(s) em %s\n' % (n, os.path.join(a.dir, 'repo')))
     handler = functools.partial(Quiet, directory=a.dir)
     srv = http.server.ThreadingHTTPServer(('127.0.0.1', a.port), handler)
     sys.stderr.write('hostweb: servindo %s em 127.0.0.1:%d (big.bin crc32 %08x)\n' % (a.dir, a.port, crc))
