@@ -34,6 +34,15 @@ struct percpu {
     const char *nmi_bug_what;
     uint64_t nmi_bug_caller;
     uint64_t preempt_deferred;
+    struct thread *rq_head;
+    struct thread *rq_tail;
+    uint32_t nr_ready;
+    uint64_t rq_load;
+    uint64_t min_vruntime;
+    uint64_t migrations;
+    uint64_t steals;
+    uint64_t balance_moves;
+    uint64_t resched_ipis;
 };
 
 void percpu_init_bsp(uint32_t lapic_id);

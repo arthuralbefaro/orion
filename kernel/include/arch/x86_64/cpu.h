@@ -58,6 +58,7 @@ static inline void io_wait(void)
 static inline void cli(void) { __asm__ volatile("cli" ::: "memory"); }
 static inline void sti(void) { __asm__ volatile("sti" ::: "memory"); }
 static inline void hlt(void) { __asm__ volatile("hlt" ::: "memory"); }
+static inline void sti_hlt(void) { __asm__ volatile("sti; hlt" ::: "memory"); }
 static inline void pause(void) { __asm__ volatile("pause" ::: "memory"); }
 
 static inline uint64_t read_rflags(void)

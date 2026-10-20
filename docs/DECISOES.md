@@ -3668,3 +3668,76 @@ O que mudou na 5.7 e por que:
   depois da Fase 8).
 - O `sh` do Orion nao trata aspas; nos testes, comando com espaco dentro de
   argumento vai por um script do `dash`.
+
+## v3.0.0-a4 (etapa 8.1: fila de prontos por CPU e nice)
+
+- Cada CPU tem a sua fila de prontos (`rq_head`, `nr_ready`, `rq_load` com a
+  soma dos pesos, `min_vruntime` no `struct percpu`). A trava continua uma so
+  (`runq_lock`), porque as filas de espera (`wait.c`), os sinais e a criacao
+  de threads usam a mesma trava para mudar o estado de uma thread e po-la na
+  fila sem janela; dividir a trava por CPU e um passo separado, que exige
+  rever essas regras, e fica para depois da 8.2. A fila por CPU ja da o que a
+  8.1 pede: afinidade de cache, balanceamento e prioridade.
+- Escolha da proxima thread pelo menor tempo virtual (`vruntime`), como o CFS
+  do Linux: a thread que roda ganha `delta * 1024 / peso` microssegundos de
+  tempo virtual, com a tabela de pesos do Linux (nice 0 = 1024, nice 10 =
+  110, um passo de nice vale ~1,25x). Nice 0 contra nice 10 na mesma CPU da
+  ~9:1 de tempo de CPU. A fila e uma lista simples percorrida inteira (poucas
+  threads por CPU; uma arvore so se a medicao pedir). Comparacoes de tempo
+  virtual com diferenca com sinal, para nao quebrar se o contador der a
+  volta.
+- Thread que acorda: tempo virtual = max(o dela, minimo da fila menos uma
+  fatia de 10 ms), para nao monopolizar a CPU depois de dormir. Thread nova
+  entra no minimo da fila de destino. Migracao entre CPUs (acordar em outra
+  CPU, roubo, balanceamento, afinidade nova) normaliza o tempo virtual:
+  `vr - minimo da origem + minimo do destino`.
+- CPU de destino de uma thread que fica pronta: a CPU onde ela rodou por
+  ultimo se estiver livre (ociosa e com a fila vazia); senao qualquer CPU
+  livre permitida pela afinidade; senao a de menor carga (pesos na fila mais
+  o peso da que roda), empate para a ultima CPU dela. Se a CPU de destino e
+  outra, a IPI nova `VECTOR_IPI_RESCHED` (0xF3) avisa na hora quando ela esta
+  ociosa ou quando a thread que acordou tem tempo virtual mais de 1 ms abaixo
+  da que roda la.
+- CPU com a fila vazia rouba uma thread da fila mais cheia (nunca a que esta
+  rodando, sempre respeitando a afinidade). Balanceamento de tempos em
+  tempos: a cada 4 ticks em cada CPU (escalonados pela CPU), a CPU compara a
+  sua carga com a da mais carregada e puxa uma thread da fila dela so se o
+  peso da thread for menor que a diferenca, isto e, se a troca diminui o
+  desequilibrio (diferenca maior que o peso de uma thread). Assim duas
+  threads de nice 0 numa CPU contra uma de nice 0 em outra nao ficam
+  trocando de lugar.
+- CPU ociosa: o laco ocioso (agora `sched_idle`, usado pela idle0 e pelas
+  APs) desliga as interrupcoes, confere `need_resched` e a fila e so entao faz
+  `sti; hlt` na mesma instrucao dupla (a `sti` so liga as interrupcoes depois
+  da instrucao seguinte), para a IPI de "tem trabalho" nao se perder entre a
+  conferencia e o `hlt`.
+- A thread `main` do kernel, que le teclado e serial para o shell do kernel e
+  o tty, fazia `hlt` em laco sem dormir: para o escalonador ela era uma
+  thread de nice 0 sempre pronta e tomava meia CPU das outras (apareceu no
+  `nicetest` como 1,5 s de CPU perdidos em 12). Agora ela dorme 2 ms quando
+  nao ha entrada (`thread_sleep_ms(2)`); o teclado e a serial continuam
+  conferidos a cada 2 ms. Trabalho futuro (8.8): dormir numa fila de espera
+  acordada pela IRQ do teclado e da serial, sem acordar a cada 2 ms.
+- `setpriority`/`getpriority`: so `PRIO_PROCESS` e aceito; `PRIO_PGRP` e
+  `PRIO_USER` dao `EINVAL`. O nice vale por processo (POSIX), nao por thread
+  como no Linux: `setpriority(PRIO_PROCESS, pid, n)` muda todas as threads do
+  processo, e as threads e os processos novos herdam o nice de quem os cria.
+  `who` 0 e o processo atual; pid inexistente da `ESRCH`. Quem nao e root so
+  mexe em processo com o mesmo uid ou euid (senao `EPERM`) e so sobe o nice
+  (baixar da `EACCES`; nao ha `RLIMIT_NICE`). `getpriority` devolve `20 -
+  nice`, como a syscall do Linux (a musl converte). O nice aparece no campo
+  19 do `/proc/<pid>/stat`.
+- `sched_setaffinity`/`sched_getaffinity` valem para a thread que chama (pid
+  0, o pid do processo ou o tid dela); outro pid da `ESRCH`. A mascara e
+  cortada pelas CPUs ligadas; vazia da `EINVAL`. Se a CPU atual sai da
+  mascara, a thread troca de CPU antes de voltar da syscall. Threads de
+  processo herdam a afinidade de quem as cria; threads do kernel comecam com
+  todas as CPUs. `getcpu` (309) novo, para o `sched_getcpu` da musl.
+- `/proc/sched`: por CPU, tamanho da fila, carga, se esta ocupada, trocas,
+  migracoes, roubos, balanceamentos e IPIs de "tem trabalho".
+- Teste: `nicetest` mede pelo tempo de CPU de cada processo
+  (`CLOCK_THREAD_CPUTIME_ID`), com uma largada comum por pipe: nice 0 contra
+  nice 10 presos na CPU 1 por 4 s (aceito de 5:1 a 15:1), 2N threads iguais
+  em N CPUs por 3 s (cada uma com pelo menos 35% e o total com 85%), N de
+  nice 0 e N de nice 10 soltas por 4 s (razao de 5:1 a 15:1 e o pior nice 0
+  com 60%), afinidade e permissoes. Sequencia nova P na regressao.

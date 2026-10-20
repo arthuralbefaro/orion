@@ -8,6 +8,8 @@
 #define SCHED_TIME_SLICE  10
 #define THREAD_STACK_CANARY 0x4F52494F4E535450ull
 #define THREAD_PINS 40
+#define NICE_MIN (-20)
+#define NICE_MAX 19
 
 enum thread_state {
     THREAD_READY,
@@ -68,6 +70,10 @@ struct thread {
     struct thread *next;
     struct thread *all_next;
     uint32_t spin_count;
+    int      nice;
+    uint64_t vruntime;
+    bool     vr_fresh;
+    uint64_t allowed;
 };
 
 void sched_init(void);
@@ -99,5 +105,26 @@ bool sched_make_ready(struct thread *t);
 uint64_t sched_deadline(uint64_t ms);
 void sched_tick(uint64_t now_ticks, bool user);
 void sched_check_preempt(void);
+
+struct sched_cpu_stat {
+    uint32_t cpu;
+    uint32_t nr_ready;
+    uint64_t load;
+    uint64_t min_vruntime;
+    uint64_t context_switches;
+    uint64_t migrations;
+    uint64_t steals;
+    uint64_t balance_moves;
+    uint64_t resched_ipis;
+    bool busy;
+};
+
+NORETURN void sched_idle(void);
+uint64_t sched_online_mask(void);
+long sched_set_affinity(struct thread *t, uint64_t mask);
+uint64_t sched_get_affinity(struct thread *t);
+void sched_set_nice(struct thread *t, int nice);
+bool sched_cpu_stat(uint32_t index, struct sched_cpu_stat *out);
+uint32_t sched_weight(int nice);
 
 void sched_dump(void);

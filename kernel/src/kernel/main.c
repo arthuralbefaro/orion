@@ -200,7 +200,7 @@ void kmain(void)
             else
                 tty_input((char)c);
         } else if (irqs_ok) {
-            hlt();
+            thread_sleep_ms(2);
         } else {
             pause();
         }

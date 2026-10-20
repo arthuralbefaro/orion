@@ -48,10 +48,11 @@ hub na H, com audio na S e com troca de video na G (BGA) e na W
 (virtio-gpu), com 646 verificacoes em ~20 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 8.1, fila de prontos por CPU e nice (ver "Requisitos da
-8.1"). Fase 7 fechada com a tag `v3.0-rc1`; a tag `v3.0` (marco M5) so
+Proxima etapa: 8.2, kernel preemptivo (ver "Requisitos da 8.2": o
+`spin_unlock` chama o escalonador na hora ao zerar o contador com a troca
+adiada). Fase 7 fechada com a tag `v3.0-rc1`; a tag `v3.0` (marco M5) so
 depois que o dono testar em hardware real e a 7.4 fechar (decisao do
-dono, 2026-10-20). Versao 3.0.0-a3 em diante.
+dono, 2026-10-20). Versao 3.0.0-a4 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -81,7 +82,9 @@ notebook, que vem caindo com tela azul):
   (`-OnlyX`): rede ou programas de texto -> A; grafico, framebuffer ou Doom
   -> B; disco, ext2 ou armazenamento -> C; `wm` ou apps -> D; travas,
   processos, threads ou sinais -> E; ISO ou boot -> F; virtio -> V; NVMe -> N;
-  USB -> U. Na duvida, inclui a sequencia. A etapa recebe o `[x]` com isso.
+  USB -> U; audio -> S; video BGA -> G; virtio-gpu -> W; hub USB -> H;
+  instalador ou pacotes -> I; escalonador, nice ou afinidade -> P. Na duvida,
+  inclui a sequencia. A etapa recebe o `[x]` com isso.
 - Regressao completa so no fim de cada FASE (fim da Fase 5, fim da 7.3 e da
   7.5, antes de cada tag) e em parte que mexe no nucleo do kernel
   (interrupcoes, memoria, escalonador, preempcao, travas, syscalls de uso
@@ -293,13 +296,14 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 7.3 | Instalador | [x] | 12:44 | 12:58 | `eb5abed` |
 | 7.4 | Hardware real | [!] | 13:00 | 13:08 | aguardando teste do usuario em hardware real, roteiro em docs/teste-hardware-real.md |
 | 7.5 | Pacotes | [x] | 13:10 | 13:30 | |
-| 8.1 | Fila por CPU e nice | [ ] | | | |
+| 8.1 | Fila por CPU e nice | [x] | 14:05 | 15:10 | |
 | 8.2 | Kernel preemptivo (comeco: contador de travas de spin por thread, na 5.7 parte 4; falta: troca adiada marca `need_resched` e o `spin_unlock`, ao zerar o `spin_count` com interrupcoes ligadas e a flag marcada, chama o escalonador na hora; ver "Requisitos da 8.2") | [ ] | | | |
 | 8.3 | Fuzzer de syscalls | [ ] | | | |
 | 8.4 | OOM | [ ] | | | |
 | 8.5 | Perfilador | [ ] | | | |
 | 8.6 | Pilhas do kernel medidas | [ ] | | | |
 | 8.7 | memcpy/memset/memmove do kernel em assembly (rep movsb/stosb) | [x] | 20:05 | 22:00 | `9ad91e7` |
+| 8.8 | Thread main do kernel dorme numa fila de espera acordada pela IRQ do teclado/serial (hoje acorda a cada 2 ms; anotado pelo dono na 8.1) | [ ] | | | |
 
 ## Diario
 
@@ -1986,6 +1990,31 @@ min (eram 646 em ~20 min no fim da Fase 5; a mais: as sequencias I e F
 cresceram com o instalador em NVMe e os pacotes). RAM livre antes: 2,9 GB.
 Tag `v3.0-rc1`, nao `v3.0`: a 7.4 continua `[!]` aguardando o teste do dono
 em hardware real, e a `v3.0` (marco M5) so vem quando ela fechar.
+
+#### 8.1 Fila de prontos por CPU e nice - 14:05 a 15:10 - FEITO
+Requisitos 1 a 6 da 8.1 (logo abaixo das regras). Fila de prontos por CPU
+(ainda sob a `runq_lock` unica), escolha pelo menor tempo virtual com os
+pesos do nice do Linux, piso de uma fatia para quem acorda, thread nova no
+minimo da fila, normalizacao na migracao, CPU de destino livre ou menos
+carregada, roubo pela CPU com a fila vazia, balanceamento a cada 4 ticks so
+quando diminui o desequilibrio, IPI nova de "tem trabalho" (0xF3), laco
+ocioso `cli`/confere/`sti; hlt` tambem nas APs. `setpriority`/`getpriority`
+(so `PRIO_PROCESS`, por processo), `sched_setaffinity` de verdade,
+`getcpu`, `/proc/sched`, nice no `/proc/<pid>/stat`, programas `nice` e
+`nicetest`, sequencia nova P. Resolve tambem o pendente antigo "o
+escalonador nao acorda CPU ociosa quando entra trabalho". Detalhes:
+`docs/DECISOES.md`, v3.0.0-a4.
+Achado do `nicetest` na primeira rodada (espalha e mistura falharam, 1,5 s
+de CPU sumidos em 12): a thread `main` do kernel fazia `hlt` em laco sem
+dormir e o escalonador a via como uma thread de nice 0 sempre pronta; agora
+dorme 2 ms sem entrada. Trabalho futuro anotado pelo dono como 8.8: dormir
+numa fila de espera acordada pela IRQ do teclado e da serial.
+`nicetest` 5 vezes seguidas, todas verdes: fixa 8,7 a 9,3:1, mistura 9,5 a
+9,9:1, espalha com o pior em 1462 de 1500 ms. Sequencia P: 15 verificacoes,
+verde. Mexe no escalonador: regressao completa, 690 verificacoes, verde,
+28,7 min, RAM livre antes 3,7 GB. Versao 3.0.0-a4 trocada depois da
+regressao; nenhuma verificacao confere o texto da versao, entao so
+`check.ps1` e build depois da troca.
 
 ### Sessao 2 - 2026-10-17
 

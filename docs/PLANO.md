@@ -173,6 +173,7 @@ Fecha o que ficou aberto e tira os riscos que derrubam o kernel hoje.
 | 8.5 | Perfilador por amostragem (NMI do timer guarda RIPs; `perf` mostra as funcoes mais quentes) | M |
 | 8.6 | Pilhas do kernel de 16 KiB medidas com o canario; trocar para 32 KiB se alguma passar de 75% | P |
 | 8.7 | `memcpy`, `memset` e `memmove` do kernel em assembly com `rep movsb`/`rep stosb` | P |
+| 8.8 | A thread `main` do kernel (entrada do teclado e da serial para o tty e o shell do kernel) dorme numa fila de espera acordada pela IRQ do teclado e da serial, em vez de acordar a cada 2 ms para olhar a entrada (anotado pelo dono na 8.1) | P |
 
 ---
 

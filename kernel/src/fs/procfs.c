@@ -33,6 +33,7 @@ enum pkind {
     P_SYSSTAT,
     P_INTERRUPTS,
     P_USB,
+    P_SCHED,
     P_PIDDIR = 16,
     P_STATUS,
     P_CMDLINE,
@@ -52,6 +53,7 @@ static const struct pent root_ents[] = {
     { "mounts", P_MOUNTS },   { "loadavg", P_LOADAVG }, { "version", P_VERSION },
     { "diskstats", P_DISKSTATS }, { "stat", P_SYSSTAT },
     { "interrupts", P_INTERRUPTS }, { "usb", P_USB },
+    { "sched", P_SCHED },
 };
 
 static const struct pent pid_ents[] = {
@@ -459,6 +461,19 @@ static void gen_interrupts(struct pbuf *b)
     }
 }
 
+static void gen_sched(struct pbuf *b)
+{
+    pb_printf(b, "cpu  fila  carga  ocupada  trocas  migracoes  roubos  balanceamentos  ipis\n");
+    for (uint32_t i = 0; i < MAX_CPUS; i++) {
+        struct sched_cpu_stat st;
+        if (!sched_cpu_stat(i, &st))
+            continue;
+        pb_printf(b, "%3u  %4u  %5lu  %7s  %6lu  %9lu  %6lu  %14lu  %4lu\n", st.cpu, st.nr_ready, st.load,
+                  st.busy ? "sim" : "nao", st.context_switches, st.migrations, st.steals, st.balance_moves,
+                  st.resched_ipis);
+    }
+}
+
 static void gen_usb(struct pbuf *b)
 {
     char *tmp = kmalloc(8192);
@@ -514,9 +529,14 @@ static void gen_stat(struct pbuf *b, struct process *p)
 {
     struct cpu_times self, kids;
     process_cpu_times(p, &self, &kids);
-    pb_printf(b, "%u (%s) %c %u %u 0 0 -1 0 0 0 0 0 %lu %lu %lu %lu 20 0 %u 0 0 %lu %lu\n", p->pid, p->name,
+    int nice = 0;
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    if (p->threads)
+        nice = p->threads->nice;
+    spin_unlock_irqrestore(&p->tlock, flags);
+    pb_printf(b, "%u (%s) %c %u %u 0 0 -1 0 0 0 0 0 %lu %lu %lu %lu %d %d %u 0 0 %lu %lu\n", p->pid, p->name,
               state_char(p), process_ppid(p), p->pgid, self.utime / 10000, self.stime / 10000,
-              kids.utime / 10000, kids.stime / 10000, p->live_threads, vm_bytes(p), p->pages);
+              kids.utime / 10000, kids.stime / 10000, 20 + nice, nice, p->live_threads, vm_bytes(p), p->pages);
 }
 
 static void gen_cmdline(struct pbuf *b, struct process *p)
@@ -638,6 +658,7 @@ static int proc_open(struct vnode *v, int flags, struct file **out)
     case P_SYSSTAT: gen_sysstat(&b); break;
     case P_INTERRUPTS: gen_interrupts(&b); break;
     case P_USB: gen_usb(&b); break;
+    case P_SCHED: gen_sched(&b); break;
     case P_STATUS:  gen_status(&b, p); break;
     case P_STAT:    gen_stat(&b, p); break;
     case P_CMDLINE: gen_cmdline(&b, p); break;

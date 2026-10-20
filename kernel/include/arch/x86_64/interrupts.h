@@ -13,6 +13,7 @@
 #define VECTOR_IPI_HALT       0xF0
 #define VECTOR_IPI_TLB        0xF1
 #define VECTOR_IPI_TLB_SYNC   0xF2
+#define VECTOR_IPI_RESCHED    0xF3
 #define VECTOR_SPURIOUS       0xFF
 
 #define EXC_DIVIDE_ERROR      0

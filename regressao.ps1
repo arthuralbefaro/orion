@@ -15,6 +15,7 @@ param(
     [switch]$OnlyW,
     [switch]$OnlyH,
     [switch]$OnlyI,
+    [switch]$OnlyP,
     [switch]$SlowWaits,
     [int]$StressRuns = 1,
     [switch]$Verbose
@@ -26,7 +27,7 @@ $failures = @()
 $checks = 0
 if ($SlowWaits) { $env:ORION_SLOW_WAITS = "1" } else { Remove-Item Env:ORION_SLOW_WAITS -ErrorAction SilentlyContinue }
 $regStart = Get-Date
-$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG -or $OnlyW -or $OnlyH -or $OnlyI)
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG -or $OnlyW -or $OnlyH -or $OnlyI -or $OnlyP)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -1347,6 +1348,35 @@ if ($runAll -or $OnlyH) {
     ExpectNot $hub "usb\s+porta \d+(\.\d+)*: (Enable|Address|descritor|o hub nao)" "nenhuma porta falhou na enumeracao"
     ExpectNot $hub "BUG: [^\n]*dentro de interrupcao" "nenhum aviso de contexto de interrupcao com hub"
     ExpectNot $hub "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico na sequencia H"
+}
+
+# ---------------- Sequencia P: escalonador ----------------
+if ($runAll -or $OnlyP) {
+    Write-Host "== Sequencia P (escalonador: fila por CPU, nice, afinidade) ==" -ForegroundColor Cyan
+    $stepsP = @(
+        "cmd:nicetest", "until:120:nicetest: fim",
+        "cmd:nice -n 5 nice", "cmd:nice -n -3 nice", "cmd:su orion -c nice", "cmd:cat /proc/sched", "wait:1"
+    )
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -LogPath "out\reg-p.log" `
+        -Script $stepsP -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
+    $pl = Get-Log "out\reg-p.log"
+    if ($Verbose) { Write-Output $pl }
+
+    Expect $pl "sched\s+escalonador ativo: fila por CPU, fatia de 10 ms, nice -20\.\.19" "escalonador com fila por CPU e nice"
+    Expect $pl "nicetest: 4 CPU\(s\)" "nicetest ve as 4 CPUs"
+    Expect $pl "nicetest: fixa na CPU 1: [^\n]*razao [^\n]*ok" "nice 0 contra nice 10 na mesma CPU: razao entre 5:1 e 15:1 pelo tempo de CPU"
+    Expect $pl "nicetest: espalha: [^\n]*ok" "threads iguais se espalham pelas CPUs e dividem o tempo"
+    Expect $pl "nicetest: mistura: [^\n]*ok" "mistura de nice 0 e 10 sem afinidade: cada grupo recebe a sua parte"
+    Expect $pl "nicetest: afinidade: sched_setaffinity [^\n]*saiu dela 0 vez\(es\)\s+ok" "sched_setaffinity tira a thread da CPU na hora e ela fica"
+    Expect $pl "nicetest: afinidade: mascara vazia da EINVAL[^\n]*ok" "mascara de afinidade vazia da EINVAL"
+    Expect $pl "nicetest: permissoes: [^\n]*ok" "permissoes do setpriority (EACCES, EPERM, EINVAL, ESRCH)"
+    Expect $pl "nicetest: TUDO OK" "nicetest TUDO OK"
+    Expect $pl "nice -n 5 nice\s*\n5\s*\n" "nice -n 5 roda o comando com nice 5"
+    Expect $pl "nice -n -3 nice\s*\n-3\s*\n" "o root pode baixar o nice"
+    Expect $pl "su orion -c nice\s*\n0\s*\n" "nice sem comando mostra o nice atual (0 para outro usuario)"
+    Expect $pl "cpu  fila  carga  ocupada  trocas  migracoes  roubos  balanceamentos  ipis\s*\n(\s*\d+\s+\d+\s+\d+\s+(sim|nao)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s*\n){4}" "/proc/sched mostra as 4 filas"
+    ExpectNot $pl "nicetest: [^\n]*FALHOU" "nenhuma falha no nicetest"
+    ExpectNot $pl "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|BUG: " "nenhum panico nem BUG na sequencia P"
 }
 
 # ---------------- Sequencia E: estresse de processos ----------------

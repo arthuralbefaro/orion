@@ -7,6 +7,7 @@
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/gdt.h>
 #include <arch/x86_64/interrupts.h>
+#include <arch/x86_64/percpu.h>
 #include <arch/x86_64/protect.h>
 #include <mm/vmm.h>
 #include <mm/pmm.h>
@@ -1882,17 +1883,120 @@ static long sys_uname(struct user_utsname *uout)
     return copy_to_user(uout, &u, sizeof(u));
 }
 
+static struct thread *affinity_target(int pid)
+{
+    if (pid == 0 || pid == (int)process_current()->pid || (uint32_t)pid == thread_current()->tid)
+        return thread_current();
+    return NULL;
+}
+
 static long sys_sched_getaffinity(int pid, uint64_t size, void *umask)
 {
-    if (pid != 0 && pid != (int)process_current()->pid)
+    struct thread *t = affinity_target(pid);
+    if (!t)
         return -ESRCH;
     if (size < sizeof(uint64_t))
         return -EINVAL;
-    uint32_t n = smp_cpu_count();
-    uint64_t mask = n >= 64 ? ~0ull : ((1ull << n) - 1);
+    uint64_t mask = sched_get_affinity(t);
     if (copy_to_user(umask, &mask, sizeof(mask)) < 0)
         return -EFAULT;
     return sizeof(mask);
+}
+
+static long sys_sched_setaffinity(int pid, uint64_t size, const void *umask)
+{
+    struct thread *t = affinity_target(pid);
+    if (!t)
+        return -ESRCH;
+    if (size == 0)
+        return -EINVAL;
+    uint64_t mask = 0;
+    if (copy_from_user(&mask, umask, size < sizeof(mask) ? size : sizeof(mask)) < 0)
+        return -EFAULT;
+    return sched_set_affinity(t, mask);
+}
+
+static long sys_getcpu(uint32_t *ucpu, uint32_t *unode, void *cache)
+{
+    (void)cache;
+    uint64_t flags = irq_save();
+    uint32_t cpu = percpu_cpu_id();
+    irq_restore(flags);
+    uint32_t node = 0;
+    if (ucpu && copy_to_user(ucpu, &cpu, sizeof(cpu)) < 0)
+        return -EFAULT;
+    if (unode && copy_to_user(unode, &node, sizeof(node)) < 0)
+        return -EFAULT;
+    return 0;
+}
+
+#define PRIO_PROCESS 0
+
+static struct process *prio_target(int which, int who, long *err)
+{
+    if (which != PRIO_PROCESS) {
+        *err = -EINVAL;
+        return NULL;
+    }
+    struct process *p = process_get(who == 0 ? process_current()->pid : (uint32_t)who);
+    if (!p || p->state == PROC_ZOMBIE) {
+        if (p)
+            process_put(p);
+        *err = -ESRCH;
+        return NULL;
+    }
+    return p;
+}
+
+static int process_nice(struct process *p)
+{
+    int nice = 0;
+    uint64_t flags = spin_lock_irqsave(&p->tlock);
+    if (p->threads)
+        nice = p->threads->nice;
+    spin_unlock_irqrestore(&p->tlock, flags);
+    return nice;
+}
+
+static long sys_getpriority(int which, int who)
+{
+    long err = 0;
+    struct process *p = prio_target(which, who, &err);
+    if (!p)
+        return err;
+    int nice = process_nice(p);
+    process_put(p);
+    return 20 - nice;
+}
+
+static long sys_setpriority(int which, int who, int prio)
+{
+    long err = 0;
+    struct process *p = prio_target(which, who, &err);
+    if (!p)
+        return err;
+    if (prio < NICE_MIN)
+        prio = NICE_MIN;
+    if (prio > NICE_MAX)
+        prio = NICE_MAX;
+    struct cred me;
+    cred_get(&me);
+    uint64_t cf = spin_lock_irqsave(&p->cred_lock);
+    uint32_t uid = p->cred.uid, euid = p->cred.euid;
+    spin_unlock_irqrestore(&p->cred_lock, cf);
+    long ret = 0;
+    if (me.euid != 0 && me.euid != uid && me.euid != euid)
+        ret = -EPERM;
+    else if (me.euid != 0 && prio < process_nice(p))
+        ret = -EACCES;
+    if (ret == 0) {
+        uint64_t flags = spin_lock_irqsave(&p->tlock);
+        for (struct thread *t = p->threads; t; t = t->proc_next)
+            sched_set_nice(t, prio);
+        spin_unlock_irqrestore(&p->tlock, flags);
+    }
+    process_put(p);
+    return ret;
 }
 
 static long sys_pause(void)
@@ -2119,6 +2223,10 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_FUTEX:       ret = futex_syscall((uint32_t *)f->rdi, (int)f->rsi, (uint32_t)f->rdx, f->r10,
                                           (uint32_t *)f->r8, (uint32_t)f->r9); break;
     case SYS_SCHED_GETAFFINITY: ret = sys_sched_getaffinity((int)f->rdi, f->rsi, (void *)f->rdx); break;
+    case SYS_SCHED_SETAFFINITY: ret = sys_sched_setaffinity((int)f->rdi, f->rsi, (const void *)f->rdx); break;
+    case SYS_GETCPU: ret = sys_getcpu((uint32_t *)f->rdi, (uint32_t *)f->rsi, (void *)f->rdx); break;
+    case SYS_GETPRIORITY: ret = sys_getpriority((int)f->rdi, (int)f->rsi); break;
+    case SYS_SETPRIORITY: ret = sys_setpriority((int)f->rdi, (int)f->rsi, (int)f->rdx); break;
     case SYS_SIGALTSTACK: ret = sys_sigaltstack((const struct user_stack_t *)f->rdi, (struct user_stack_t *)f->rsi); break;
     case SYS_RT_SIGRETURN: ret = signal_sigreturn(f); full_restore = true; break;
     case SYS_ALARM:       ret = process_alarm(f->rdi); break;

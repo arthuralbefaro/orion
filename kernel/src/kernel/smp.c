@@ -78,10 +78,7 @@ static void ap_entry(struct limine_mp_info *info)
 
     __atomic_fetch_add(&aps_online, 1, __ATOMIC_SEQ_CST);
 
-    for (;;) {
-        sti();
-        hlt();
-    }
+    sched_idle();
 }
 
 void smp_init(void)
