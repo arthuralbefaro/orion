@@ -3590,3 +3590,39 @@ O que mudou na 5.7 e por que:
   na porta do hub. O hub do QEMU e full speed, entao o caminho de TT so foi
   feito pela especificacao e fica para a 7.4 (teclado atras de hub de
   verdade).
+
+## v3.0.0-a1 (etapa 7.3: instalador)
+
+- A Fase 7 e a v3.0 do plano: a serie 2.4 fechou com a tag `v2.4` (Fases 5
+  e 6), e daqui em diante a versao e 3.0.0-aNN e os commits usam `v3.0:`.
+- `instalar /dev/sdX [--sim]` (programa novo, roda no sistema live da ISO):
+  sem `--sim`, pede "SIM" antes de apagar o disco; recusa particao, disco
+  com menos de 256 MiB e sistema sem a carga do instalador. Escreve a GPT
+  inteira (MBR protetor, cabecalho e 128 entradas com CRC32, copia de reserva
+  das entradas e do cabecalho no fim do disco), com a particao EFI de 64 MiB
+  a partir do setor 2048 e a raiz no resto, com o tipo "raiz Linux x86-64"
+  que o kernel ja usa para achar a raiz. GUIDs aleatorios pelo
+  `/dev/urandom`.
+- `BLKRRPART` (ioctl no `/dev/sdX`, novo no kernel): rele a tabela de
+  particoes sem reboot. As particoes antigas saem como "removidas e
+  liberadas" (o mecanismo da 5.7) e as novas entram em entradas novas da
+  tabela de discos; se alguma particao do disco estiver em uso (montada ou
+  aberta), EBUSY.
+- Formatacao pelos programas que ja existiam (`mkfs` na particao EFI,
+  `mkfs.ext2 -L orion-raiz` na raiz) e copia em C: a particao EFI recebe
+  BOOTX64.EFI, o kernel e o `limine.conf` de disco, que viajam no initramfs
+  da ISO em `/usr/lib/instalar/esp` (o live nao enxerga a ISO em si); a raiz
+  recebe o sistema live inteiro, preservando modo (setuid incluso), dono,
+  grupo e links simbolicos, e pulando o conteudo de tudo que esta montado
+  por cima (`/proc`, `/dev`, `/tmp`, `/run`, `/mnt`), cujos diretorios sao
+  criados vazios com o modo certo (`/tmp` 1777, `/proc` 0555).
+- So UEFI: o disco instalado boota pelo caminho de midia removivel
+  (`EFI/BOOT/BOOTX64.EFI`), entao nao precisa de entrada no NVRAM. Boot BIOS
+  do disco instalado (MBR do Limine e `limine-bios.sys` no disco) ficou de
+  fora; a ISO continua bootando em BIOS.
+- Teste (sequencia I, nova): a ISO boota com um disco de 512 MiB em branco,
+  o instalador recusa sem "SIM", instala com `--sim` (~400 arquivos, ~60 MiB,
+  uns 4 a 5 min no QEMU), a maquina reinicia sem a ISO (meio de boot
+  "nenhuma", novo no `reboot:` dos dois harnesses) e boota do disco: raiz
+  ext2 do sda2, particao EFI em /boot/efi, login, programas rodando,
+  `/etc/shadow` 0600 e `su` setuid; o que e gravado sobrevive a outro reboot.

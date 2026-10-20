@@ -58,5 +58,6 @@ struct blockdev *blockdev_find(const char *name);
 struct blockdev *blockdev_at(uint32_t index);
 uint32_t blockdev_count(void);
 void blockdev_scan_partitions(struct blockdev *disk);
+int blockdev_rescan(struct blockdev *disk);
 void blockdev_dump(void);
 void blockdev_cache_stats(uint64_t *hits, uint64_t *misses, uint64_t *writes, uint32_t *dirty);

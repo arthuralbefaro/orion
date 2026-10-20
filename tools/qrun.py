@@ -178,6 +178,7 @@ class Machine:
                 "virtio": ["-drive", "if=none,id=d0,format=raw,file=out/orion.img", "-device", "virtio-blk-pci,drive=d0"],
                 "nvme": ["-drive", "if=none,id=d0,format=raw,file=out/orion.img", "-device", "nvme,drive=d0,serial=orion0"],
             }.get(self.bus, ["-drive", "format=raw,file=out/orion.img"]),
+            "nenhuma": [],
         }.get(self.media, ["-drive", "format=raw,file=fat:rw:out/esp"])
         args += [
             "-display", "none",
@@ -457,7 +458,7 @@ class Machine:
             for opt in filter(None, (o.strip() for o in arg.split(","))):
                 if opt in ("bios", "uefi"):
                     self.bios = opt == "bios"
-                elif opt in ("cd", "isodisk", "image", "esp"):
+                elif opt in ("cd", "isodisk", "image", "esp", "nenhuma"):
                     self.media = opt
                 else:
                     print(f"  reboot: opcao desconhecida {opt}")

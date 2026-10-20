@@ -134,6 +134,7 @@ function Get-QemuArgs {
             elseif ($Bus -eq "nvme") { $a += @("-drive", "if=none,id=d0,format=raw,file=out/orion.img", "-device", "nvme,drive=d0,serial=orion0") }
             else { $a += @("-drive", "format=raw,file=out/orion.img") }
         }
+        "nenhuma" { }
         default   { $a += @("-drive", "format=raw,file=fat:rw:out/esp") }
     }
     $a += @("-display", "none",
@@ -561,6 +562,7 @@ try {
                         "isodisk" { $bootMedia = "isodisk" }
                         "image"   { $bootMedia = "image" }
                         "esp"     { $bootMedia = "esp" }
+                        "nenhuma" { $bootMedia = "nenhuma" }
                         ""        { }
                         default   { Write-Host "  reboot: opcao desconhecida $opt" -ForegroundColor Yellow }
                     }

@@ -48,6 +48,9 @@ def main():
     ap.add_argument('--esp', required=True)
     a = ap.parse_args()
     root = mkimage.root_tree(a.esp)
+    for rel in ('EFI/BOOT/BOOTX64.EFI', 'boot/orion.elf', 'boot/limine/limine.conf'):
+        with open(os.path.join(a.esp, *rel.split('/')), 'rb') as fh:
+            mkext2.add_path(root, '/usr/lib/instalar/esp/' + rel, mkext2.Node('file', 0o644, fh.read()))
     out = bytearray()
     counter = [1]
     entry(out, 1, '.', S_IFDIR | 0o755, 0, 0, 2, b'')

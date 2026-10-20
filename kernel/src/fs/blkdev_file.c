@@ -64,6 +64,16 @@ static int64_t blk_write(struct file *f, const void *buf, uint64_t len)
     return ret;
 }
 
+#define BLKRRPART 0x125F
+
+static long blk_ioctl(struct file *f, uint64_t request, uint64_t arg)
+{
+    (void)arg;
+    if (request == BLKRRPART)
+        return blockdev_rescan(f->priv);
+    return -EINVAL;
+}
+
 static void blk_close(struct file *f)
 {
     blockdev_put(f->priv);
@@ -73,6 +83,7 @@ static const struct file_ops blk_ops = {
     .read = blk_read,
     .write = blk_write,
     .close = blk_close,
+    .ioctl = blk_ioctl,
 };
 
 struct file *blkdev_file_open(struct blockdev *dev)

@@ -82,6 +82,8 @@ def parse_sequences():
                                 for s in re.finditer(r'"(?:[^"`]|`.)*"|\'(?:[^\']|\'\')*\'|\S+', mk.group(1))])
         seq["remove_disk"] = bool(re.search(r'Remove-Item \(Join-Path \$Root "out\\disk\.img"\)', body))
         seq["remove"] = re.findall(r'Remove-Item \(Join-Path \$Root "out\\(stick\d*\.img)"\)', body)
+        seq["blank"] = [(b.group(1).replace("\\", "/"), int(b.group(2)))
+                        for b in re.finditer(r'^\s*New-BlankImage "([^"]+)" (\d+)\s*$', body, flags=re.M)]
         seq["hostfat"] = re.findall(r'tools\\mkfat\.py"\) le (\S+) (\S+)', body)
         seq["hostwav"] = re.findall(r'tools\\wavcheck\.py"\) (\S+) (.+)$', body, flags=re.M)
         seq["remove"] += re.findall(r'Remove-Item \(Join-Path \$Root "out\\(audio\.wav)"\)', body)
@@ -222,7 +224,7 @@ def run_stress(seq, rep, runs, smp, image=False):
 
 def main():
     ap = argparse.ArgumentParser(description="Regressao do Orion (le os passos do regressao.ps1)")
-    ap.add_argument("which", nargs="?", default="ABCDFVNUSGWHE", help="sequencias, ex.: ABCDFVNUSGWHE ou AC")
+    ap.add_argument("which", nargs="?", default="ABCDFIVNUSGWHE", help="sequencias, ex.: ABCDFIVNUSGWHE ou AC")
     ap.add_argument("--smp", type=int, default=4)
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--stress-runs", type=int, default=1)
@@ -253,6 +255,9 @@ def main():
             (ROOT / "out" / "disk.img").unlink(missing_ok=True)
         for name in seq["remove"]:
             (ROOT / "out" / name).unlink(missing_ok=True)
+        for rel, mib in seq["blank"]:
+            with open(ROOT / rel, "wb") as fh:
+                fh.truncate(mib * 1024 * 1024)
         if seq["prep"] and not built:
             qrun.build(False, image)
             built = True

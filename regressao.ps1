@@ -14,6 +14,7 @@ param(
     [switch]$OnlyG,
     [switch]$OnlyW,
     [switch]$OnlyH,
+    [switch]$OnlyI,
     [switch]$SlowWaits,
     [int]$StressRuns = 1,
     [switch]$Verbose
@@ -25,7 +26,7 @@ $failures = @()
 $checks = 0
 if ($SlowWaits) { $env:ORION_SLOW_WAITS = "1" } else { Remove-Item Env:ORION_SLOW_WAITS -ErrorAction SilentlyContinue }
 $regStart = Get-Date
-$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG -or $OnlyW -or $OnlyH)
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG -or $OnlyW -or $OnlyH -or $OnlyI)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -68,6 +69,14 @@ function Test-MemDelta([string]$log, [string]$what, [int]$max) {
         Write-Host ("  [FALHA] " + $what + " ($a -> $b, delta $d > $max)") -ForegroundColor Red
         $script:failures += $what
     }
+}
+
+function New-BlankImage([string]$path, [int]$mib) {
+    $full = Join-Path $Root $path
+    Remove-Item $full -ErrorAction SilentlyContinue
+    $fs = [System.IO.File]::Create($full)
+    $fs.SetLength([int64]$mib * 1MB)
+    $fs.Close()
 }
 
 function Start-HostWeb([int]$port) {
@@ -983,6 +992,44 @@ if ($runAll -or $OnlyF) {
     Expect $f '----- reboot bios,isodisk -----(?:(?!----- reboot)[\s\S])*?entrando no estado S5(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "poweroff pelo ACPI no BIOS"
     Expect $f '----- reboot uefi,isodisk -----(?:(?!----- reboot)[\s\S])*?reiniciando pelo registrador de reset do FADT(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "reboot pelo ACPI no UEFI a partir do live"
     ExpectNot $f "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico nos quatro boots da ISO"
+}
+
+# ---------------- Sequencia I: instalador ----------------
+if ($runAll -or $OnlyI) {
+    Write-Host "== Sequencia I (instalador: ISO live -> disco -> boot do disco) ==" -ForegroundColor Cyan
+    if (-not $NoBuild -or -not (Test-Path (Join-Path $Root "out\orion.iso"))) {
+        & (Join-Path $Root "build.ps1") -Iso | Out-Null
+    }
+    New-BlankImage "out\inst.img" 512
+    $stepsI = @(
+        "cmd:instalar /dev/sda", "until:10:Digite SIM", "raw:nao", "key:0D", "until:10:cancelado",
+        "cmd:instalar /dev/sda --sim", "until:600:instalar: tire a ISO", "wait:2",
+        "reboot:uefi,nenhuma",
+        "cmd:mount", "cmd:ls /boot/efi/boot", "cmd:hello instalado", "cmd:ls -l /etc/shadow /bin/su /home",
+        "cmd:echo persiste-no-disco > /root/nota.txt", "cmd:sync", "wait:2",
+        "reboot:uefi,nenhuma",
+        "cmd:cat /root/nota.txt", "cmd:lsblk", "wait:1"
+    )
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Iso -NoBuild -ExtraDisks @("out/inst.img") -LogPath "out\reg-i.log" `
+        -Script $stepsI -CommandDelay 1.5 -BootTimeout 90 -NoPrint | Out-Null
+    $ins = Get-Log "out\reg-i.log"
+    if ($Verbose) { Write-Output $ins }
+
+    Expect $ins "instalar /dev/sda\s*\nIsto apaga TODO o disco /dev/sda \(512 MiB\)\. Digite SIM para continuar: [^\n]*\n[^\n]*instalar: cancelado" "sem SIM o instalador nao mexe no disco"
+    Expect $ins "instalar: /dev/sda, 512 MiB: GPT com particao EFI de 64 MiB e raiz ext2 no resto" "instalador escreve a GPT"
+    Expect $ins "block\s+sda: relendo a tabela de particoes" "BLKRRPART: o kernel rele as particoes sem reboot"
+    Expect $ins "instalar: particoes /dev/sda1 e /dev/sda2 criadas; formatando" "as particoes novas aparecem no /dev"
+    Expect $ins "mkfs: /dev/sda1, \d+ setores" "particao EFI formatada em FAT"
+    Expect $ins "instalar: pronto: \d{3,} arquivo\(s\), \d+ diretorio\(s\), \d+ link\(s\), \d+ MiB copiados" "sistema copiado para o disco"
+    Expect $ins "(?s)----- reboot uefi,nenhuma -----.*?raiz montada: ext2 em sda2" "sem a ISO, o firmware boota o disco instalado e a raiz e a ext2 do sda2"
+    Expect $ins "(?s)----- reboot uefi,nenhuma -----.*?particao EFI sda1 montada em /boot/efi" "a particao EFI instalada e montada em /boot/efi"
+    Expect $ins "(?s)----- reboot uefi,nenhuma -----.*?login: root\s*Senha: \s*Bem-vindo, root\." "login no sistema instalado"
+    Expect $ins "argv\[0\] = hello\s*\n\s*argv\[1\] = instalado" "programas do sistema instalado rodam"
+    Expect $ins "-rw-------\s+1\s+root\s+root[^\n]*/etc/shadow" "o /etc/shadow instalado continua 0600 de root"
+    Expect $ins "-rwsr-xr-x\s+1\s+root\s+root[^\n]*/bin/su" "o su instalado continua setuid root"
+    Expect $ins "cat /root/nota\.txt\s*\npersiste-no-disco" "o que foi gravado no disco instalado sobrevive ao reboot"
+    ExpectNot $ins "instalar: [^\n]*(falhou|erros|nao releu|nao apareceram)" "nenhum erro no instalador"
+    ExpectNot $ins "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico na sequencia I"
 }
 
 # ---------------- Sequencia V: virtio ----------------

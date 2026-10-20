@@ -3,6 +3,7 @@
 #include <kernel/sched.h>
 #include <kernel/mutex.h>
 #include <kernel/spinlock.h>
+#include <kernel/syscall.h>
 #include <mm/heap.h>
 #include <lib/string.h>
 #include <lib/crc32.h>
@@ -499,6 +500,31 @@ static void scan_gpt(struct blockdev *disk)
                  count * disk->sector_size / MiB(1), kind_name(p->part_kind));
     }
     kfree(ents);
+}
+
+int blockdev_rescan(struct blockdev *disk)
+{
+    if (disk->parent)
+        return -EINVAL;
+    uint64_t flags = spin_lock_irqsave(&reg_lock);
+    for (uint32_t i = 0; i < device_count; i++) {
+        if (devices[i].parent == disk && !devices[i].released && devices[i].refs) {
+            spin_unlock_irqrestore(&reg_lock, flags);
+            return -EBUSY;
+        }
+    }
+    uint32_t dropped = 0;
+    for (uint32_t i = 0; i < device_count; i++) {
+        if (devices[i].parent == disk && !devices[i].released) {
+            devices[i].gone = true;
+            devices[i].released = true;
+            dropped++;
+        }
+    }
+    spin_unlock_irqrestore(&reg_lock, flags);
+    log_info("block", "%s: relendo a tabela de particoes (%u particao(oes) antiga(s) fora)", disk->name, dropped);
+    blockdev_scan_partitions(disk);
+    return 0;
 }
 
 void blockdev_scan_partitions(struct blockdev *disk)

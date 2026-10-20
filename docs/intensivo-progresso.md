@@ -46,10 +46,10 @@ hub na H, com audio na S e com troca de video na G (BGA) e na W
 (virtio-gpu), com 646 verificacoes em ~20 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 7.3, instalador (`instalar /dev/sdX`: GPT, FAT e ext2, copia
-da raiz e da particao EFI, `BLKRRPART` no kernel; criterio: instalar no QEMU,
-tirar a ISO e bootar do disco), depois 7.4 (so o possivel sem PC de verdade,
-marcada `[!]`), 7.5 e a Fase 8. Versao 2.4.0-a32 em diante.
+Proxima etapa: 7.4, hardware real (so o possivel sem PC de verdade: ISO
+conferida no QEMU em UEFI e BIOS, roteiro completo no
+`docs/teste-hardware-real.md`, marcada `[!]`), depois 7.5 (pacotes) e a
+regressao completa do fim da Fase 7, e a Fase 8. Versao 3.0.0-a2 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -261,7 +261,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 6.7 | Area de trabalho | [x] | 03:05 | 04:20 | ver `git log` (2 partes) |
 | 7.1 | ISO hibrida | [x] | 06:26 | 09:44 | ver `git log` |
 | 7.2 | Live | [x] | 09:44 | 10:13 | ver `git log` |
-| 7.3 | Instalador | [ ] | | | |
+| 7.3 | Instalador | [x] | 12:44 | 12:58 | (7.3) |
 | 7.4 | Hardware real | [ ] | | | |
 | 7.5 | Pacotes | [ ] | | | |
 | 8.1 | Fila por CPU e nice | [ ] | | | |
@@ -1897,6 +1897,19 @@ Regressao completa (criterio novo: fim de fase): 646 verificacoes, 0 falhas,
 20,1 min, com as sequencias novas S (audio), G (Bochs/BGA), W (virtio-gpu) e
 H (hub USB). RAM livre antes: 4,2 GB. Tag `v2.4` (Fases 5 e 6; as duas foram
 feitas como 2.4.0-aNN).
+
+#### 7.3 Instalador - 12:44 a 12:58 - FEITO
+`instalar /dev/sdX` (novo): GPT com ESP de 64 MiB e raiz ext2, `BLKRRPART`
+(novo no kernel) para o kernel reler as particoes, `mkfs` e `mkfs.ext2`,
+copia da carga da particao EFI (que agora viaja no initramfs da ISO) e do
+sistema live preservando modo, dono e links. So UEFI. Meio de boot
+"nenhuma" no `reboot:` dos harnesses; `New-BlankImage` na regressao (e no
+`regress.py`). A partir daqui a versao e 3.0.0-aNN (Fase 7 = v3.0) e os
+commits usam `v3.0:`. Detalhes: `docs/DECISOES.md`, v3.0.0-a1.
+Verificacao: sequencias I (nova, 15 verificacoes), C (67) e F (22), verdes:
+instala no QEMU (396 arquivos, 61 MiB), tira a ISO, boota do disco com
+login, permissoes e persistencia. Versao 3.0.0-a1. RAM livre antes: 1,7 GB
+depois do build da ISO; esperados 2 min, 2,0 GB.
 
 ### Sessao 2 - 2026-10-17
 
