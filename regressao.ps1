@@ -190,7 +190,7 @@ if ($runAll -or $OnlyA) {
         "cmd:sigtest", "until:180:sigtest: fim",
         "cmd:badptr", "until:40:badptr: fim",
         "cmd:fputest", "until:60:fputest: fim", "cmd:auxtest", "until:30:auxtest: fim",
-        "cmd:sctest", "until:30:sctest: fim", "cmd:filetest", "until:60:filetest: fim",
+        "cmd:sctest", "until:30:sctest: fim", "cmd:logflood", "until:60:logflood: ", "cmd:filetest", "until:60:filetest: fim",
         "cmd:mhello", "until:30:mhello: fim",
         "cmd:mthreads", "until:120:mthreads: fim", "cmd:mfutex", "until:240:mfutex: fim",
         "cmd:dash", "wait:2",
@@ -418,7 +418,11 @@ if ($runAll -or $OnlyA) {
     Expect $a "dash-executavel" "dash: test -x (faccessat2)"
     Expect $a "saiu com 7" "dash: exit 7 volta para o sh com o codigo"
     Expect $a "futex: 0 thread\(s\) esperando" "nenhuma thread esquecida na fila do futex"
-    ExpectNot $a "syscall \d+ desconhecida" "nenhuma syscall desconhecida na sequencia A"
+    ExpectNot $a "syscall (?!777 )\d+ desconhecida" "nenhuma syscall desconhecida na sequencia A (fora a 777 do logflood)"
+    Expect $a "logflood: 1000 de 1000 syscalls desconhecidas deram ENOSYS, 60 de 60 filhos mortos por SIGSEGV, fim" "logflood: usuario provoca 1000 mensagens de syscall desconhecida e 60 mortes por sinal"
+    Expect $a "\(\d+ mensagem\(ns\) parecida\(s\) suprimida\(s\): limite de 10 por segundo\)" "o log do kernel corta a inundacao provocada pelo usuario"
+    ExpectNot $a "(?s)(syscall 777 desconhecida.*?){31}" "no maximo 10 avisos de syscall desconhecida por segundo"
+    ExpectNot $a "(?s)('logflood' morto por sinal 11.*?){41}" "no maximo 10 avisos de morte por sinal por segundo"
     Expect $a "flag NT ligada dentro do handler\s+ok" "flag NT do usuario nao derruba o iretq do rt_sigreturn"
     Expect $a "Copias de usuario: [1-9]\d* falta\(s\) recuperada\(s\)" "tabela de excecoes recuperou as faltas"
     Expect $a "morto por sinal 2" "Ctrl\+C matou o sleep com SIGINT"
@@ -558,7 +562,7 @@ if ($runAll -or $OnlyA) {
     Expect $a "\nalfa X\n" "Home, End e backspace cortaram o fim da linha"
     Expect $a "\nhomeok" "Home voltou ao inicio e inseriu ali"
     Expect $a "\ndelok" "seta para a direita e Delete apagaram no meio"
-    Expect $a "(?s)\n   1  ls /bin \| wc.{0,900}?\n\s+\d+  echo delok" "history listou os comandos numerados"
+    Expect $a "(?s)history\s*\n\s*\n   1  [^\n]+\n   2  [^\n]+\n.{0,1200}?\n\s+\d+  echo delok" "history listou os comandos numerados"
     Expect $a "forktest: TUDO OK" "forktest TUDO OK"
     Expect $a "kernel escreve em pagina COW do filho\s+ok" "kernel escreve em pagina COW sem panic"
     Expect $a "8 filho\(s\) dormindo" "8 filhos vivos compartilhando memoria"

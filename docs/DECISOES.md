@@ -3776,3 +3776,22 @@ O que mudou na 5.7 e por que:
   ponto do kernel precisa hoje; o padrao "ponteiro da CPU e depois o campo"
   foi auditado na 5.7 parte 4 e usa `irq_save` ou uma leitura relativa ao
   GS) e dividir a `runq_lock` por CPU (ver v3.0.0-a4).
+
+## v3.0.0-a5, achado do fuzzer 1: usuario comum inundava o log do kernel
+
+- Defeito: cada syscall desconhecida, cada morte por sinal, cada falha de
+  pagina de usuario, quadro ou pilha de sinal invalidos e cada ELF invalido
+  saiam no log do kernel, uma linha por evento, na serial sincrona. O fuzzer
+  (60 s) gerou milhares de linhas e levou 216 s para terminar: um usuario
+  comum podia ocupar o console e atrasar o sistema inteiro.
+- Correcao: `klog_limited` e os macros `log_warn_limited`/`log_error_limited`
+  com uma janela de 1 s por ponto de chamada (estado estatico no proprio
+  macro, atualizado com operacoes atomicas, sem trava): no maximo 10 linhas
+  por segundo em cada ponto; ao abrir a janela seguinte sai uma linha "(N
+  mensagem(ns) parecida(s) suprimida(s): limite de 10 por segundo)". Se a
+  inundacao para, a contagem das suprimidas so aparece na proxima mensagem
+  daquele ponto. Mensagens do kernel que o usuario nao provoca continuam sem
+  limite.
+- Teste que reproduz: `logflood` (novo) faz 1000 syscalls desconhecidas e 60
+  filhos morrerem por SIGSEGV; a sequencia A confere a linha de supressao e
+  que nao passaram de 30 e 40 linhas (a janela pode virar no meio).

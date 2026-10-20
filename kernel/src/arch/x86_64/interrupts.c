@@ -317,7 +317,7 @@ static void handle_exception(struct interrupt_frame *f)
         struct process *p = process_current();
         int sig = f->int_no == EXC_DIVIDE_ERROR ? SIGFPE
                 : f->int_no == EXC_INVALID_OPCODE ? SIGILL : SIGSEGV;
-        log_error("proc", "pid %u '%s': %s em RIP=%016lx (err=%lx, CR2=%016lx) -> %s",
+        log_error_limited("proc", "pid %u '%s': %s em RIP=%016lx (err=%lx, CR2=%016lx) -> %s",
                   p->pid, p->name, exception_name((uint8_t)f->int_no), f->rip, f->err_code,
                   cr2, signal_name(sig));
         uint64_t action = SIGACT(p, sig)->sa_handler;

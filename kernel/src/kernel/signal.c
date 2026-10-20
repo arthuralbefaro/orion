@@ -412,13 +412,13 @@ static bool deliver(struct process *p, struct thread *self, struct interrupt_fra
         if (action == SIG_DFL) {
             if (default_ignores(sig))
                 continue;
-            log_error("proc", "pid %u '%s' morto por sinal %d (%s)", p->pid, p->name, sig,
+            log_error_limited("proc", "pid %u '%s' morto por sinal %d (%s)", p->pid, p->name, sig,
                       signal_name(sig));
             process_exit_signal(sig);
         }
         restart_for_handler(f, &sa);
         if (!push_sigframe(f, sig, &sa, &src)) {
-            log_error("proc", "pid %u '%s': pilha invalida para o sinal %d", p->pid, p->name, sig);
+            log_error_limited("proc", "pid %u '%s': pilha invalida para o sinal %d", p->pid, p->name, sig);
             process_exit_signal(SIGSEGV);
         }
         if (sa.sa_flags & SA_RESETHAND) {
@@ -470,7 +470,7 @@ void signal_check(struct interrupt_frame *f)
         restart_without_handler(f);
     }
     if (!user_code_addr(f->rip) || !user_code_addr(f->rsp)) {
-        log_error("proc", "pid %u '%s': volta ao usuario com RIP=%016lx RSP=%016lx invalidos", p->pid, p->name,
+        log_error_limited("proc", "pid %u '%s': volta ao usuario com RIP=%016lx RSP=%016lx invalidos", p->pid, p->name,
                   f->rip, f->rsp);
         sti();
         process_exit_signal(SIGSEGV);
@@ -593,7 +593,7 @@ long signal_sigreturn(struct interrupt_frame *f)
     if (copy_from_user(&sf, (const void *)sp, sizeof(sf)) < 0 || !user_code_addr(mc->rip) ||
         !user_code_addr(mc->rsp) || (mc->fpstate & 15) ||
         copy_from_user(fpu, (const void *)mc->fpstate, sizeof(fpu)) < 0) {
-        log_error("proc", "pid %u '%s': quadro de sinal invalido em %016lx", p->pid, p->name, sp);
+        log_error_limited("proc", "pid %u '%s': quadro de sinal invalido em %016lx", p->pid, p->name, sp);
         process_exit_signal(SIGSEGV);
     }
 

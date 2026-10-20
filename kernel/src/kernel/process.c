@@ -565,7 +565,7 @@ struct process *process_create_elf(const char *name, const void *image, size_t s
         return NULL;
     const char *argv[] = { name, NULL };
     if (!setup_image(p, p->pml4_phys, image, size, argv, NULL, name)) {
-        log_error("proc", "'%s': ELF invalido", name);
+        log_error_limited("proc", "'%s': ELF invalido", name);
         vmm_destroy_address_space(p->pml4_phys);
         process_free(p);
         return NULL;

@@ -3,6 +3,7 @@
 #include <drivers/console.h>
 #include <kernel/smp.h>
 #include <arch/x86_64/interrupts.h>
+#include <kernel/time.h>
 
 static const char *level_tag[] = {
     [LOG_DEBUG] = "dbg ",
@@ -18,7 +19,7 @@ static uint32_t level_color[] = {
     [LOG_ERROR] = COLOR_RED,
 };
 
-void klog(enum log_level level, const char *subsystem, const char *fmt, ...)
+void kvlog(enum log_level level, const char *subsystem, const char *fmt, va_list ap)
 {
     uint64_t flags;
     bool locked = kprint_lock(&flags);
@@ -31,13 +32,40 @@ void klog(enum log_level level, const char *subsystem, const char *fmt, ...)
     kprintf("%-8s ", subsystem);
     console_set_colors(fg, bg);
 
-    va_list ap;
-    va_start(ap, fmt);
     kvprintf(fmt, ap);
-    va_end(ap);
 
     kputc('\n');
     kprint_unlock(locked, flags);
+}
+
+void klog(enum log_level level, const char *subsystem, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    kvlog(level, subsystem, fmt, ap);
+    va_end(ap);
+}
+
+void klog_limited(struct log_limit *lim, enum log_level level, const char *subsystem, const char *fmt, ...)
+{
+    uint64_t sec = time_ticks() / 1000 + 1;
+    uint64_t w = __atomic_load_n(&lim->window, __ATOMIC_ACQUIRE);
+    uint32_t dropped = 0;
+    if (w != sec && __atomic_compare_exchange_n(&lim->window, &w, sec, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        dropped = __atomic_exchange_n(&lim->dropped, 0, __ATOMIC_ACQ_REL);
+        __atomic_store_n(&lim->count, 0, __ATOMIC_RELEASE);
+    }
+    if (__atomic_add_fetch(&lim->count, 1, __ATOMIC_ACQ_REL) > LOG_LIMIT_PER_SECOND) {
+        __atomic_add_fetch(&lim->dropped, 1, __ATOMIC_ACQ_REL);
+        return;
+    }
+    if (dropped)
+        klog(level, subsystem, "(%u mensagem(ns) parecida(s) suprimida(s): limite de %u por segundo)", dropped,
+             LOG_LIMIT_PER_SECOND);
+    va_list ap;
+    va_start(ap, fmt);
+    kvlog(level, subsystem, fmt, ap);
+    va_end(ap);
 }
 
 NORETURN void panic(const char *fmt, ...)
