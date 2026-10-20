@@ -48,9 +48,10 @@ hub na H, com audio na S e com troca de video na G (BGA) e na W
 (virtio-gpu), com 646 verificacoes em ~20 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: regressao completa do fim da Fase 7 (7.1 a 7.5) e tag,
-depois a Fase 8. A 7.4 volta quando o dono mandar o resultado do
-teste. Versao 3.0.0-a3 em diante.
+Proxima etapa: 8.1, fila de prontos por CPU e nice (ver "Requisitos da
+8.1"). Fase 7 fechada com a tag `v3.0-rc1`; a tag `v3.0` (marco M5) so
+depois que o dono testar em hardware real e a 7.4 fechar (decisao do
+dono, 2026-10-20). Versao 3.0.0-a3 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -173,6 +174,33 @@ comeco, o contador de travas de spin por thread, ja entrou na 5.7 parte 4):
    `spin_unlock`, ao zerar o `spin_count` com interrupcoes ligadas e a flag
    marcada, chama o escalonador na hora, em vez de esperar a proxima
    interrupcao.
+
+Requisitos da 8.1 (fila por CPU e nice), decididos pelo dono em 2026-10-20,
+sobre o desenho proposto (fila de prontos por CPU ainda sob a trava global,
+escolha pelo menor tempo virtual ponderado pelo nice, CPU de destino ociosa
+ou menos carregada, roubo de fila vazia, IPI de "tem trabalho",
+setpriority/getpriority, sched_setaffinity, programa `nice`, teste
+`nicetest` na sequencia E):
+1. Thread que acorda: tempo virtual = max(o dela, minimo da fila menos uma
+   fatia), para nao monopolizar a CPU depois de dormir. Thread nova entra no
+   minimo da fila.
+2. Migracao entre CPUs: normalizar o tempo virtual pelo minimo da fila de
+   origem e da de destino.
+3. Balanceamento de tempos em tempos (por exemplo a cada 4 ticks), nao a cada
+   tick, e so com desequilibrio maior que uma thread (ou que o peso de uma).
+   Nunca migrar a thread em execucao nem violar a afinidade.
+   `sched_setaffinity` tira a thread da CPU atual se ela nao estiver na
+   mascara nova; mascara vazia da `EINVAL`.
+4. CPU ociosa: conferir a fila e dormir de forma atomica (interrupcoes
+   desligadas, conferir, `sti; hlt`), para a IPI de "tem trabalho" nao se
+   perder.
+5. `nicetest`: medir pelo tempo de CPU de cada thread (nao pelo relogio),
+   rodar tempo suficiente e usar margem larga (aceitar de 5:1 a 15:1 para o
+   9:1). Rodar o `nicetest` 5 vezes seguidas antes de dar a parte como
+   pronta, para pegar oscilacao.
+6. setpriority/getpriority: o `DECISOES.md` diz quais `which` sao aceitos
+   (`PRIO_PROCESS` no minimo; os outros dao `EINVAL` ou sao implementados) e
+   se valem por thread ou por processo, como no Linux.
 
 Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 1. Verificacao pelo WAV do QEMU (`-audiodev wav`): o `play` toca um sinal
@@ -1951,6 +1979,13 @@ trata aspas: `lua -e "..."` e `su -c '...'` chegavam partidos); trocado
 por argumento sem espaco e por um script do `dash`. Segunda: 29
 verificacoes, verde, 4,5 min. `check.ps1` limpo. Versao 3.0.0-a3. RAM livre
 antes: 3,3 GB e 2,9 GB.
+
+#### Fim da Fase 7 - regressao completa - VERDE
+Regressao completa depois da 7.5 (`4b06377`): 675 verificacoes, verde, 28,3
+min (eram 646 em ~20 min no fim da Fase 5; a mais: as sequencias I e F
+cresceram com o instalador em NVMe e os pacotes). RAM livre antes: 2,9 GB.
+Tag `v3.0-rc1`, nao `v3.0`: a 7.4 continua `[!]` aguardando o teste do dono
+em hardware real, e a `v3.0` (marco M5) so vem quando ela fechar.
 
 ### Sessao 2 - 2026-10-17
 
