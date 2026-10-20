@@ -46,10 +46,9 @@ na ISO na F, no virtio (disco e rede) na V, no NVMe na N e com USB na U,
 com 585 verificacoes em ~18 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.8 parte 2, `/dev/dsp` no estilo OSS e o `play` (requisitos
-4 da 5.8 logo abaixo das regras), depois a parte 3 (Doom com efeitos
-sonoros), 5.9 e 5.10; a regressao completa volta no fim da Fase 5. Versao
-2.4.0-a27 em diante.
+Proxima etapa: 5.8 parte 3, Doom com efeitos sonoros (requisito 5 da 5.8
+logo abaixo das regras), depois 5.9 e 5.10; a regressao completa volta no
+fim da Fase 5. Versao 2.4.0-a28 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -1783,6 +1782,30 @@ Problemas: (1) o dreno parava o stream assim que o DMA chegava ao ultimo
 byte e o fim do som se perdia no FIFO (1,96 s em vez de 2 s); agora espera
 mais 60 ms de silencio. (2) O fim do dreno contava como falta de dado; nao
 conta mais.
+
+#### 5.8 parte 2 /dev/dsp e play - 11:06 a 11:21 - FEITO
+`drivers/dsp.c` (novo): `/dev/dsp` no estilo OSS (`SPEED`, `SETFMT`,
+`CHANNELS`, `STEREO`, `GETFMTS`, `GETBLKSIZE`, `GETOSPACE`, `SYNC`,
+`RESET`), conversao de taxa linear em ponto fixo para 48 kHz (ou 44,1 kHz
+quando o codec aceita exatamente essa taxa), mono para estereo e U8 para
+S16, `write` que dorme com a fila cheia, O_NONBLOCK com EAGAIN, um processo
+por vez (EBUSY; o devfs ganhou `open_error` por dispositivo) e `close` que
+drena e para o stream. `user/include/sys/soundcard.h` (novo, minimo).
+`play` (novo): WAV PCM, `--tom`, `--gravar`, `--nao-bloqueia`,
+`--teste-ocupado`. `wavcheck --segmentos N` separa os sons pelo silencio.
+Detalhes: `docs/DECISOES.md`, v2.4.0-a27.
+Verificacao: sequencias S (21 verificacoes, eram 14) e A (298, pelo devfs),
+verdes. Na S: EBUSY e o `open` de novo depois do `close`, tom de 22050 Hz
+gravado e tocado (convertido para 48 kHz, 2,00 s no WAV do QEMU), o mesmo
+WAV com O_NONBLOCK (EAGAIN e `GETOSPACE`), tres sons de 2 s a ~1 kHz, canal
+direito mudo, sem buraco, 0 falta de dado. Versao 2.4.0-a27. RAM livre
+antes: 4,2 GB (S) e 4,1 GB (A).
+Problemas: (1) o build trata inicializador de campo faltando como erro
+(`-Wmissing-field-initializers`); as entradas antigas do devfs ganharam o
+`NULL`. (2) O `write` do driver recebe buffer do kernel (o `sys_write` ja
+copiou), entao o `copy_from_user` dava EFAULT; virou `memcpy`. (3) Dois
+`play` seguidos deixam o silencio do dreno entre eles no WAV, que o
+`wavcheck` antigo via como buraco; ele passou a separar os sons.
 
 ### Sessao 2 - 2026-10-17
 

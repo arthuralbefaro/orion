@@ -562,6 +562,11 @@ static void poll_thread(void *arg)
     }
 }
 
+uint64_t hda_ring_bytes(void)
+{
+    return RING_BYTES;
+}
+
 bool hda_present(void)
 {
     return present;

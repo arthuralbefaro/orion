@@ -11,6 +11,7 @@ uint32_t hda_rates(void);
 int hda_start(uint32_t rate, uint32_t channels);
 int64_t hda_write(const void *buf, uint64_t len, bool nonblock);
 uint64_t hda_space(void);
+uint64_t hda_ring_bytes(void);
 void hda_stop(bool drain);
 size_t hda_report(char *buf, size_t cap);
 int hda_tone(uint32_t ms, uint32_t hz);

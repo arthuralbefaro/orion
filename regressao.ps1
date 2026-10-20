@@ -1123,15 +1123,17 @@ if ($runAll -or $OnlyS) {
     Write-Host "== Sequencia S (audio HDA, conferido pelo WAV do QEMU) ==" -ForegroundColor Cyan
     Remove-Item (Join-Path $Root "out\audio.wav") -ErrorAction SilentlyContinue
     $stepsS = @(
-        "key:0B", "cmd:hda", "cmd:hdatone 2000 1000", "until:15:hdatone:", "cmd:hda", "key:0B",
-        "cmd:cat /proc/interrupts", "wait:1"
+        "key:0B", "cmd:hda", "cmd:hdatone 2000 1000", "until:15:hdatone:", "key:0B",
+        "cmd:play --teste-ocupado", "cmd:play --tom 1000 2000 --taxa 22050 --gravar /tmp/t.wav", "wait:1",
+        "cmd:play /tmp/t.wav", "until:15:play: fim", "cmd:play /tmp/t.wav --nao-bloqueia", "until:15:play: fim",
+        "key:0B", "cmd:hda", "key:0B", "cmd:cat /proc/interrupts", "wait:1"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Audio -LogPath "out\reg-s.log" `
         -Script $stepsS -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $snd = Get-Log "out\reg-s.log"
     $py = & (Join-Path $Root "tools\python.ps1")
     $pyArgs = @($py | Select-Object -Skip 1)
-    $wav = & $py[0] @pyArgs (Join-Path $Root "tools\wavcheck.py") out/audio.wav --freq 1000 --dur 2
+    $wav = & $py[0] @pyArgs (Join-Path $Root "tools\wavcheck.py") out/audio.wav --freq 1000 --dur 2 --segmentos 3
     $snd += "`n----- hospedeiro: wavcheck -----`n" + ($wav -join "`n")
     if ($Verbose) { Write-Output $snd }
 
@@ -1143,10 +1145,17 @@ if ($runAll -or $OnlyS) {
     Expect $snd "(?s)cat /proc/interrupts.*?\n\s*\d+:(\s+\d+){4}\s+hda" "/proc/interrupts conta a MSI do HDA"
     ExpectNot $snd "(?s)cat /proc/interrupts.*?\n\s*\d+:\s+0\s+0\s+0\s+0\s+hda" "a MSI do HDA chegou de fato"
     Expect $snd "wavcheck: 48000 Hz, 2 canal\(is\), 16 bits" "WAV do QEMU em 48 kHz, estereo, 16 bits"
-    Expect $snd "wavcheck: som no canal esquerdo por [\d.]+ s \(esperado 2\.00 \+- 0\.10\): ok" "duracao do som na margem"
+    Expect $snd "play: segundo open: EBUSY; depois do close o open volta a funcionar: sim" "/dev/dsp e de um processo por vez (EBUSY) e volta depois do close"
+    Expect $snd "play: gravado /tmp/t\.wav, 22050 Hz, 2 canal\(is\), 16 bits, 176400 bytes" "play gera o tom conhecido e grava em WAV"
+    Expect $snd "(?s)play /tmp/t\.wav\s*\nplay: /tmp/t\.wav\s*\nplay: 22050 Hz, 2 canal\(is\), 16 bits, 2\.00 s\s*\nplay: fim, 176400 bytes" "play toca o WAV pelo /dev/dsp (SETFMT, CHANNELS, SPEED; 22050 Hz convertidos para 48 kHz), close drena"
+    Expect $snd "play: fim, 176400 bytes; \d+ espera\(s\) pelo GETOSPACE, [1-9]\d* EAGAIN" "O_NONBLOCK: write devolve EAGAIN com a fila cheia e o GETOSPACE diz quando cabe"
+    Expect $snd "wavcheck: 3 som\(ns\) separado\(s\) por silencio \(esperado 3\): ok" "tres sons no WAV: hdatone, play e play sem bloqueio"
+    Expect $snd "wavcheck: som 1 no canal esquerdo por [\d.]+ s \(esperado 2\.00 \+- 0\.10\): ok" "duracao do tom do kernel na margem"
+    Expect $snd "wavcheck: som 2 no canal esquerdo por [\d.]+ s \(esperado 2\.00 \+- 0\.10\): ok" "duracao do play na margem (conversao de taxa certa)"
+    Expect $snd "wavcheck: som 3 no canal esquerdo por [\d.]+ s \(esperado 2\.00 \+- 0\.10\): ok" "duracao do play sem bloqueio na margem"
     Expect $snd "wavcheck: frequencia \d+ Hz pelos cruzamentos de zero \(esperado 1000 \+- 20\): ok" "frequencia ~1 kHz pelos cruzamentos de zero"
     Expect $snd "wavcheck: canal direito em silencio \(pico \d+\): ok" "canal direito em silencio"
-    Expect $snd "wavcheck: maior buraco dentro do som: \d+ ms: ok" "sem buraco no meio do som"
+    Expect $snd "wavcheck: maior buraco dentro de um som: \d+ ms: ok" "sem buraco no meio dos sons (silencio so entre eles)"
     ExpectNot $snd "BUG: [^\n]*dentro de interrupcao" "nenhum aviso de contexto de interrupcao no audio"
     ExpectNot $snd "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico na sequencia S"
 }

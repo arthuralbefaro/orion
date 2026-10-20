@@ -3413,3 +3413,40 @@ O que mudou na 5.7 e por que:
   no hospedeiro: nao mudo, duracao na margem, ~1 kHz pelos cruzamentos de
   zero, canal direito em silencio e nenhum buraco de mais de 10 ms, sem
   comparar amostra por amostra. O audio so e ligado nessa sequencia.
+
+## v2.4.0-a27 (etapa 5.8 parte 2: /dev/dsp e play)
+
+- `/dev/dsp` no estilo OSS: `SNDCTL_DSP_SPEED`, `SETFMT` (U8 e S16_LE),
+  `CHANNELS`/`STEREO`, `GETFMTS`, `GETBLKSIZE`, `GETOSPACE` (fragmentos de
+  4 KiB, em bytes do formato pedido), `SYNC` e `RESET`, com os numeros do
+  Linux (os programas usam o `sys/soundcard.h` minimo de `user/include`).
+  Padrao ao abrir, como no OSS: 8 kHz, U8, mono.
+- Conversao no software: o codec recebe sempre estereo de 16 bits a 48 kHz,
+  ou a 44,1 kHz quando o pedido e exatamente 44,1 kHz e o codec aceita (no
+  QEMU aceita; num codec so de 48 kHz, 44,1 kHz e convertido). A conversao
+  de taxa e linear, com a posicao em ponto fixo Q32 guardada entre um
+  `write` e outro (sem estalo entre blocos); mono vira os dois canais e U8
+  vira S16. Qualidade de interpolacao linear: suficiente para efeitos e
+  WAV de teste, com algum serrilhado em agudos; um filtro melhor fica para
+  quando houver musica.
+- `write` que dorme com a fila cheia (o anel de 32 KiB do driver);
+  `O_NONBLOCK` escreve so o que cabe e devolve EAGAIN quando nao cabe nada.
+  Fila vazia toca silencio (parte 1). Um processo por vez: o segundo `open`
+  da EBUSY (o devfs ganhou um `open_error` por dispositivo para devolver o
+  erro certo em vez de ENODEV). O `close` toca o que falta (dreno com 60 ms
+  de cauda) e para o stream; trocar taxa, formato ou canais com som tocando
+  tambem drena antes.
+- O `write` do driver recebe um buffer do kernel: o `sys_write` ja copiou do
+  usuario em pedacos (`write_file`); so os `ioctl` leem e escrevem memoria de
+  usuario.
+- `play`: toca WAV PCM de 8 ou 16 bits, 1 ou 2 canais; `--tom HZ MS
+  [--taxa N]` gera um seno conhecido so no canal esquerdo; `--gravar`
+  escreve o tom num WAV em vez de tocar; `--nao-bloqueia` usa O_NONBLOCK
+  (EAGAIN e depois `GETOSPACE` ate caber um fragmento); `--teste-ocupado`
+  confere o EBUSY.
+- Teste (sequencia S): o tom do kernel, o `play` de um WAV de 22050 Hz
+  (convertido para 48 kHz) e o mesmo WAV sem bloqueio saem como tres sons de
+  2 s no WAV do QEMU; o `wavcheck --segmentos 3` separa os sons pelo silencio
+  entre eles (o dreno de cada um) e confere duracao, frequencia, canal
+  direito mudo e nenhum buraco dentro de cada som. O QEMU so grava enquanto
+  o stream roda, entao o silencio entre os sons e so a cauda do dreno.

@@ -1,3 +1,4 @@
+#include <drivers/dsp.h>
 #include <fs/devfs.h>
 #include <kernel/file.h>
 #include <kernel/syscall.h>
@@ -14,6 +15,7 @@ struct device {
     struct file *(*open)(void);
     uint64_t (*size)(void);
     uint32_t mode;
+    int (*open_error)(void);
 };
 
 static uint64_t size_zero(void)
@@ -81,13 +83,14 @@ static struct file *random_open(void)
 }
 
 static const struct device devices[] = {
-    { "fb0",    fbdev_open,     fbdev_size, S_IFCHR | 0660 },
-    { "input",  input_open,     size_zero,  S_IFCHR | 0640 },
-    { "tty",    file_open_tty,  size_zero,  S_IFCHR | 0666 },
-    { "null",   null_open,      size_zero,  S_IFCHR | 0666 },
-    { "zero",   zero_open,      size_zero,  S_IFCHR | 0666 },
-    { "random", random_open,    size_zero,  S_IFCHR | 0444 },
-    { "urandom", random_open,   size_zero,  S_IFCHR | 0444 },
+    { "fb0",    fbdev_open,     fbdev_size, S_IFCHR | 0660, NULL },
+    { "input",  input_open,     size_zero,  S_IFCHR | 0640, NULL },
+    { "tty",    file_open_tty,  size_zero,  S_IFCHR | 0666, NULL },
+    { "null",   null_open,      size_zero,  S_IFCHR | 0666, NULL },
+    { "zero",   zero_open,      size_zero,  S_IFCHR | 0666, NULL },
+    { "random", random_open,    size_zero,  S_IFCHR | 0444, NULL },
+    { "urandom", random_open,   size_zero,  S_IFCHR | 0444, NULL },
+    { "dsp",    dsp_open,       size_zero,  S_IFCHR | 0666, dsp_open_error },
 };
 
 struct file *blkdev_file_open(struct blockdev *dev);
@@ -170,6 +173,8 @@ static int devfs_open(struct vnode *v, int flags, struct file **out)
         *out = blkdev_file_open(v->priv);
     else
         *out = v->priv ? ((const struct device *)v->priv)->open() : NULL;
+    if (!*out && v->ino < DEVFS_BLOCK_INO && v->priv && ((const struct device *)v->priv)->open_error)
+        return ((const struct device *)v->priv)->open_error();
     return *out ? 0 : -ENODEV;
 }
 
