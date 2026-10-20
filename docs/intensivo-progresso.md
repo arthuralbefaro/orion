@@ -261,7 +261,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 6.7 | Area de trabalho | [x] | 03:05 | 04:20 | ver `git log` (2 partes) |
 | 7.1 | ISO hibrida | [x] | 06:26 | 09:44 | ver `git log` |
 | 7.2 | Live | [x] | 09:44 | 10:13 | ver `git log` |
-| 7.3 | Instalador | [x] | 12:44 | 12:58 | (7.3) |
+| 7.3 | Instalador | [x] | 12:44 | 12:58 | `eb5abed` |
 | 7.4 | Hardware real | [ ] | | | |
 | 7.5 | Pacotes | [ ] | | | |
 | 8.1 | Fila por CPU e nice | [ ] | | | |
