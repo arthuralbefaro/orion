@@ -251,7 +251,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 5.6 | USB HID | [x] | 14:55 | 15:55 | ver `git log` |
 | 5.7 | USB armazenamento | [x] | 15:55 | 18:16 | `05ee35e` |
 | 5.8 | Audio HDA | [x] | 10:54 | 11:40 | `3c0cacd` |
-| 5.9 | Video BGA e virtio-gpu | [x] | 11:42 | 12:05 | (parte 2) |
+| 5.9 | Video BGA e virtio-gpu | [x] | 11:42 | 12:05 | `0a14450` |
 | 5.10 | Hub USB 2 basico (extra, decidido em 2026-10-19) | [ ] | | | |
 | 6.1 | Protocolo de janelas | [x] | 11:06 | 11:47 | ver `git log` |
 | 6.2 | libgui | [x] | 11:48 | 12:27 | ver `git log` |
