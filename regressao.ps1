@@ -16,6 +16,8 @@ param(
     [switch]$OnlyH,
     [switch]$OnlyI,
     [switch]$OnlyP,
+    [switch]$OnlyZ,
+    [switch]$Noturna,
     [switch]$SlowWaits,
     [int]$StressRuns = 1,
     [switch]$Verbose
@@ -27,7 +29,7 @@ $failures = @()
 $checks = 0
 if ($SlowWaits) { $env:ORION_SLOW_WAITS = "1" } else { Remove-Item Env:ORION_SLOW_WAITS -ErrorAction SilentlyContinue }
 $regStart = Get-Date
-$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG -or $OnlyW -or $OnlyH -or $OnlyI -or $OnlyP)
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG -or $OnlyW -or $OnlyH -or $OnlyI -or $OnlyP -or $OnlyZ)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -1382,6 +1384,31 @@ if ($runAll -or $OnlyP) {
     Expect $pl "cpu  fila  carga  ocupada  trocas  migracoes  roubos  balanceamentos  ipis\s*\n(\s*\d+\s+\d+\s+\d+\s+(sim|nao)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s*\n){4}" "/proc/sched mostra as 4 filas"
     ExpectNot $pl "nicetest: [^\n]*FALHOU" "nenhuma falha no nicetest"
     ExpectNot $pl "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|BUG: " "nenhum panico nem BUG na sequencia P"
+}
+
+# ---------------- Sequencia Z: fuzzer de syscalls ----------------
+if ($runAll -or $OnlyZ) {
+    Write-Host "== Sequencia Z (fuzzer de syscalls) ==" -ForegroundColor Cyan
+    $fuzzSecs = if ($Noturna) { 600 } else { 60 }
+    $stepsZ = @(
+        "cmd:fuzz $fuzzSecs", "until:900:fuzz: fim", "wait:1", "cmd:echo depois-do-fuzz", "cmd:ls /tmp", "wait:1"
+    )
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -LogPath "out\reg-z.log" `
+        -Script $stepsZ -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
+    $zl = Get-Log "out\reg-z.log"
+    if ($Verbose) { Write-Output $zl }
+
+    Expect $zl "fuzz: semente \d+ \(repita com --seed \d+\), \d+ s, 4 filho\(s\) por vez como uid 1000 em /tmp/fuzz" "fuzz comeca com a semente impressa, como uid 1000 em /tmp/fuzz"
+    Expect $zl "fuzz: vivo em \d+ s: [1-9]\d* chamadas" "fuzz manda sinal de vida com chamadas feitas"
+    Expect $zl "fuzz: [1-9]\d{3,} chamadas em [1-9]\d* filho\(s\)" "fuzz fez milhares de chamadas"
+    Expect $zl "fuzz: [^\n]*, 0 que nao morreram" "todo filho do fuzz morre com SIGKILL"
+    Expect $zl "fuzz: maior intervalo sem sinal de vida do pai: \d+ ms\s+ok" "o pai do fuzz nunca ficou 5 s sem sinal de vida"
+    Expect $zl "fuzz: memoria livre antes \d+ kB, depois \d+ kB; processos antes \d+, depois \d+\s+ok" "memoria livre e processos voltam ao inicio depois do fuzz"
+    Expect $zl "fuzz: \d+ neto\(s\) que sobraram mortos no fim" "o fuzz mata os netos que ficaram presos numa chamada"
+    Expect $zl "fuzz: fim \(semente \d+\)" "fuzz terminou"
+    Expect $zl "echo depois-do-fuzz\s*\ndepois-do-fuzz" "o shell continua respondendo depois do fuzz"
+    ExpectNot $zl "ls /tmp\s*\n[^\n]*fuzz" "o fuzz apaga o diretorio dele em /tmp"
+    ExpectNot $zl "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|BUG: " "nenhum panico nem BUG na sequencia Z"
 }
 
 # ---------------- Sequencia E: estresse de processos ----------------

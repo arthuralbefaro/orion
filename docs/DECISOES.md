@@ -3795,3 +3795,62 @@ O que mudou na 5.7 e por que:
 - Teste que reproduz: `logflood` (novo) faz 1000 syscalls desconhecidas e 60
   filhos morrerem por SIGSEGV; a sequencia A confere a linha de supressao e
   que nao passaram de 30 e 40 linhas (a janela pode virar no meio).
+
+## v3.0.0-a6 (etapa 8.3: fuzzer de syscalls)
+
+- `fuzz [segundos] [--seed N] [--workers N]` (novo), rodado como root: o pai
+  cria `/tmp/fuzz` (dono uid 1000), mede a memoria livre e os processos e
+  mantem um filho por CPU; cada filho sai do grupo de processos do pai,
+  troca stdin/stdout/stderr por `/dev/null`, entra em `/tmp/fuzz`, zera os
+  grupos suplementares e vira uid/gid 1000 antes da primeira chamada
+  aleatoria. O pai fica root so para criar e apagar o diretorio e para matar
+  o que sobrou.
+- Reproducao: a semente sai na primeira linha (`--seed` repete); cada filho
+  usa `semente + numero do filho` num xorshift64. Cada filho guarda as
+  ultimas 32 chamadas (numero, 6 argumentos, retorno) num anel em memoria
+  compartilhada (`MAP_SHARED`); a entrada e gravada antes da chamada, entao
+  a chamada em que o filho morreu aparece como "em andamento". O pai despeja
+  o anel quando o filho morre por SIGSEGV, SIGBUS, SIGILL, SIGFPE ou SIGSYS,
+  sai com codigo diferente de 0 ou nao morre 5 s depois do SIGKILL.
+- Argumentos: descritores reais (pipe, par UNIX, socket TCP escutando e UDP,
+  pty, arquivo, diretorio, `/proc/self/stat`, `/dev/null`; metade sem
+  bloqueio), tamanhos 0, 1, 4095, 4096, 4097, 64 KiB e enormes, ponteiros
+  NULL, do kernel e nao canonicos, ponteiros que terminam na borda de uma
+  pagina com a seguinte nao mapeada, um buffer de 64 KiB com pagina de guarda
+  no fim, caminhos fixos (relativos, `..`, `/proc`, `/dev`, `/etc/shadow`) e
+  lixo. 4% das chamadas usam numeros acima de 334, 0,5% as do Orion (1000 a
+  1002).
+- O que o fuzzer evita para nao se matar sozinho (a morte nao diria nada do
+  kernel): as chamadas de memoria (`mmap`, `munmap`, `mprotect`, `mremap`,
+  `madvise`, `mlock`, `shmat`/`shmdt` e outras) so recebem endereco dentro de
+  uma area reservada de 4 MiB, 0, 4096 ou do kernel, com o tamanho limitado
+  para nao passar da area (foi assim que a primeira versao se desmapeou
+  inteira com `munmap(0x1000, 0x106b8e56e000)`); sem `MAP_POPULATE` e
+  `MAP_LOCKED` (encher a memoria e assunto da 8.4); `brk` so com 0 ou
+  endereco do kernel; `arch_prctl` nao troca FS/GS; `rt_sigaction` instala
+  so SIG_IGN/SIG_DFL ou ponteiro ruim; `kill`/`tkill`/`tgkill` vao para o
+  proprio processo, o grupo, -1, o init ou um pid inexistente, e nunca com
+  sinal de falha (assim uma morte por SIGSEGV e sempre do kernel ou do
+  proprio filho, nunca de um irmao); `process_vm_readv`/`writev`, `exit`,
+  `exit_group`, `vfork` e `rt_sigreturn` viram `getpid`. `fork`/`clone` de
+  verdade com probabilidade 1/50 e no maximo 4 netos vivos por filho; o neto
+  faz 40 chamadas e sai. `execve` so com caminho inexistente, lixo ou ponteiro
+  na borda. O filho comeca ignorando todos os sinais que da para ignorar
+  (o fuzz do `rt_sigaction` pode voltar algum ao padrao).
+- Filho sem progresso por 500 ms (preso numa chamada que bloqueia) leva
+  SIGKILL; quando um filho termina, o pai manda SIGKILL ao grupo dele (os
+  netos), e no fim mata qualquer `fuzz` que tenha sobrado, varrendo o
+  `/proc`.
+- Criterios na sequencia Z (nova; 60 s, ou 600 s com `regressao.ps1
+  -Noturna` / `regress.py --noturna`): panico pelo marcador exato e qualquer
+  "BUG:"; o pai mede o maior intervalo entre duas voltas do laco (100 ms) e
+  acusa acima de 5 s; no fim, memoria livre de volta com margem de 4 MiB e o
+  mesmo numero de processos do inicio (espera ate 10 s); todo filho morre
+  com SIGKILL; o shell responde depois; `/tmp/fuzz` foi apagado.
+- Defeitos que o fuzzer achou nesta etapa, cada um com commit e teste
+  proprios: 1, usuario comum inundava o log do kernel (ver a entrada
+  "achado do fuzzer 1" acima).
+- Na regressao, contar ocorrencias com `(?s)(X.*?){N}` trava o PowerShell
+  quando ha menos de N (o regex do .NET tenta todas as divisoes do log). A
+  forma usada e `\A(?s)(?>.*?X){N}`: ancorada no comeco e com grupo atomico,
+  sem voltar atras.

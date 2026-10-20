@@ -48,10 +48,10 @@ hub na H, com audio na S e com troca de video na G (BGA) e na W
 (virtio-gpu), com 646 verificacoes em ~20 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 8.3, fuzzer de syscalls (ver "Requisitos da 8.3"). Fase 7
-fechada com a tag `v3.0-rc1`; a tag `v3.0` (marco M5) so depois que o dono
-testar em hardware real e a 7.4 fechar (decisao do dono, 2026-10-20).
-Versao 3.0.0-a5 em diante.
+Proxima etapa: 8.4, falta de memoria (o kernel recusa em vez de travar;
+matador de processo). Fase 7 fechada com a tag `v3.0-rc1`; a tag `v3.0`
+(marco M5) so depois que o dono testar em hardware real e a 7.4 fechar
+(decisao do dono, 2026-10-20). Versao 3.0.0-a6 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -82,8 +82,9 @@ notebook, que vem caindo com tela azul):
   -> B; disco, ext2 ou armazenamento -> C; `wm` ou apps -> D; travas,
   processos, threads ou sinais -> E; ISO ou boot -> F; virtio -> V; NVMe -> N;
   USB -> U; audio -> S; video BGA -> G; virtio-gpu -> W; hub USB -> H;
-  instalador ou pacotes -> I; escalonador, nice ou afinidade -> P. Na duvida,
-  inclui a sequencia. A etapa recebe o `[x]` com isso.
+  instalador ou pacotes -> I; escalonador, nice ou afinidade -> P; fuzzer ou
+  syscalls em geral -> Z (10 min com `-Noturna`). Na duvida, inclui a
+  sequencia. A etapa recebe o `[x]` com isso.
 - Regressao completa so no fim de cada FASE (fim da Fase 5, fim da 7.3 e da
   7.5, antes de cada tag) e em parte que mexe no nucleo do kernel
   (interrupcoes, memoria, escalonador, preempcao, travas, syscalls de uso
@@ -222,6 +223,34 @@ Requisitos da 8.3 (fuzzer de syscalls), decididos pelo dono em 2026-10-20:
 Se o fuzzer achar defeito: cada um corrigido num commit proprio, com um teste
 que reproduz, e registrado no `DECISOES.md`.
 
+Requisitos da 8.4 (falta de memoria), decididos pelo dono em 2026-10-20,
+sobre o desenho proposto (mapeamento que devolve erro nos caminhos de usuario,
+reserva de paginas do kernel, matador de processo, `oomtest`):
+1. O matador nunca roda segurando trava de memoria do processo: a falha de
+   pagina solta tudo, chama o OOM e tenta a falha de novo.
+2. Ordem: primeiro devolver cache limpo (kreclaim); so se ainda faltar,
+   matar.
+3. Uma vitima por vez: marcar "vitima a caminho" e esperar ela liberar a
+   memoria (com prazo) antes de escolher outra.
+4. SIGKILL acorda a vitima de qualquer espera interrompivel, e o caminho de
+   saida do processo nao aloca memoria (ou usa a reserva).
+5. Vitima que e o proprio processo que falhou: recebe SIGKILL e morre ao
+   voltar da falha, sem panico.
+6. Nunca matar o init nem threads do kernel. O `DECISOES.md` registra a
+   politica de mmap/brk (aceita e mata na falha, ou recusa com ENOMEM na hora)
+   e se o `wm` pode ser vitima.
+7. `oomtest`: o caso em que o processo que enche a memoria e o maior (mata a
+   si mesmo) e o caso de dois processos enchendo ao mesmo tempo (so um morre
+   por vez).
+8. (complemento) `wm` como vitima: se o init reinicia servicos, ele relanca o
+   `wm` morto por OOM para o desktop voltar sozinho; se nao, registrar no
+   `DECISOES.md` que o desktop some. (No modo grafico o `wm` e o programa que
+   o init mantem vivo, `shell /bin/wm`, e o init ja o relanca depois de
+   qualquer morte.)
+9. (complemento, se der tempo) No modo estrito, uma chave para o `kmalloc`
+   falhar de vez em quando (1 em 1000), rodada junto do fuzz curto, para
+   achar quem chama `kmalloc` sem conferir NULL; senao, trabalho futuro.
+
 Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 1. Verificacao pelo WAV do QEMU (`-audiodev wav`): o `play` toca um sinal
    gerado e conhecido (por exemplo 1 kHz, 2 s, so no canal esquerdo) e o
@@ -315,7 +344,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 7.5 | Pacotes | [x] | 13:10 | 13:30 | |
 | 8.1 | Fila por CPU e nice | [x] | 14:05 | 15:10 | |
 | 8.2 | Kernel preemptivo (contador de travas de spin por thread desde a 5.7 parte 4; troca adiada chamada na hora pelo `spin_unlock`) | [x] | 15:15 | 16:05 | |
-| 8.3 | Fuzzer de syscalls | [ ] | | | |
+| 8.3 | Fuzzer de syscalls | [x] | 16:10 | 17:37 | |
 | 8.4 | OOM | [ ] | | | |
 | 8.5 | Perfilador | [ ] | | | |
 | 8.6 | Pilhas do kernel medidas | [ ] | | | |
@@ -2047,6 +2076,40 @@ v3.0.0-a5.
 Verificacao (nucleo: travas, escalonador): `irqtest` 2 vezes e `nicetest`
 verdes no QEMU; regressao completa, 691 verificacoes, verde, 26,7 min, RAM
 livre antes 3,7 GB. Versao trocada antes da regressao desta vez.
+
+#### 8.3 Fuzzer de syscalls - 16:10 a 17:37 - FEITO
+Requisitos 1 a 5 da 8.3 (logo abaixo das regras). `fuzz` (novo): semente
+impressa e `--seed`, anel das ultimas 32 chamadas por filho em memoria
+compartilhada (despejado na morte inesperada, com a chamada em andamento),
+descritores reais de 9 tipos, ponteiros na borda de pagina nao mapeada,
+tamanhos de borda, enderecos do kernel e lixo, fork/clone com probabilidade
+baixa e limite por filho, exec so de caminho inexistente ou lixo, filhos
+como uid 1000 em `/tmp/fuzz`. Sequencia nova Z (60 s; 600 s com `-Noturna`;
+`regress.py --noturna`; o `regress.py` tambem ganhou a P, que faltava na
+lista padrao). Detalhes: `docs/DECISOES.md`, v3.0.0-a6.
+Defeito achado e corrigido em commit proprio (`1718e32`): usuario comum
+inundava o log do kernel (syscall desconhecida, morte por sinal, falha de
+pagina, ELF invalido), e o fuzz de 60 s levava 216 s por causa da serial;
+agora no maximo 10 linhas por segundo por ponto de chamada, com a contagem
+das suprimidas; teste `logflood` na sequencia A (que tambem teve a
+verificacao do `history` corrigida: o historico guarda 50 comandos e o
+primeiro mudou). Com isso o fuzz passou de ~16 mil para ~100 mil chamadas
+em 60 s.
+Problema no teste do `logflood` (`fb1aa69`): a contagem por
+`(?s)(X.*?){31}` faz o regex do .NET voltar atras de forma explosiva quando
+nao casa (no Python sai rapido); a primeira regressao completa da 8.3 ficou
+uma hora parada nessa linha, com o PowerShell queimando CPU e a RAM livre
+caindo para 0,4 GB. Agora `\A(?s)(?>.*?X){31}`: grupo atomico ancorado no
+comeco, uma passada so (14 ms no log real).
+Ajustes do proprio fuzzer no caminho (nao eram defeitos do kernel): as duas
+primeiras "mortes inesperadas" eram o filho se desmapeando inteiro
+(`munmap(0x1000, enorme)`), e o processo que sobrava no fim era um neto
+preso numa chamada depois que o pai dele morreu.
+Verificacao: Z verde 2 vezes em 60 s (101 mil chamadas, 0 morte inesperada)
+e a noturna de 10 min verde (926 mil chamadas em 3058 filhos, 0 morte
+inesperada, maior intervalo sem sinal de vida 822 ms, memoria e processos
+de volta). A correcao do log mexe em syscalls de uso geral: regressao
+completa verde, 706 verificacoes (Z incluida), 29,5 min, RAM livre antes 1,4 GB depois de esperar (estava em 0,4 GB com o PowerShell travado no regex).
 
 ### Sessao 2 - 2026-10-17
 

@@ -23,6 +23,9 @@ def ps_string(m):
     return m.group(2).replace("''", "'")
 
 
+NOTURNA = False
+
+
 def parse_sequences():
     src = PS1.read_text(encoding="utf-8")
     seqs = {}
@@ -40,6 +43,10 @@ def parse_sequences():
         m = re.search(r"\$steps" + name + r"\s*=\s*@\((.*?)^\s*\)\s*$", body, flags=re.S | re.M)
         if m:
             seq["steps"] = [ps_string(s) for s in STRING.finditer(m.group(1))]
+        for var in re.finditer(r"^\s*\$(\w+)\s*=\s*if\s*\(\$Noturna\)\s*\{\s*(\S+)\s*\}\s*else\s*\{\s*(\S+)\s*\}", body,
+                               flags=re.M):
+            value = var.group(2) if NOTURNA else var.group(3)
+            seq["steps"] = [st.replace("$" + var.group(1), value) for st in seq["steps"]]
         call = re.search(r'test\.ps1"\)(.*?)\|\s*Out-Null', body, flags=re.S)
         if call:
             c = call.group(1)
@@ -226,15 +233,18 @@ def run_stress(seq, rep, runs, smp, image=False):
 
 def main():
     ap = argparse.ArgumentParser(description="Regressao do Orion (le os passos do regressao.ps1)")
-    ap.add_argument("which", nargs="?", default="ABCDFIVNUSGWHE", help="sequencias, ex.: ABCDFIVNUSGWHE ou AC")
+    ap.add_argument("which", nargs="?", default="ABCDFIVNUSGWHPZE", help="sequencias, ex.: ABCDFIVNUSGWHPZE ou AC")
     ap.add_argument("--smp", type=int, default=4)
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--stress-runs", type=int, default=1)
+    ap.add_argument("--noturna", action="store_true", help="fuzz de 10 min na sequencia Z")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--slow-waits", action="store_true", help="esperas fixas antigas, sem esperar o prompt")
     a = ap.parse_args()
     if a.slow_waits:
         os.environ["ORION_SLOW_WAITS"] = "1"
+    global NOTURNA
+    NOTURNA = a.noturna
 
     seqs = parse_sequences()
     image = any(s["image"] for s in seqs.values())
