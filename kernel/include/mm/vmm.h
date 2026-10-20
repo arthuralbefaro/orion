@@ -49,3 +49,4 @@ void vmm_unmap_range(uint64_t virt, uint64_t pages, bool free_phys);
 uint64_t vmm_virt_to_phys(uint64_t virt);
 
 void *vmm_map_mmio(uint64_t phys, size_t size);
+void *vmm_map_mmio_flags(uint64_t phys, size_t size, uint64_t flags);

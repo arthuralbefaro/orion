@@ -11,6 +11,7 @@ param(
     [switch]$OnlyN,
     [switch]$OnlyU,
     [switch]$OnlyS,
+    [switch]$OnlyG,
     [switch]$SlowWaits,
     [int]$StressRuns = 1,
     [switch]$Verbose
@@ -22,7 +23,7 @@ $failures = @()
 $checks = 0
 if ($SlowWaits) { $env:ORION_SLOW_WAITS = "1" } else { Remove-Item Env:ORION_SLOW_WAITS -ErrorAction SilentlyContinue }
 $regStart = Get-Date
-$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS)
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -109,6 +110,24 @@ function Test-ShotPixel([string]$ppm, [int]$x, [int]$y, [string]$hex, [int]$tol,
         Write-Host ("  [ok]    " + $what + " (pixel $x,$y = $seen)") -ForegroundColor Green
     } else {
         Write-Host ("  [FALHA] " + $what + " (pixel $x,$y = $seen, esperado $hex +-$tol)") -ForegroundColor Red
+        $script:failures += $what
+    }
+}
+
+function Test-ShotSize([string]$ppm, [int]$w, [int]$h, [string]$what) {
+    $script:checks++
+    $path = Join-Path $Root $ppm
+    if (-not (Test-Path $path)) {
+        Write-Host ("  [FALHA] " + $what + "   (sem a captura " + $ppm + ")") -ForegroundColor Red
+        $script:failures += $what
+        return
+    }
+    $head = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($path), 0, 32)
+    $dims = ($head -split "\s+")
+    if ($dims[1] -eq "$w" -and $dims[2] -eq "$h") {
+        Write-Host ("  [ok]    " + $what) -ForegroundColor Green
+    } else {
+        Write-Host ("  [FALHA] " + $what + " (captura " + $dims[1] + "x" + $dims[2] + ")") -ForegroundColor Red
         $script:failures += $what
     }
 }
@@ -1164,6 +1183,36 @@ if ($runAll -or $OnlyS) {
     Expect $snd "wavcheck: maior buraco dentro de um som: \d+ ms: ok" "sem buraco no meio dos sons (silencio so entre eles)"
     ExpectNot $snd "BUG: [^\n]*dentro de interrupcao" "nenhum aviso de contexto de interrupcao no audio"
     ExpectNot $snd "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico na sequencia S"
+}
+
+# ---------------- Sequencia G: video ----------------
+if ($runAll -or $OnlyG) {
+    Write-Host "== Sequencia G (video: troca de modo) ==" -ForegroundColor Cyan
+    Remove-Item (Join-Path $Root "out\shots\reg-fbset-*.ppm") -ErrorAction SilentlyContinue
+    $stepsG = @(
+        "cmd:fbset", "cmd:fbset 1920x1080", "wait:1", "shot:out\shots\reg-fbset-1920.ppm",
+        "cmd:echo depois-do-fbset", "cmd:fbset 1024x768", "wait:1", "shot:out\shots\reg-fbset-1024.ppm",
+        "cmd:fbset 9999x9999", "cmd:fbset 1281x800", "cmd:fbtest 3 &", "wait:1", "cmd:fbset 800x600",
+        "until:10:fbtest:", "wait:1", "cmd:fbset 1280x800", "cmd:fbset"
+    )
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -LogPath "out\reg-g.log" `
+        -Script $stepsG -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
+    $vid = Get-Log "out\reg-g.log"
+    if ($Verbose) { Write-Output $vid }
+
+    Expect $vid "bga\s+Bochs/BGA 1234:1111, DISPI 0xb0c[0-5], framebuffer em 0x[0-9a-f]+, \d+ MiB de video" "placa Bochs/BGA achada pelo PCI e pela interface DISPI"
+    Expect $vid "fbset\s*\nfbset: 1280x800, 32 bpp, 5120 bytes por linha" "fbset mostra o modo do boot (o do GOP)"
+    Expect $vid "fbset 1920x1080\s*\n[^\n]*bga\s+modo 1920x1080, 32 bpp\s*\nfbset: 1920x1080, 32 bpp, 7680 bytes por linha" "fbset 1920x1080 troca o modo"
+    Test-ShotSize "out\shots\reg-fbset-1920.ppm" 1920 1080 "a tela do QEMU passa a ter 1920x1080"
+    Test-ShotColors "out\shots\reg-fbset-1920.ppm" "o console redesenha o texto no modo novo" 3
+    Expect $vid "echo depois-do-fbset\s*\ndepois-do-fbset" "o shell continua no console depois da troca"
+    Expect $vid "fbset: 1024x768, 32 bpp, 4096 bytes por linha" "fbset 1024x768 troca o modo"
+    Test-ShotSize "out\shots\reg-fbset-1024.ppm" 1024 768 "a tela do QEMU passa a ter 1024x768"
+    Expect $vid "fbset: 9999x9999: Invalid argument" "modo maior que a memoria de video e recusado"
+    Expect $vid "fbset: 1281x800: Invalid argument" "largura fora do alinhamento e recusada"
+    Expect $vid "fbset: 800x600: o framebuffer esta em uso por um programa grafico" "com um programa grafico no framebuffer a troca da EBUSY"
+    Expect $vid "(?s)fbset 1280x800.*?fbset: 1280x800, 32 bpp, 5120 bytes por linha" "volta ao modo do boot"
+    ExpectNot $vid "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico na sequencia G"
 }
 
 # ---------------- Sequencia E: estresse de processos ----------------

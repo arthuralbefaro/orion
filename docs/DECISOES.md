@@ -3491,3 +3491,33 @@ O que mudou na 5.7 e por que:
 - Na sequencia S o Doom roda com `-playdemo demo1`: com a tela de titulo
   primeiro, numa maquina lenta a demo mal comecava nos 12 s e quase nao havia
   efeito para conferir.
+
+## v2.4.0-a29 (etapa 5.9 parte 1: Bochs/BGA e fbset)
+
+- O GOP do firmware so entrega um modo fixo (o que o OVMF escolheu, 1280x800
+  no QEMU de teste) e nao existe depois do `ExitBootServices`. Para trocar
+  de resolucao o kernel fala com a placa: Bochs/BGA (`1234:1111`, a VGA
+  padrao do QEMU e o `bochs-display`; `80ee:beef`, a VBoxVGA do VirtualBox)
+  pela interface DISPI nas portas `0x1CE`/`0x1CF`. O ID do DISPI (0xB0C0 a
+  0xB0C5) confirma a interface; a memoria de video vem do registrador de
+  blocos de 64 KiB (16 MiB no QEMU). A troca desliga a placa, grava largura,
+  altura, 32 bpp e a largura virtual, liga de novo com o framebuffer linear
+  e le de volta os registradores para conferir.
+- O framebuffer inteiro (toda a memoria de video, nao so o modo do boot) e
+  mapeado uma vez no boot com write-through (`vmm_map_mmio_flags`, novo; o
+  `vmm_map_mmio` continua sem cache para registradores), porque o mapeamento
+  do Limine so cobre o modo do GOP e um modo maior passaria do fim dele.
+- O console refaz a grade de texto no modo novo (`console_set_framebuffer`,
+  com a trava do `kprintf`): escala da fonte pela largura, linhas e colunas
+  novas, o texto que cabe fica (se o cursor ficar abaixo da ultima linha, a
+  grade sobe), o resto da tela e limpo e tudo e redesenhado.
+- `FBIOSET_MODE` no `/dev/fb0`: largura multipla de 8 e o modo inteiro dentro
+  da memoria de video, senao EINVAL; sem placa que troque de modo, ENODEV;
+  com algum programa grafico mapeando o framebuffer (wm, Doom, fbtest),
+  EBUSY, porque o mapeamento dele ficaria com o tamanho de linha errado.
+  Programa grafico aberto depois da troca ja ve o modo novo pelo
+  `FBIOGET_INFO`.
+- `fbset [LxA]` mostra ou troca o modo. Sequencia G (nova): 1920x1080 e
+  1024x768 conferidos pelo tamanho da captura do QEMU (`Test-ShotSize`, nos
+  dois harnesses), recusas por EINVAL e o EBUSY com o `fbtest` segurando o
+  framebuffer.

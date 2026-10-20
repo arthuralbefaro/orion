@@ -36,6 +36,7 @@ struct framebuffer {
 #define COLOR_BACKGROUND   0x0B0F1A  /* azul-preto, fácil de ler */
 
 void console_init(const struct framebuffer *fb);
+bool console_set_framebuffer(const struct framebuffer *fb);
 bool console_available(void);
 
 void console_putc(char c);

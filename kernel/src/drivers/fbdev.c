@@ -1,5 +1,6 @@
 #include <drivers/fbdev.h>
 #include <drivers/console.h>
+#include <drivers/bga.h>
 #include <kernel/file.h>
 #include <kernel/process.h>
 #include <kernel/syscall.h>
@@ -53,6 +54,16 @@ static long fb_ioctl(struct file *f, uint64_t request, uint64_t arg)
     if (request == FBIOREDRAW) {
         console_redraw();
         return 0;
+    }
+    if (request == FBIOSET_MODE) {
+        struct fb_mode mode;
+        if (copy_from_user(&mode, (const void *)arg, sizeof(mode)) != 0)
+            return -EFAULT;
+        if (__atomic_load_n(&graphics_users, __ATOMIC_ACQUIRE))
+            return -EBUSY;
+        if (!bga_present())
+            return -ENODEV;
+        return bga_set_mode(mode.width, mode.height);
     }
     if (request != FBIOGET_INFO)
         return -EINVAL;

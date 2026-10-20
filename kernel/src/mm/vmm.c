@@ -271,6 +271,11 @@ void vmm_cow_stats(uint64_t *faults, uint64_t *copies)
 
 void *vmm_map_mmio(uint64_t phys, size_t size)
 {
+    return vmm_map_mmio_flags(phys, size, PTE_MMIO);
+}
+
+void *vmm_map_mmio_flags(uint64_t phys, size_t size, uint64_t flags)
+{
     uint64_t offset = phys & (PAGE_SIZE - 1);
     uint64_t start  = PAGE_ALIGN_DOWN(phys);
     uint64_t end    = PAGE_ALIGN_UP(phys + size);
@@ -284,7 +289,7 @@ void *vmm_map_mmio(uint64_t phys, size_t size)
     mmio_next += len;
 
     for (uint64_t off = 0; off < len; off += PAGE_SIZE)
-        vmm_map_page(virt + off, start + off, PTE_MMIO);
+        vmm_map_page(virt + off, start + off, flags);
 
     return (void *)(virt + offset);
 }

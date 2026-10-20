@@ -16,6 +16,12 @@
 
 #define FBIOGET_INFO 0x4600
 #define FBIOREDRAW   0x4601
+#define FBIOSET_MODE 0x4602
+
+struct fb_mode {
+    uint32_t width;
+    uint32_t height;
+};
 
 struct fb_info {
     uint32_t width;

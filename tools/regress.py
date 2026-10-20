@@ -33,7 +33,7 @@ def parse_sequences():
         end = re.search(r"^\}\s*$", body, flags=re.M)
         if end:
             body = body[:end.start()]
-        seq = {"name": name, "steps": [], "expect": [], "memdelta": None, "shots": [], "pixels": [], "disk": False, "gui": False, "image": False, "hostfwd": [],
+        seq = {"name": name, "steps": [], "expect": [], "memdelta": None, "shots": [], "pixels": [], "sizes": [], "disk": False, "gui": False, "image": False, "hostfwd": [],
                "extra": [], "prep": [],
                "delay": 1.0, "boot": 60.0, "remove_disk": False, "log": f"out/reg-{name.lower()}.log",
                "stress": None, "hostweb": None}
@@ -90,6 +90,8 @@ def parse_sequences():
         for px in re.finditer(r'^\s*Test-ShotPixel "([^"]+)" (\d+) (\d+) 0x([0-9a-fA-F]{6}) (\d+) "([^"]+)"\s*$', body, flags=re.M):
             seq["pixels"].append((px.group(1).replace("\\", "/"), int(px.group(2)), int(px.group(3)),
                                   int(px.group(4), 16), int(px.group(5)), px.group(6)))
+        for sz in re.finditer(r'^\s*Test-ShotSize "([^"]+)" (\d+) (\d+) "([^"]+)"\s*$', body, flags=re.M):
+            seq["sizes"].append((sz.group(1).replace("\\", "/"), int(sz.group(2)), int(sz.group(3)), sz.group(4)))
         for sc in re.finditer(r'^\s*Test-ShotColors "([^"]+)" "([^"]+)" (\d+)\s*$', body, flags=re.M):
             seq["shots"].append((sc.group(1).replace("\\", "/"), sc.group(2), int(sc.group(3))))
         md = re.search(r'^\s*Test-MemDelta \$\w+ "([^"]+)" (\d+)\s*$', body, flags=re.M)
@@ -161,6 +163,20 @@ class Report:
             print(f"  [FALHA] {desc} (pixel {x},{y} = {seen}, esperado {rgb:06x} +-{tol})")
             self.failures.append(desc)
 
+    def shot_size(self, ppm, w, h, desc):
+        self.checks += 1
+        path = ROOT / ppm.replace("\\", "/")
+        if not path.exists():
+            print(f"  [FALHA] {desc}   (sem a captura {ppm})")
+            self.failures.append(desc)
+            return
+        dims = path.read_bytes()[:32].split()
+        if len(dims) >= 3 and dims[1] == str(w).encode() and dims[2] == str(h).encode():
+            print(f"  [ok]    {desc}")
+        else:
+            print(f"  [FALHA] {desc} (captura {dims[1:3]})")
+            self.failures.append(desc)
+
     def shot_colors(self, ppm, desc, minimum):
         self.checks += 1
         path = ROOT / ppm.replace("\\", "/")
@@ -203,7 +219,7 @@ def run_stress(seq, rep, runs, smp, image=False):
 
 def main():
     ap = argparse.ArgumentParser(description="Regressao do Orion (le os passos do regressao.ps1)")
-    ap.add_argument("which", nargs="?", default="ABCDFVNUSE", help="sequencias, ex.: ABCDFVNUSE ou AC")
+    ap.add_argument("which", nargs="?", default="ABCDFVNUSGE", help="sequencias, ex.: ABCDFVNUSGE ou AC")
     ap.add_argument("--smp", type=int, default=4)
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--stress-runs", type=int, default=1)
@@ -280,6 +296,8 @@ def main():
             rep.expect(log, pat, desc, negate)
         for ppm, desc, minimum in seq["shots"]:
             rep.shot_colors(ppm, desc, minimum)
+        for ppm, w, h, desc in seq["sizes"]:
+            rep.shot_size(ppm, w, h, desc)
         for ppm, x, y, rgb, tol, desc in seq["pixels"]:
             rep.shot_pixel(ppm, x, y, rgb, tol, desc)
         if seq["memdelta"]:

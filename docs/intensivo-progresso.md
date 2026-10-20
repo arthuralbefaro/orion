@@ -46,9 +46,10 @@ na ISO na F, no virtio (disco e rede) na V, no NVMe na N e com USB na U,
 com 585 verificacoes em ~18 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.9, video Bochs/BGA e virtio-gpu (trocar de resolucao,
-criterio `fbset 1920x1080`), depois 5.10 (hub USB 2); a regressao completa
-volta no fim da Fase 5. Versao 2.4.0-a29 em diante.
+Proxima etapa: 5.9 parte 2, virtio-gpu (2D: recurso, backing, scanout,
+transferencia e flush; troca de modo pelo mesmo `FBIOSET_MODE`), depois
+5.10 (hub USB 2); a regressao completa volta no fim da Fase 5. Versao
+2.4.0-a30 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -249,7 +250,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 5.6 | USB HID | [x] | 14:55 | 15:55 | ver `git log` |
 | 5.7 | USB armazenamento | [x] | 15:55 | 18:16 | `05ee35e` |
 | 5.8 | Audio HDA | [x] | 10:54 | 11:40 | `3c0cacd` |
-| 5.9 | Video BGA e virtio-gpu | [ ] | | | |
+| 5.9 | Video BGA e virtio-gpu | [~] | 11:42 | | |
 | 5.10 | Hub USB 2 basico (extra, decidido em 2026-10-19) | [ ] | | | |
 | 6.1 | Protocolo de janelas | [x] | 11:06 | 11:47 | ver `git log` |
 | 6.2 | libgui | [x] | 11:48 | 12:27 | ver `git log` |
@@ -1831,6 +1832,20 @@ arredondado para baixo. (2) Numa maquina lenta a demo mal comecava em 12 s
 ` num remendo (nada aplicado pela metade).
 A 5.8 fecha com as tres partes; a regressao completa fica para o fim da
 Fase 5, pelo criterio novo.
+
+#### 5.9 parte 1 Bochs/BGA e fbset - 11:42 a 11:56 - FEITO
+A 5.9 vai em duas partes: Bochs/BGA (esta) e virtio-gpu. `drivers/bga.c`
+(novo): placa `1234:1111` ou `80ee:beef`, DISPI pelas portas 0x1CE/0x1CF,
+memoria de video toda mapeada com write-through (`vmm_map_mmio_flags`,
+novo). `console_set_framebuffer` refaz a grade de texto no modo novo.
+`FBIOSET_MODE` no `/dev/fb0` (EINVAL, ENODEV, EBUSY com programa grafico).
+`fbset` (novo). Sequencia G (nova) e `Test-ShotSize` nos dois harnesses.
+Detalhes: `docs/DECISOES.md`, v2.4.0-a29.
+Verificacao: sequencias G (13 verificacoes) e B (62, pelo console e pelo
+fbdev), verdes: `fbset 1920x1080` muda a tela (a captura do QEMU sai
+1920x1080, o criterio da etapa), 1024x768 tambem, modos invalidos recusados,
+EBUSY com o `fbtest` no framebuffer, volta a 1280x800. Versao 2.4.0-a29. RAM
+livre antes: 3,8 GB.
 
 ### Sessao 2 - 2026-10-17
 

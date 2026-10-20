@@ -3,6 +3,7 @@
  */
 #include <drivers/console.h>
 #include <drivers/font8x8.h>
+#include <lib/printf.h>
 #include <lib/string.h>
 #include <kernel/compiler.h>
 
@@ -191,14 +192,8 @@ static void put_glyph(char ch)
 
 /* ---------- API ---------- */
 
-void console_init(const struct framebuffer *info)
+static void set_geometry(void)
 {
-    if (!info || !info->address || info->bpp != 32)
-        return;
-
-    fb = *info;
-
-    /* Escolhe o zoom da fonte pela largura da tela. */
     if (fb.width >= 2560)
         scale = 3;
     else if (fb.width >= 1280)
@@ -212,6 +207,15 @@ void console_init(const struct framebuffer *info)
     rows = (uint32_t)(fb.height / cell_h);
     if (cols > MAX_COLS) cols = MAX_COLS;
     if (rows > MAX_ROWS) rows = MAX_ROWS;
+}
+
+void console_init(const struct framebuffer *info)
+{
+    if (!info || !info->address || info->bpp != 32)
+        return;
+
+    fb = *info;
+    set_geometry();
 
     cur_col = 0;
     cur_row = 0;
@@ -227,6 +231,41 @@ void console_init(const struct framebuffer *info)
 bool console_available(void)
 {
     return initialized;
+}
+
+bool console_set_framebuffer(const struct framebuffer *info)
+{
+    if (!info || !info->address || info->bpp != 32 || !initialized)
+        return false;
+    uint64_t flags;
+    bool locked = kprint_lock(&flags);
+    uint32_t old_cols = cols;
+    uint32_t old_rows = rows;
+    fb = *info;
+    set_geometry();
+    for (uint32_t r = old_rows; r < rows; r++)
+        clear_row(r);
+    if (cur_row >= rows) {
+        uint32_t shift = cur_row - rows + 1;
+        memmove(&grid[0], &grid[shift], sizeof(grid[0]) * (MAX_ROWS - shift));
+        cur_row = rows - 1;
+    }
+    for (uint32_t r = 0; r < rows; r++) {
+        for (uint32_t c = old_cols; c < cols; c++) {
+            grid[r][c].ch = ' ';
+            grid[r][c].fg = cur_fg;
+            grid[r][c].bg = cur_bg;
+        }
+    }
+    if (cur_col >= cols)
+        cur_col = cols - 1;
+    if (!graphics_mode) {
+        fill_rect(0, 0, (uint32_t)fb.width, (uint32_t)fb.height, pack_color(cur_bg));
+        redraw_all();
+        draw_cursor(true);
+    }
+    kprint_unlock(locked, flags);
+    return true;
 }
 
 static void erase_range(uint32_t row, uint32_t from, uint32_t to)

@@ -15,6 +15,7 @@
 #include <drivers/nvme.h>
 #include <drivers/usb.h>
 #include <drivers/hda.h>
+#include <drivers/bga.h>
 #include <fs/vfs.h>
 #include <fs/block.h>
 #include <fs/devfs.h>
@@ -145,6 +146,7 @@ void kmain(void)
     virtio_net_init();
     usb_init();
     hda_init();
+    bga_init();
     net_init();
     blockdev_cache_init();
     vfs_init();
