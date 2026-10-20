@@ -3917,3 +3917,25 @@ O que mudou na 5.7 e por que:
   enchendo ao mesmo tempo (um de cada vez); a memoria livre volta. A
   sequencia confere no log do kernel que nunca aparecem dois "matando" sem
   o "saiu" do primeiro entre eles.
+
+## v3.0.0-a7, 8.4 parte 2: falha injetada no kmalloc
+
+- `kmfail N` no shell do kernel faz 1 em N chamadas de `kmalloc`, `kzalloc`,
+  `kcalloc` e `krealloc` devolverem NULL; `kmfail 0` desliga e `kmfail`
+  sozinho mostra a taxa e quantas falhas ja foram injetadas. So no modo
+  estrito (QEMU de teste); fora dele responde EPERM, como os outros ganchos
+  de teste (verificado na sequencia F).
+- So falha em contexto de processo de usuario comum (euid diferente de 0),
+  fora de interrupcao: pega os filhos do fuzz (uid 1000) e deixa de fora o
+  shell do harness, o pai do fuzz, o init, o `wm` e as threads do kernel, que
+  em alguns pontos do boot param de proposito com panico se faltar memoria.
+  O sorteio e um contador atomico passado por um misturador (splitmix64),
+  sem trava. Desligado, o custo e uma leitura atomica por chamada.
+- A sequencia Z liga `kmfail 1000` durante o fuzz de 60 s (e na noturna) e
+  confere que houve falhas injetadas e que tudo desliga no fim. Rodadas de
+  exploracao com 1 em 100 (166 falhas em 96 mil chamadas) e 1 em 20 (1145
+  falhas em 147 mil chamadas, 90 s): nenhum panico, nenhum BUG, memoria e
+  processos de volta; nenhum ponto do kernel achado usando o NULL. O fuzz
+  passou a contar a parte os filhos que nao conseguem se preparar (a
+  falha injetada nega o `mmap` da preparacao) em vez de chama-los de morte
+  inesperada.

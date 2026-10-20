@@ -969,7 +969,7 @@ if ($runAll -or $OnlyF) {
         "cmd:mount", "cmd:id", "cmd:ls /bin | wc", "cmd:ls -l /etc/shadow /bin/su", "cmd:ls -l /home",
         "cmd:echo vivo-na-ram > /home/orion/nota.txt", "cmd:cat /home/orion/nota.txt", "cmd:hello",
         "cmd:lua -e print(6*7)", "cmd:su orion -c id", "cmd:free", "wait:1",
-        "key:0B", "cmd:irqtest", "cmd:usbstall sdb", "cmd:usbtimeout sdb", "key:0B",
+        "key:0B", "cmd:irqtest", "cmd:usbstall sdb", "cmd:usbtimeout sdb", "cmd:kmfail 5", "key:0B",
         "reboot:uefi,cd", "cmd:mount", "cmd:cat /home/orion/nota.txt", "wait:1",
         "reboot:bios,isodisk", "cmd:mount", "cmd:poweroff", "wait:4", "monlog:info status",
         "reboot:uefi,isodisk", "cmd:mount", "cmd:ls /doom", "cmd:reboot", "wait:4", "monlog:info status"
@@ -986,6 +986,7 @@ if ($runAll -or $OnlyF) {
     Expect $f "ls /bin \| wc\s*\n\s*1\d\d\s" "live: /bin inteiro no initramfs"
     ExpectNot $f "modo estrito" "sem fw_cfg (como num PC de verdade) o modo estrito fica desligado"
     Expect $f "irqtest: EPERM, so no modo de teste" "fora do modo estrito o irqtest responde EPERM"
+    Expect $f "kmfail: EPERM, so no modo de teste" "fora do modo estrito o kmfail responde EPERM"
     Expect $f "usbstall: EPERM, so no modo de teste" "fora do modo estrito o usbstall responde EPERM"
     Expect $f "usbtimeout: EPERM, so no modo de teste" "fora do modo estrito o usbtimeout responde EPERM"
     ExpectNot $f "BUG: [^\n]*dentro de interrupcao" "nenhum aviso de contexto de interrupcao nos boots da ISO"
@@ -1392,7 +1393,10 @@ if ($runAll -or $OnlyZ) {
     Write-Host "== Sequencia Z (fuzzer de syscalls) ==" -ForegroundColor Cyan
     $fuzzSecs = if ($Noturna) { 600 } else { 60 }
     $stepsZ = @(
-        "cmd:fuzz $fuzzSecs", "until:900:fuzz: fim", "wait:1", "cmd:echo depois-do-fuzz", "cmd:ls /tmp", "wait:1"
+        "key:0B", "cmd:kmfail 1000", "key:0B",
+        "cmd:fuzz $fuzzSecs", "until:900:fuzz: fim", "wait:1",
+        "key:0B", "cmd:kmfail", "cmd:kmfail 0", "key:0B",
+        "cmd:echo depois-do-fuzz", "cmd:ls /tmp", "wait:1"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -LogPath "out\reg-z.log" `
         -Script $stepsZ -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
@@ -1407,6 +1411,8 @@ if ($runAll -or $OnlyZ) {
     Expect $zl "fuzz: memoria livre antes \d+ kB, depois \d+ kB; processos antes \d+, depois \d+\s+ok" "memoria livre e processos voltam ao inicio depois do fuzz"
     Expect $zl "fuzz: \d+ neto\(s\) que sobraram mortos no fim" "o fuzz mata os netos que ficaram presos numa chamada"
     Expect $zl "fuzz: fim \(semente \d+\)" "fuzz terminou"
+    Expect $zl "kmfail: taxa 1/1000 nos kmalloc de processos de usuario comum, [1-9]\d* falha\(s\) injetada\(s\)" "fuzz com 1 em 1000 kmalloc falhando nos filhos (modo estrito)"
+    Expect $zl "kmfail: desligado" "a falha injetada desliga no fim"
     Expect $zl "echo depois-do-fuzz\s*\ndepois-do-fuzz" "o shell continua respondendo depois do fuzz"
     ExpectNot $zl "ls /tmp\s*\n[^\n]*fuzz" "o fuzz apaga o diretorio dele em /tmp"
     ExpectNot $zl "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|BUG: " "nenhum panico nem BUG na sequencia Z"

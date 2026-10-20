@@ -32,3 +32,5 @@ void heap_get_stats(struct heap_stats *out);
 void heap_dump(void);
 
 bool heap_selftest(void);
+int heap_set_fail_rate(uint32_t rate);
+void heap_fail_stats(uint32_t *rate, uint64_t *injected);

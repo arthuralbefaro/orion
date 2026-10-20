@@ -9,6 +9,8 @@
 #include <kernel/sched.h>
 #include <kernel/smp.h>
 #include <kernel/irqctx.h>
+#include <kernel/process.h>
+#include <kernel/syscall.h>
 
 #define SLAB_MAGIC   0x534C4142u
 #define SLAB_MAX_OBJ 2048
@@ -446,9 +448,47 @@ static void *alloc_raw(size_t size)
     return p;
 }
 
+static uint32_t fail_rate;
+static uint64_t fail_state = 0x2545F4914F6CDD1Dull;
+static uint64_t fail_injected;
+
+int heap_set_fail_rate(uint32_t rate)
+{
+    if (!irqctx_strict())
+        return -EPERM;
+    __atomic_store_n(&fail_rate, rate, __ATOMIC_RELEASE);
+    return 0;
+}
+
+void heap_fail_stats(uint32_t *rate, uint64_t *injected)
+{
+    *rate = __atomic_load_n(&fail_rate, __ATOMIC_ACQUIRE);
+    *injected = __atomic_load_n(&fail_injected, __ATOMIC_RELAXED);
+}
+
+static bool inject_failure(void)
+{
+    uint32_t rate = __atomic_load_n(&fail_rate, __ATOMIC_ACQUIRE);
+    if (!rate || in_interrupt() || !sched_enabled())
+        return false;
+    struct process *p = thread_current()->process;
+    if (!p || __atomic_load_n(&p->cred.euid, __ATOMIC_RELAXED) == 0)
+        return false;
+    uint64_t x = __atomic_add_fetch(&fail_state, 0x9E3779B97F4A7C15ull, __ATOMIC_RELAXED);
+    x ^= x >> 30;
+    x *= 0xBF58476D1CE4E5B9ull;
+    x ^= x >> 27;
+    if (x % rate)
+        return false;
+    __atomic_add_fetch(&fail_injected, 1, __ATOMIC_RELAXED);
+    return true;
+}
+
 void *kmalloc(size_t size)
 {
     MIGHT_SLEEP("kmalloc");
+    if (inject_failure())
+        return NULL;
     return alloc_raw(size);
 }
 
@@ -463,6 +503,8 @@ static void *zalloc_raw(size_t size)
 void *kzalloc(size_t size)
 {
     MIGHT_SLEEP("kzalloc");
+    if (inject_failure())
+        return NULL;
     return zalloc_raw(size);
 }
 
@@ -470,6 +512,8 @@ void *kcalloc(size_t n, size_t size)
 {
     MIGHT_SLEEP("kcalloc");
     if (n && size > SIZE_MAX / n)
+        return NULL;
+    if (inject_failure())
         return NULL;
     return zalloc_raw(n * size);
 }
@@ -508,6 +552,8 @@ void kfree(void *ptr)
 void *krealloc(void *ptr, size_t size)
 {
     MIGHT_SLEEP("krealloc");
+    if (size && inject_failure())
+        return NULL;
     if (!ptr)
         return alloc_raw(size);
     if (size == 0) {

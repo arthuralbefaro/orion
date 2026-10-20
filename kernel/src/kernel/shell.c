@@ -593,6 +593,29 @@ static void cmd_irqtest(const char *args)
         kprintf("irqtest: falhou (codigo %d)\n", r);
 }
 
+static void cmd_kmfail(const char *args)
+{
+    while (*args == ' ')
+        args++;
+    uint32_t rate;
+    uint64_t injected;
+    if (*args) {
+        uint32_t n = 0;
+        while (*args >= '0' && *args <= '9')
+            n = n * 10 + (uint32_t)(*args++ - '0');
+        if (heap_set_fail_rate(n) < 0) {
+            kprintf("kmfail: EPERM, so no modo de teste (QEMU com fw_cfg opt/orion/strict)\n");
+            return;
+        }
+    }
+    heap_fail_stats(&rate, &injected);
+    if (rate)
+        kprintf("kmfail: taxa 1/%u nos kmalloc de processos de usuario comum, %lu falha(s) injetada(s)\n", rate,
+                injected);
+    else
+        kprintf("kmfail: desligado, %lu falha(s) injetada(s) ate agora\n", injected);
+}
+
 static uint32_t parse_u32(const char **p, uint32_t def)
 {
     while (**p == ' ')
@@ -708,6 +731,7 @@ static const struct command commands[] = {
     { "hdatone", "toca um tom no canal esquerdo: hdatone [ms] [Hz]", cmd_hdatone },
     { "usbtimeout", "cala a campainha de uma transferencia do pendrive (teste)", cmd_usbtimeout },
     { "irqtest", "testa o aviso de kmalloc e espera dentro de interrupcao", cmd_irqtest },
+    { "kmfail", "faz 1 em N kmalloc de usuario comum falhar (modo de teste)", cmd_kmfail },
     { "arp",    "cache ARP",                            cmd_arp },
     { "ifconfig", "configura a rede a mao",             cmd_ifconfig },
     { "lsblk",  "discos e particoes",                   cmd_lsblk },

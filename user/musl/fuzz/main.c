@@ -602,7 +602,7 @@ int main(int argc, char **argv)
     uint64_t last_count[WORKERS_MAX] = { 0 };
     double last_progress[WORKERS_MAX] = { 0 };
     double killed_at[WORKERS_MAX] = { 0 };
-    uint64_t spawned = 0, stalled = 0, signaled = 0, odd = 0, stuck = 0;
+    uint64_t spawned = 0, stalled = 0, signaled = 0, odd = 0, stuck = 0, setup_failed = 0;
     uint64_t child_seq = 0;
     double start = now_ms(), last_beat = start, worst_gap = 0, last_print = start;
     while (1) {
@@ -625,6 +625,8 @@ int main(int argc, char **argv)
                             snprintf(why, sizeof(why), "morreu com o sinal %d", WTERMSIG(st));
                             dump_ring(i, pid[i], why);
                         }
+                    } else if (WIFEXITED(st) && WEXITSTATUS(st) >= 20 && WEXITSTATUS(st) <= 22) {
+                        setup_failed++;
                     } else if (WIFEXITED(st) && WEXITSTATUS(st) != 0) {
                         odd++;
                         char why[64];
@@ -708,6 +710,8 @@ int main(int argc, char **argv)
            "inesperada(s), %llu que nao morreram\n",
            (unsigned long long)sh->total, (unsigned long long)spawned, (unsigned long long)signaled,
            (unsigned long long)stalled, (unsigned long long)odd, (unsigned long long)stuck);
+    printf("fuzz: %llu filho(s) nao conseguiram se preparar (chdir, setuid ou mmap negados)\n",
+           (unsigned long long)setup_failed);
     printf("fuzz: maior intervalo sem sinal de vida do pai: %.0f ms  %s\n", worst_gap, gap_ok ? "ok" : "FALHOU");
     printf("fuzz: memoria livre antes %ld kB, depois %ld kB; processos antes %d, depois %d  %s\n", free0, free1,
            procs0, procs1, res_ok ? "ok" : "FALHOU");

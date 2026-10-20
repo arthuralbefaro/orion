@@ -48,8 +48,8 @@ hub na H, com audio na S e com troca de video na G (BGA) e na W
 (virtio-gpu), com 646 verificacoes em ~20 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 8.4 parte 2, falha injetada no `kmalloc` (1 em 1000, so
-no modo estrito) junto do fuzz curto. Fase 7 fechada com a tag
+Proxima etapa: 8.5, perfilador por amostragem (NMI do timer guarda os
+RIPs; `perf` mostra as funcoes mais quentes). Fase 7 fechada com a tag
 `v3.0-rc1`; a tag `v3.0` (marco M5) so depois que o dono testar em
 hardware real e a 7.4 fechar (decisao do dono, 2026-10-20). Versao
 3.0.0-a7 em diante.
@@ -346,7 +346,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 8.1 | Fila por CPU e nice | [x] | 14:05 | 15:10 | |
 | 8.2 | Kernel preemptivo (contador de travas de spin por thread desde a 5.7 parte 4; troca adiada chamada na hora pelo `spin_unlock`) | [x] | 15:15 | 16:05 | |
 | 8.3 | Fuzzer de syscalls | [x] | 16:10 | 17:37 | |
-| 8.4 | OOM | [ ] | | | |
+| 8.4 | OOM | [x] | 17:40 | 19:04 | |
 | 8.5 | Perfilador | [ ] | | | |
 | 8.6 | Pilhas do kernel medidas | [ ] | | | |
 | 8.7 | memcpy/memset/memmove do kernel em assembly (rep movsb/stosb) | [x] | 20:05 | 22:00 | `9ad91e7` |
@@ -2133,6 +2133,18 @@ se repetiu (o proprio convidado mediu o tempo, entao foi o QEMU mais lento;
 anotado).
 Verificacao (nucleo: memoria e falha de pagina): sequencia M verde 3 vezes;
 regressao completa verde, 719 verificacoes (M incluida), 28,8 min, RAM livre antes 6,3 GB.
+
+#### 8.4 parte 2 Falha injetada no kmalloc - 18:25 a 19:04 - FEITO
+Requisito 9 da 8.4 (complemento do dono). `kmfail N` no shell do kernel, so
+no modo estrito: 1 em N `kmalloc`/`kzalloc`/`kcalloc`/`krealloc` de
+processo de usuario comum devolve NULL. Rodadas de exploracao com o fuzz:
+1 em 100 (166 falhas injetadas em 96 mil chamadas) e 1 em 20 por 90 s
+(1145 falhas em 147 mil chamadas): nenhum panico, nenhum BUG, memoria e
+processos de volta, nenhum defeito para corrigir. A sequencia Z roda o fuzz
+com 1 em 1000; a F confere o EPERM fora do modo estrito. O fuzz conta a
+parte os filhos que nao conseguem se preparar. Detalhes: `docs/DECISOES.md`.
+Verificacao: Z e F verdes (36 verificacoes); mexe no `kmalloc` (nucleo de
+memoria): regressao completa verde, 722 verificacoes, 29,5 min, RAM livre antes 6,1 GB.
 
 ### Sessao 2 - 2026-10-17
 
