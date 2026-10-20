@@ -46,9 +46,9 @@ na ISO na F, no virtio (disco e rede) na V, no NVMe na N e com USB na U,
 com 585 verificacoes em ~18 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.8 parte 3, Doom com efeitos sonoros (requisito 5 da 5.8
-logo abaixo das regras), depois 5.9 e 5.10; a regressao completa volta no
-fim da Fase 5. Versao 2.4.0-a28 em diante.
+Proxima etapa: 5.9, video Bochs/BGA e virtio-gpu (trocar de resolucao,
+criterio `fbset 1920x1080`), depois 5.10 (hub USB 2); a regressao completa
+volta no fim da Fase 5. Versao 2.4.0-a29 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -248,7 +248,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 5.5 | xHCI | [x] | 14:10 | 14:55 | ver `git log` |
 | 5.6 | USB HID | [x] | 14:55 | 15:55 | ver `git log` |
 | 5.7 | USB armazenamento | [x] | 15:55 | 18:16 | `05ee35e` |
-| 5.8 | Audio HDA | [~] | 10:54 | | |
+| 5.8 | Audio HDA | [x] | 10:54 | 11:40 | (parte 3) |
 | 5.9 | Video BGA e virtio-gpu | [ ] | | | |
 | 5.10 | Hub USB 2 basico (extra, decidido em 2026-10-19) | [ ] | | | |
 | 6.1 | Protocolo de janelas | [x] | 11:06 | 11:47 | ver `git log` |
@@ -1806,6 +1806,31 @@ Problemas: (1) o build trata inicializador de campo faltando como erro
 copiou), entao o `copy_from_user` dava EFAULT; virou `memcpy`. (3) Dois
 `play` seguidos deixam o silencio do dreno entre eles no WAV, que o
 `wavcheck` antigo via como buraco; ele passou a separar os sons.
+
+#### 5.8 parte 3 Doom com efeitos sonoros - 11:25 a 11:40 - FEITO
+`user/musl/doom/orion_sound.c` (novo): `DG_sound_module` com 8 canais
+mixados a 11025 Hz (volume e separacao por canal, efeitos lidos do formato
+DMX do WAD), escrita sem bloqueio no `/dev/dsp` com ~140 ms de folga medida
+pelo `GETOSPACE`; `DG_music_module` vazio. Compila com `-DFEATURE_SOUND` e
+um `SDL_mixer.h` vazio no caminho de include, sem mexer em `third_party`.
+Sem placa de som o Doom avisa e roda mudo. Musica (MUS/OPL) ficou de fora,
+como o requisito permite: precisa de um sintetizador OPL, trabalho separado.
+`wavcheck` ganhou `--algum-som` e `--resto-som`; `test.ps1 -AudioWav` /
+`qrun.py --audio-wav` escolhem o arquivo. Detalhes: `docs/DECISOES.md`,
+v2.4.0-a28.
+Verificacao: sequencias S (24 verificacoes) e B (o Doom sem placa de som),
+verdes. Na S o Doom roda a `demo1` por 12 s depois dos tons: ~80 efeitos,
+~114 mil quadros mixados, 0 EAGAIN, alguns segundos de som no WAV. Versao
+2.4.0-a28. RAM livre antes: 4,2 a 4,8 GB.
+Problemas: (1) com ~80 ms de folga e o hospedeiro lento a fila esvaziava
+(55 faltas de dado); a folga foi para ~140 ms e o tamanho total da fila
+passou a ser o maior espaco livre visto, porque o `fragstotal` vem
+arredondado para baixo. (2) Numa maquina lenta a demo mal comecava em 12 s
+(4 efeitos); a S usa `-playdemo demo1`. (3) O heredoc estragou de novo um
+`
+` num remendo (nada aplicado pela metade).
+A 5.8 fecha com as tres partes; a regressao completa fica para o fim da
+Fase 5, pelo criterio novo.
 
 ### Sessao 2 - 2026-10-17
 

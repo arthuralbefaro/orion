@@ -78,5 +78,5 @@ src ../../../third_party/doomgeneric/doomgeneric/w_file_stdc.c
 src ../../../third_party/doomgeneric/doomgeneric/i_input.c
 src ../../../third_party/doomgeneric/doomgeneric/i_video.c
 src ../../../third_party/doomgeneric/doomgeneric/doomgeneric.c
-flag -std=gnu11 -D_DEFAULT_SOURCE -Wno-absolute-value -Wno-missing-field-initializers -Wno-pointer-to-int-cast -Wno-sign-compare -Wno-unterminated-string-initialization -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-const-variable -I../../../third_party/doomgeneric/doomgeneric
+flag -std=gnu11 -D_DEFAULT_SOURCE -DFEATURE_SOUND -Isdl -Wno-absolute-value -Wno-missing-field-initializers -Wno-pointer-to-int-cast -Wno-sign-compare -Wno-unterminated-string-initialization -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-const-variable -I../../../third_party/doomgeneric/doomgeneric
 dep ../../../third_party/doomgeneric/doomgeneric/*.h

@@ -640,6 +640,7 @@ if ($runAll -or $OnlyB) {
     Expect $b "adding /doom/freedoom1.wad" "doom: carregou o freedoom1.wad"
     Expect $b "doom: framebuffer \d+x\d+, escala \d" "doom: framebuffer e /dev/input"
     Expect $b "doom: \d{3,} quadros em \d+ ms" "doom rodou a demo (centenas de quadros)"
+    Expect $b "doom: sem som \(/dev/dsp: " "sem placa de som o Doom avisa e roda mudo"
     Test-ShotColors "out\shots\reg-doom.ppm" "captura do doom tem a cena do jogo" 40
     Expect $b "wm: \d+x\d+, celula" "wm abriu o framebuffer"
     Expect $b "wm: fontes vetoriais: DejaVuSansMono\.ttf" "wm aberto pelo shell tambem carrega a fonte vetorial"
@@ -1126,14 +1127,16 @@ if ($runAll -or $OnlyS) {
         "key:0B", "cmd:hda", "cmd:hdatone 2000 1000", "until:15:hdatone:", "key:0B",
         "cmd:play --teste-ocupado", "cmd:play --tom 1000 2000 --taxa 22050 --gravar /tmp/t.wav", "wait:1",
         "cmd:play /tmp/t.wav", "until:15:play: fim", "cmd:play /tmp/t.wav --nao-bloqueia", "until:15:play: fim",
-        "key:0B", "cmd:hda", "key:0B", "cmd:cat /proc/interrupts", "wait:1"
+        "key:0B", "cmd:hda", "key:0B",
+        "cmd:doom -iwad /doom/freedoom1.wad -nogui -playdemo demo1 -orionquit 12", "until:40:quadros em", "wait:2",
+        "cmd:cat /proc/interrupts", "wait:1"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Audio -LogPath "out\reg-s.log" `
         -Script $stepsS -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $snd = Get-Log "out\reg-s.log"
     $py = & (Join-Path $Root "tools\python.ps1")
     $pyArgs = @($py | Select-Object -Skip 1)
-    $wav = & $py[0] @pyArgs (Join-Path $Root "tools\wavcheck.py") out/audio.wav --freq 1000 --dur 2 --segmentos 3
+    $wav = & $py[0] @pyArgs (Join-Path $Root "tools\wavcheck.py") out/audio.wav --freq 1000 --dur 2 --segmentos 3 --resto-som 1
     $snd += "`n----- hospedeiro: wavcheck -----`n" + ($wav -join "`n")
     if ($Verbose) { Write-Output $snd }
 
@@ -1149,7 +1152,10 @@ if ($runAll -or $OnlyS) {
     Expect $snd "play: gravado /tmp/t\.wav, 22050 Hz, 2 canal\(is\), 16 bits, 176400 bytes" "play gera o tom conhecido e grava em WAV"
     Expect $snd "(?s)play /tmp/t\.wav\s*\nplay: /tmp/t\.wav\s*\nplay: 22050 Hz, 2 canal\(is\), 16 bits, 2\.00 s\s*\nplay: fim, 176400 bytes" "play toca o WAV pelo /dev/dsp (SETFMT, CHANNELS, SPEED; 22050 Hz convertidos para 48 kHz), close drena"
     Expect $snd "play: fim, 176400 bytes; \d+ espera\(s\) pelo GETOSPACE, [1-9]\d* EAGAIN" "O_NONBLOCK: write devolve EAGAIN com a fila cheia e o GETOSPACE diz quando cabe"
-    Expect $snd "wavcheck: 3 som\(ns\) separado\(s\) por silencio \(esperado 3\): ok" "tres sons no WAV: hdatone, play e play sem bloqueio"
+    Expect $snd "wavcheck: \d+ som\(ns\) separado\(s\) por silencio, os 3 primeiros sao os tons: ok" "tres tons no WAV (hdatone, play e play sem bloqueio) e depois o Doom"
+    Expect $snd "doom: som: 8 canais mixados a 11025 Hz, escrita sem bloqueio no /dev/dsp" "Doom abre o /dev/dsp: 8 canais a 11025 Hz, sem bloqueio"
+    Expect $snd "doom: \d{3,} quadros em \d+ ms\s*\ndoom: som: [1-9]\d* efeito\(s\) iniciado\(s\), \d+ quadro\(s\) mixado\(s\), [1-9]\d* escrita\(s\)" "Doom toca efeitos sonoros na demo sem travar o jogo"
+    Expect $snd "wavcheck: depois dos tons, [\d.]+ s com som \(esperado ao menos 1\.00 s\): ok" "os efeitos do Doom chegam ao WAV"
     Expect $snd "wavcheck: som 1 no canal esquerdo por [\d.]+ s \(esperado 2\.00 \+- 0\.10\): ok" "duracao do tom do kernel na margem"
     Expect $snd "wavcheck: som 2 no canal esquerdo por [\d.]+ s \(esperado 2\.00 \+- 0\.10\): ok" "duracao do play na margem (conversao de taxa certa)"
     Expect $snd "wavcheck: som 3 no canal esquerdo por [\d.]+ s \(esperado 2\.00 \+- 0\.10\): ok" "duracao do play sem bloqueio na margem"

@@ -31,6 +31,7 @@ param(
     [switch]$SlowWaits,
     [switch]$NoStrict,
     [switch]$Audio,
+    [string]$AudioWav = "out/audio.wav",
     [string]$LoginUser = "root",
     [string]$LoginPassword = "orion"
 )
@@ -133,7 +134,7 @@ function Get-QemuArgs {
             "-monitor", "tcp:127.0.0.1:$MonitorPort,server,nowait",
             "-no-reboot", "-no-shutdown")
     if (-not $NoStrict) { $a += @("-fw_cfg", "name=opt/orion/strict,string=1") }
-    if ($Audio) { $a += @("-audiodev", "wav,id=snd0,path=out/audio.wav,out.frequency=48000,out.channels=2,out.format=s16", "-device", "ich9-intel-hda,id=hda", "-device", "hda-output,audiodev=snd0,bus=hda.0") }
+    if ($Audio) { $a += @("-audiodev", "wav,id=snd0,path=$AudioWav,out.frequency=48000,out.channels=2,out.format=s16", "-device", "ich9-intel-hda,id=hda", "-device", "hda-output,audiodev=snd0,bus=hda.0") }
     $netdev = "user,id=n0"
     foreach ($fwd in $HostFwd) { $netdev += ",hostfwd=$fwd" }
     $a += @("-netdev", $netdev, "-device", "$Nic,netdev=n0",

@@ -3450,3 +3450,44 @@ O que mudou na 5.7 e por que:
   entre eles (o dreno de cada um) e confere duracao, frequencia, canal
   direito mudo e nenhum buraco dentro de cada som. O QEMU so grava enquanto
   o stream roda, entao o silencio entre os sons e so a cauda do dreno.
+
+## v2.4.0-a28 (etapa 5.8 parte 3: Doom com efeitos sonoros)
+
+- O doomgeneric so liga o som com `FEATURE_SOUND`, e o `i_sound.c` entao
+  inclui o `SDL_mixer.h` e espera `DG_sound_module` e `DG_music_module`.
+  Sem mexer em `third_party`: o port compila com `-DFEATURE_SOUND`, um
+  `SDL_mixer.h` vazio em `user/musl/doom/sdl` vem antes no caminho de
+  include, e o `orion_sound.c` define os dois modulos e as variaveis de
+  configuracao que o `m_config.c` pede com som ligado (libsamplerate, GUS,
+  Timidity), sem uso.
+- Efeitos: 8 canais mixados no proprio Doom a 11025 Hz (a taxa dos efeitos
+  do Doom; um efeito com outra taxa anda com o passo certo), estereo com
+  volume (0 a 127) e separacao (0 a 254) de cada canal, somados em 32 bits e
+  cortados em 16. Os efeitos sao lidos do formato DMX do WAD (cabecalho de 8
+  bytes, 16 bytes de enchimento no comeco e no fim) na primeira vez que
+  tocam. A conversao de 11025 para 48 kHz e do `/dev/dsp`.
+- O jogo nunca espera o audio: o `/dev/dsp` e aberto com O_NONBLOCK e, a
+  cada tique (`Update`), o modulo pergunta ao `GETOSPACE` quanto ja esta na
+  fila e mixa so o que falta para ~140 ms de folga (no maximo o que cabe);
+  com o jogo parado a fila esvazia e o driver toca silencio. Sem placa de
+  som (ou com o `/dev/dsp` ocupado), o modulo avisa uma linha e o Doom roda
+  mudo.
+- Musica (MUS/OPL) ficou de fora: o `DG_music_module` existe so para
+  satisfazer o `i_sound.c` e nao toca nada. Tocar MUS pede um sintetizador
+  OPL (ou MIDI com banco de timbres), que e um trabalho separado.
+- Teste: na sequencia S, o Doom roda a demo por 12 s depois dos tons, no
+  mesmo boot (o `regress.py` so entende um boot por sequencia), e o
+  `wavcheck --resto-som 1` exige ao menos 1 s com som depois dos tres tons;
+  o Doom imprime quantos efeitos comecaram e quantas escritas fez. Na
+  sequencia B (sem placa de som), o Doom avisa "sem som" e roda a demo como
+  antes.
+- O `GETOSPACE` do Orion da `fragstotal` arredondado para baixo (o buffer,
+  medido no formato pedido, nao e multiplo de 4 KiB: a 11025 Hz estereo sao
+  ~7,5 KiB), entao `fragstotal * fragsize` nao serve como tamanho total; o
+  modulo do Doom usa o maior espaco livre que ja viu. A falta de dado do
+  `hda` conta interrupcoes sem dado (uma a cada ~21 ms), nao buracos: o
+  carregamento de fase do Doom, quando ninguem chama o `Update` por ~1 s,
+  aparece como dezenas delas e toca silencio, como deve.
+- Na sequencia S o Doom roda com `-playdemo demo1`: com a tela de titulo
+  primeiro, numa maquina lenta a demo mal comecava nos 12 s e quase nao havia
+  efeito para conferir.

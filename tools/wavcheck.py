@@ -42,6 +42,9 @@ def main():
     ap.add_argument('--tol-dur', type=float, default=0.1)
     ap.add_argument('--threshold', type=int, default=1000)
     ap.add_argument('--segmentos', type=int, default=1, help='quantos sons separados por silencio, cada um com --dur')
+    ap.add_argument('--algum-som', type=float, default=None, help='so confere que ha ao menos N s com som (qualquer canal)')
+    ap.add_argument('--resto-som', type=float, default=None,
+                    help='depois dos --segmentos tons, ao menos N s com som em qualquer canal (por exemplo o Doom)')
     a = ap.parse_args()
 
     rate, channels, s = load(a.wav)
@@ -52,6 +55,21 @@ def main():
     ok = True
 
     window = max(rate // 200, 1)
+    if a.algum_som is not None:
+        loud = 0
+        peak = 0
+        for w in range(0, frames, window):
+            top = max(max(abs(v) for v in left[w:w + window]),
+                      max((abs(v) for v in right[w:w + window]), default=0))
+            peak = max(peak, top)
+            if top > a.threshold:
+                loud += min(window, frames - w)
+        secs = loud / rate
+        good = secs >= a.algum_som
+        print('wavcheck: %.2f s com som (pico %d), esperado ao menos %.2f s: %s'
+              % (secs, peak, a.algum_som, 'ok' if good else 'FALHA'))
+        print('wavcheck: TUDO OK' if good else 'wavcheck: FALHOU')
+        return 0 if good else 1
     active = []
     for w in range(0, frames, window):
         chunk = left[w:min(w + window, frames)]
@@ -79,10 +97,21 @@ def main():
         print('wavcheck: canal esquerdo mudo: FALHA')
         print('wavcheck: FALHOU')
         return 1
-    good = len(segments) == a.segmentos
-    ok &= good
-    print('wavcheck: %d som(ns) separado(s) por silencio (esperado %d): %s'
-          % (len(segments), a.segmentos, 'ok' if good else 'FALHA'))
+    rest_from = frames
+    if a.resto_som is not None:
+        good = len(segments) >= a.segmentos
+        ok &= good
+        print('wavcheck: %d som(ns) separado(s) por silencio, os %d primeiros sao os tons: %s'
+              % (len(segments), a.segmentos, 'ok' if good else 'FALHA'))
+        if len(segments) > a.segmentos:
+            rest_from = segments[a.segmentos][0]
+        segments = segments[:a.segmentos]
+    else:
+        good = len(segments) == a.segmentos
+        ok &= good
+        print('wavcheck: %d som(ns) separado(s) por silencio (esperado %d): %s'
+              % (len(segments), a.segmentos, 'ok' if good else 'FALHA'))
+    tones_end = segments[-1][1] if segments else 0
 
     total = 0.0
     crossings = 0
@@ -121,7 +150,7 @@ def main():
     print('wavcheck: frequencia %.0f Hz pelos cruzamentos de zero (esperado %.0f +- %.0f): %s'
           % (freq, a.freq, a.tol_freq, 'ok' if good else 'FALHA'))
 
-    peak = max((abs(v) for v in right), default=0)
+    peak = max((abs(v) for v in right[:tones_end]), default=0)
     good = peak <= a.threshold // 10
     ok &= good
     print('wavcheck: canal direito em silencio (pico %d): %s' % (peak, 'ok' if good else 'FALHA'))
@@ -130,6 +159,18 @@ def main():
     good = worst_ms <= 10
     ok &= good
     print('wavcheck: maior buraco dentro de um som: %.0f ms: %s' % (worst_ms, 'ok' if good else 'FALHA'))
+    if a.resto_som is not None:
+        loud = 0
+        for w in range(rest_from, frames, window):
+            top = max(max(abs(v) for v in left[w:w + window]),
+                      max((abs(v) for v in right[w:w + window]), default=0))
+            if top > a.threshold:
+                loud += min(window, frames - w)
+        secs = loud / rate
+        good = secs >= a.resto_som
+        ok &= good
+        print('wavcheck: depois dos tons, %.2f s com som (esperado ao menos %.2f s): %s'
+              % (secs, a.resto_som, 'ok' if good else 'FALHA'))
     print('wavcheck: TUDO OK' if ok else 'wavcheck: FALHOU')
     return 0 if ok else 1
 

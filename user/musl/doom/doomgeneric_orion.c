@@ -1,3 +1,4 @@
+#include "orion_sound.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -117,6 +118,7 @@ void DG_DrawFrame(void)
     frames++;
     if (quit_after_ms && now_ms() - start_ms >= quit_after_ms) {
         printf("doom: %lu quadros em %llu ms\n", frames, (unsigned long long)(now_ms() - start_ms));
+        orion_sound_report();
         exit(0);
     }
 }
