@@ -1002,27 +1002,28 @@ if ($runAll -or $OnlyI) {
     }
     New-BlankImage "out\inst.img" 512
     $stepsI = @(
-        "cmd:instalar /dev/sda", "until:10:Digite SIM", "raw:nao", "key:0D", "until:10:cancelado",
-        "cmd:instalar /dev/sda --sim", "until:600:instalar: tire a ISO", "wait:2",
+        "cmd:instalar /dev/nvme0n1", "until:10:Digite SIM", "raw:nao", "key:0D", "until:10:cancelado",
+        "cmd:instalar /dev/nvme0n1p1 --sim", "cmd:instalar /dev/nvme0n1 --sim", "until:600:instalar: tire a ISO", "wait:2",
         "reboot:uefi,nenhuma",
         "cmd:mount", "cmd:ls /boot/efi/boot", "cmd:hello instalado", "cmd:ls -l /etc/shadow /bin/su /home",
         "cmd:echo persiste-no-disco > /root/nota.txt", "cmd:sync", "wait:2",
         "reboot:uefi,nenhuma",
         "cmd:cat /root/nota.txt", "cmd:lsblk", "wait:1"
     )
-    & (Join-Path $Root "test.ps1") -Smp $Smp -Iso -NoBuild -ExtraDisks @("out/inst.img") -LogPath "out\reg-i.log" `
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Iso -NoBuild -ExtraNvme "out/inst.img" -LogPath "out\reg-i.log" `
         -Script $stepsI -CommandDelay 1.5 -BootTimeout 90 -NoPrint | Out-Null
     $ins = Get-Log "out\reg-i.log"
     if ($Verbose) { Write-Output $ins }
 
-    Expect $ins "instalar /dev/sda\s*\nIsto apaga TODO o disco /dev/sda \(512 MiB\)\. Digite SIM para continuar: [^\n]*\n[^\n]*instalar: cancelado" "sem SIM o instalador nao mexe no disco"
-    Expect $ins "instalar: /dev/sda, 512 MiB: GPT com particao EFI de 64 MiB e raiz ext2 no resto" "instalador escreve a GPT"
-    Expect $ins "block\s+sda: relendo a tabela de particoes" "BLKRRPART: o kernel rele as particoes sem reboot"
-    Expect $ins "instalar: particoes /dev/sda1 e /dev/sda2 criadas; formatando" "as particoes novas aparecem no /dev"
-    Expect $ins "mkfs: /dev/sda1, \d+ setores" "particao EFI formatada em FAT"
+    Expect $ins "instalar /dev/nvme0n1\s*\nIsto apaga TODO o disco /dev/nvme0n1 \(512 MiB\)\. Digite SIM para continuar: [^\n]*\n[^\n]*instalar: cancelado" "sem SIM o instalador nao mexe no disco"
+    Expect $ins "instalar: /dev/nvme0n1p1 parece uma particao; use o disco inteiro" "o instalador recusa uma particao"
+    Expect $ins "instalar: /dev/nvme0n1, 512 MiB: GPT com particao EFI de 64 MiB e raiz ext2 no resto" "instalador escreve a GPT"
+    Expect $ins "block\s+nvme0n1: relendo a tabela de particoes" "BLKRRPART: o kernel rele as particoes sem reboot"
+    Expect $ins "instalar: particoes /dev/nvme0n1p1 e /dev/nvme0n1p2 criadas; formatando" "as particoes novas aparecem no /dev"
+    Expect $ins "mkfs: /dev/nvme0n1p1, \d+ setores" "particao EFI formatada em FAT"
     Expect $ins "instalar: pronto: \d{3,} arquivo\(s\), \d+ diretorio\(s\), \d+ link\(s\), \d+ MiB copiados" "sistema copiado para o disco"
-    Expect $ins "(?s)----- reboot uefi,nenhuma -----.*?raiz montada: ext2 em sda2" "sem a ISO, o firmware boota o disco instalado e a raiz e a ext2 do sda2"
-    Expect $ins "(?s)----- reboot uefi,nenhuma -----.*?particao EFI sda1 montada em /boot/efi" "a particao EFI instalada e montada em /boot/efi"
+    Expect $ins "(?s)----- reboot uefi,nenhuma -----.*?raiz montada: ext2 em nvme0n1p2" "sem a ISO, o firmware boota o NVMe instalado e a raiz e a ext2 do nvme0n1p2"
+    Expect $ins "(?s)----- reboot uefi,nenhuma -----.*?particao EFI nvme0n1p1 montada em /boot/efi" "a particao EFI instalada e montada em /boot/efi"
     Expect $ins "(?s)----- reboot uefi,nenhuma -----.*?login: root\s*Senha: \s*Bem-vindo, root\." "login no sistema instalado"
     Expect $ins "argv\[0\] = hello\s*\n\s*argv\[1\] = instalado" "programas do sistema instalado rodam"
     Expect $ins "-rw-------\s+1\s+root\s+root[^\n]*/etc/shadow" "o /etc/shadow instalado continua 0600 de root"

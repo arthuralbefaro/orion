@@ -35,7 +35,9 @@ robusto com remocao, hub USB 2), audio HDA com `/dev/dsp` e Doom com efeitos
 sonoros, video Bochs/BGA e virtio-gpu com `fbset`; desktop com wm, apps,
 barra de tarefas e lancador. Mais 8.7, 7.1 e 7.2, e o comeco da 8.2 (contador
 de travas de spin por thread). Contexto de interrupcao vigiado (aviso e, na
-regressao, panico). Versao 2.4.0-a31. O
+regressao, panico). Fase 7: 7.1 a 7.3 feitas (ISO, live, instalador); 7.4
+`[!]`, aguardando teste do usuario em hardware real, roteiro em
+docs/teste-hardware-real.md. Versao 3.0.0-a2. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
@@ -46,10 +48,11 @@ hub na H, com audio na S e com troca de video na G (BGA) e na W
 (virtio-gpu), com 646 verificacoes em ~20 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 7.4, hardware real (so o possivel sem PC de verdade: ISO
-conferida no QEMU em UEFI e BIOS, roteiro completo no
-`docs/teste-hardware-real.md`, marcada `[!]`), depois 7.5 (pacotes) e a
-regressao completa do fim da Fase 7, e a Fase 8. Versao 3.0.0-a2 em diante.
+Proxima etapa: 7.5, pacotes (formato tar com manifesto, `pkg install`
+baixando por HTTP de um repositorio estatico; criterio: `pkg install lua`
+num sistema recem-instalado), depois a regressao completa do fim da Fase 7
+e a Fase 8. A 7.4 volta quando o dono mandar o resultado do teste. Versao
+3.0.0-a3 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -262,7 +265,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 7.1 | ISO hibrida | [x] | 06:26 | 09:44 | ver `git log` |
 | 7.2 | Live | [x] | 09:44 | 10:13 | ver `git log` |
 | 7.3 | Instalador | [x] | 12:44 | 12:58 | `eb5abed` |
-| 7.4 | Hardware real | [ ] | | | |
+| 7.4 | Hardware real | [!] | 13:00 | 13:08 | aguardando teste do usuario em hardware real, roteiro em docs/teste-hardware-real.md |
 | 7.5 | Pacotes | [ ] | | | |
 | 8.1 | Fila por CPU e nice | [ ] | | | |
 | 8.2 | Kernel preemptivo (comeco: contador de travas de spin por thread, na 5.7 parte 4; falta: troca adiada marca `need_resched` e o `spin_unlock`, ao zerar o `spin_count` com interrupcoes ligadas e a flag marcada, chama o escalonador na hora; ver "Requisitos da 8.2") | [ ] | | | |
@@ -1910,6 +1913,28 @@ Verificacao: sequencias I (nova, 15 verificacoes), C (67) e F (22), verdes:
 instala no QEMU (396 arquivos, 61 MiB), tira a ISO, boota do disco com
 login, permissoes e persistencia. Versao 3.0.0-a1. RAM livre antes: 1,7 GB
 depois do build da ISO; esperados 2 min, 2,0 GB.
+
+#### 7.4 Hardware real - 13:00 a 13:08 - [!] AGUARDANDO O DONO
+Feito so o que da sem um PC de verdade, como combinado: a ISO
+(`build.ps1 -Iso`) conferida no QEMU nos quatro boots da sequencia F (CD e
+pendrive, BIOS e UEFI, verde nesta sessao) e `docs/teste-hardware-real.md`
+com o roteiro inteiro: gravar o pendrive no Windows (Rufus em modo DD ou
+balenaEtcher), opcoes do firmware (Secure Boot desligado, UEFI primeiro, CSM
+so para BIOS, Fast Boot desligado, menu de boot rapido), o que conferir em
+cada etapa (Limine, log do kernel, login, shell, comandos de teste, shell
+do kernel, poweroff), o que anotar e mandar se falhar (foto da tela, ultimo
+texto, modelo da placa, modo de boot, teclado, `lsusb`/`pci`/`lsblk`), a
+instalacao opcional e as limitacoes conhecidas.
+Escrevendo o roteiro apareceu um defeito no `instalar`: disco NVMe
+(`nvme0n1`, nome terminado em digito) era recusado como se fosse particao e
+teria as particoes com o nome errado; agora segue a regra de nomes do
+kernel (`nvme0n1p1`). A sequencia I passou a instalar num NVMe em branco
+(`test.ps1 -ExtraNvme` / `qrun.py --extra-nvme`, novos) e recusa tambem
+uma particao: 16 verificacoes, verde, ~6 min. O caminho AHCI ficou
+verificado na rodada da 7.3. Versao 3.0.0-a2. RAM livre antes: 3,4 GB.
+A 7.4 fica `[!]` com a nota "aguardando teste do usuario em hardware real,
+roteiro em docs/teste-hardware-real.md" e volta quando o dono mandar o
+resultado.
 
 ### Sessao 2 - 2026-10-17
 

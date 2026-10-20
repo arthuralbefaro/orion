@@ -65,6 +65,8 @@ def parse_sequences():
             vga = re.search(r"-Vga\s+(\S+)", c)
             seq["vga"] = vga.group(1) if vga else ""
             seq["usb_hub"] = bool(re.search(r"-UsbHub\b", c))
+            xn = re.search(r'-ExtraNvme\s+"([^"]+)"', c)
+            seq["extra_nvme"] = xn.group(1).replace("\\", "/") if xn else ""
             hf = re.search(r"-HostFwd\s+@\(([^)]*)\)", c)
             if hf:
                 seq["hostfwd"] = [ps_string(s) for s in STRING.finditer(hf.group(1))]
@@ -282,7 +284,7 @@ def main():
                               no_ps2=seq.get("no_ps2", False), usb_disk=seq.get("usb_disk", False),
                               usb_fat=seq.get("usb_fat", False), no_strict=seq.get("no_strict", False),
                               audio=seq.get("audio", False), vga=seq.get("vga", ""),
-                              usb_hub=seq.get("usb_hub", False))
+                              usb_hub=seq.get("usb_hub", False), extra_nvme=seq.get("extra_nvme", ""))
         finally:
             if web:
                 web.kill()

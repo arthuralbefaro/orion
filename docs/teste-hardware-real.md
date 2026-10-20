@@ -1,8 +1,104 @@
 # Teste em hardware real
 
-O roteiro completo (gravar o pendrive no Windows, opcoes do firmware, o que
-conferir em cada etapa do boot e o que anotar se algo falhar) entra na etapa
-7.4. Esta pagina ja guarda as limitacoes que o teste precisa levar em conta.
+Roteiro para bootar o Orion num PC ou notebook de verdade pelo pendrive e
+contar o que funcionou. Nao precisa instalar nada no disco do computador: a
+ISO boota com o sistema inteiro em memoria e nada e gravado no disco, a
+menos que voce rode o `instalar`.
+
+## 1. Gerar a ISO
+
+No Windows, na pasta do projeto:
+
+    .\build.ps1 -Iso
+
+O arquivo sai em `out\orion.iso` (uns 65 MiB). A mesma ISO serve para CD e
+para pendrive, em BIOS e em UEFI.
+
+## 2. Gravar o pendrive no Windows
+
+Use um pendrive de 1 GB ou mais. **Tudo que estiver nele sera apagado.**
+
+- **Rufus** (recomendado): escolha o pendrive em "Dispositivo", a
+  `orion.iso` em "Selecao de boot" e clique em "Iniciar". Quando o Rufus
+  perguntar o modo de gravacao, escolha **"Gravar em modo Imagem DD"** (nao o
+  modo ISO): a ISO do Orion e hibrida e precisa ir byte a byte.
+- **balenaEtcher**: "Flash from file", escolha a ISO, escolha o pendrive,
+  "Flash". Ele ja grava byte a byte.
+
+Depois de gravar, o Windows pode dizer que o pendrive "precisa ser
+formatado": ignore e nao formate.
+
+## 3. Opcoes do firmware (BIOS/UEFI do computador)
+
+Entre no menu do firmware (normalmente `F2`, `Del` ou `Esc` logo ao ligar;
+em notebooks as vezes `F1` ou `F10`).
+
+- **Secure Boot: desligado.** O carregador do Orion (Limine) nao e assinado;
+  com Secure Boot ligado o firmware recusa o pendrive.
+- **Modo de boot:** o Orion boota em **UEFI** (o normal em PC de 2012 para
+  ca) e em **BIOS/Legacy**. Teste primeiro em UEFI. Se houver opcao **CSM**
+  (Compatibility Support Module), ela so importa para o teste em BIOS: ligue
+  o CSM para testar BIOS, desligue para UEFI puro.
+- **Fast Boot:** desligue, se existir; com ele alguns firmwares nem leem o
+  USB no boot.
+- Para escolher o pendrive sem mexer na ordem de boot, use o menu de boot
+  rapido (`F12`, `F11`, `F8` ou `Esc`, conforme o fabricante). O pendrive
+  pode aparecer duas vezes: "UEFI: nome do pendrive" (UEFI) e so o nome
+  (BIOS).
+
+## 4. O que conferir em cada etapa do boot
+
+1. **Menu do Limine** (fundo escuro, entrada "Orion"): sobe sozinho em 1 s.
+   Se nem isso aparecer, o problema e anterior ao Orion (gravacao do
+   pendrive, Secure Boot ou modo de boot).
+2. **Log do kernel** (linhas `[info]` coloridas). Vale anotar, se
+   aparecerem:
+   - `acpi ... uACPI pronto` (ACPI funcionando: desligar e reiniciar);
+   - `ahci` ou `nvme` com o disco do computador (o Orion so le; nada e
+     gravado sem o `instalar`);
+   - `usb ... xHCI ... porta N: teclado HID pronto` (teclado USB);
+   - `e1000` ou `rede` (placa de rede; so modelos Intel e1000/e1000e e
+     virtio sao suportados);
+   - `hda` (audio), `bga` ou `virtio-gpu` (troca de resolucao; em placa de
+     video de verdade nenhum dos dois aparece e a tela fica no modo que o
+     firmware escolheu);
+   - qualquer linha `[WARN]` ou `[ERR ]`.
+3. **Login**: `orion login:` aparece. Usuario `root`, senha `orion`.
+4. **Shell**: `/ $`. Teste:
+   - `ls /bin` (sistema em memoria);
+   - `lsusb` (dispositivos USB);
+   - `free` e `top 1` (memoria e CPUs);
+   - `ping 1.1.1.1 3` se houver cabo de rede com DHCP (`dhcp` primeiro, se o
+     endereco nao veio sozinho);
+   - `wm` para o ambiente grafico (sai com `Ctrl+Alt+X`);
+   - `play --tom 440 2000` (deve tocar um tom de 2 s, so no lado esquerdo);
+   - `doom -iwad /doom/freedoom1.wad` (sai com `Esc` e o menu).
+5. **Shell do kernel** (`Ctrl+K` alterna): `pci`, `lsblk`, `irq`, `cpus`,
+   `acpi`, `fb` ajudam a entender o hardware.
+6. **Desligar**: `poweroff` (pelo ACPI). Anote se a maquina desligou de
+   verdade.
+
+## 5. Se algo falhar, anote e mande
+
+- **Foto da tela** no ponto onde parou (de preferencia legivel, as ultimas
+  20 linhas sao as que importam).
+- **O ultimo texto que apareceu** antes de travar ou reiniciar.
+- **Modelo do computador** (ou da placa-mae), processador e quantidade de
+  memoria; versao do firmware, se aparecer na tela dele.
+- **Modo de boot usado** (UEFI ou BIOS/CSM) e se o Secure Boot estava
+  desligado.
+- **Se o teclado respondeu** (de que tipo: USB direto, atras de hub, PS/2,
+  notebook) e em que porta estava.
+- Se chegou ao shell: a saida de `lsusb`, `pci` (`Ctrl+K`, depois `pci`) e
+  `lsblk`.
+
+## 6. Instalar no disco (opcional, so se quiser)
+
+**Isto apaga o disco escolhido inteiro.** So faca num computador ou disco
+de teste. No shell do sistema live: `lsblk` (no shell do kernel, `Ctrl+K`)
+para ver os discos, depois `instalar /dev/sdX` (ou `/dev/nvme0n1`) e digite
+`SIM` quando pedir. Tire o pendrive e reinicie: o disco boota sozinho em
+UEFI. Instalacao para boot BIOS ainda nao existe.
 
 ## Limitacoes conhecidas
 
@@ -17,3 +113,12 @@ conferir em cada etapa do boot e o que anotar se algo falhar) entra na etapa
   anote: modelo do hub, se o teclado funciona direto e o que o `lsusb`
   mostra (pelo shell do kernel, `Ctrl+K`, se o teclado da porta direta
   funcionar).
+- **Placa de rede:** so Intel e1000/e1000e (82540, 82574 e parecidas) e
+  virtio. Realtek, Broadcom e Wi-Fi nao funcionam.
+- **Video:** sem driver para placas de video de verdade; a tela fica no modo
+  que o firmware entregou (o `fbset` so troca de modo em maquina virtual).
+- **Audio:** HDA com um codec; deteccao de fone e codecs com ajustes
+  especiais do fabricante nao estao feitos. Se ficar mudo, anote o que o
+  `hda` (no shell do kernel) mostra.
+- **Discos:** AHCI (SATA), NVMe e pendrive USB; RAID do firmware e
+  controladores especiais nao.

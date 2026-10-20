@@ -122,8 +122,9 @@ class Machine:
     def __init__(self, smp=4, memory=512, disk=False, extra_disks=(), serial_port=4444, monitor_port=4445,
                  boot_timeout=60.0, image=False, hostfwd=(), login=("root", "orion"), media=None, bios=False,
                  nic="e1000e", bus="ahci", usb=False, no_ps2=False, usb_disk=False, usb_fat=False, no_strict=False,
-                 audio=False, audio_wav="out/audio.wav", vga="", usb_hub=False):
+                 audio=False, audio_wav="out/audio.wav", vga="", usb_hub=False, extra_nvme=""):
         self.image = image
+        self.extra_nvme = extra_nvme
         self.usb_hub = usb_hub
         self.vga = vga
         self.audio = audio
@@ -217,6 +218,8 @@ class Machine:
             args += ["-drive", "format=raw,file=out/disk.img"]
         for extra in self.extra_disks:
             args += ["-drive", f"format=raw,file={extra}"]
+        if self.extra_nvme:
+            args += ["-drive", f"if=none,id=nx,format=raw,file={self.extra_nvme}", "-device", "nvme,drive=nx,serial=orionx"]
         self.stderr = open(OUT / "test-qemu.log", "wb")
         self.proc = subprocess.Popen(args, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=self.stderr)
         self.serial = self._connect(self.serial_port, self.boot_timeout)
@@ -555,7 +558,8 @@ def write_autostart(gui):
 def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_build=False, boot_timeout=60.0,
         command_delay=1.0, settle=2.0, log_path="out/test-serial.log", kernel_shell=False, image=False,
         hostfwd=(), iso=False, iso_disk=False, bios=False, nic="e1000e", bus="ahci", usb=False, no_ps2=False, usb_disk=False,
-        usb_fat=False, no_strict=False, audio=False, audio_wav="out/audio.wav", vga="", usb_hub=False):
+        usb_fat=False, no_strict=False, audio=False, audio_wav="out/audio.wav", vga="", usb_hub=False,
+        extra_nvme=""):
     if not no_build:
         build(gui, image, iso or iso_disk)
     elif gui:
@@ -569,7 +573,8 @@ def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_buil
     media = "cd" if iso else "isodisk" if iso_disk else None
     m = Machine(smp=smp, memory=memory, disk=disk, extra_disks=extra_disks, boot_timeout=boot_timeout,
                 image=image, hostfwd=hostfwd, media=media, bios=bios, nic=nic, bus=bus, usb=usb, no_ps2=no_ps2, usb_disk=usb_disk,
-                usb_fat=usb_fat, no_strict=no_strict, audio=audio, audio_wav=audio_wav, vga=vga, usb_hub=usb_hub)
+                usb_fat=usb_fat, no_strict=no_strict, audio=audio, audio_wav=audio_wav, vga=vga, usb_hub=usb_hub,
+                extra_nvme=extra_nvme)
     code = 0
     try:
         m.start()
@@ -622,6 +627,7 @@ def main():
     ap.add_argument("--audio-wav", default="out/audio.wav", help="com --audio, onde gravar o WAV")
     ap.add_argument("--vga", default="", help="virtio troca a VGA padrao por um virtio-gpu-pci")
     ap.add_argument("--usb-hub", action="store_true", help="com --usb, liga um usb-hub na porta 4 com teclado e pendrive atras")
+    ap.add_argument("--extra-nvme", default="", help="liga mais um disco, este como NVMe")
     ap.add_argument("--kernel-shell", action="store_true")
     ap.add_argument("--boot-timeout", type=float, default=60.0)
     ap.add_argument("--delay", type=float, default=1.0)
@@ -637,7 +643,7 @@ def main():
                      log_path=a.log, kernel_shell=a.kernel_shell, image=a.image, iso=a.iso,
                      iso_disk=a.iso_disk, bios=a.bios, nic=a.nic, bus=a.bus, usb=a.usb, no_ps2=a.no_ps2, usb_disk=a.usb_disk,
                      usb_fat=a.usb_fat, no_strict=a.no_strict, audio=a.audio, audio_wav=a.audio_wav, vga=a.vga,
-                     usb_hub=a.usb_hub)
+                     usb_hub=a.usb_hub, extra_nvme=a.extra_nvme)
     if not a.quiet:
         print(f"----- {a.log} -----")
         print(text)

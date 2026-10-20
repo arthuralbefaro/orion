@@ -286,6 +286,32 @@ static int copy_tree(const char *from, const char *to, bool top, bool keep_owner
     return bad ? -1 : 0;
 }
 
+static bool is_digit(char c)
+{
+    return c >= '0' && c <= '9';
+}
+
+static bool is_partition(const char *dev)
+{
+    const char *base = strrchr(dev, '/');
+    base = base ? base + 1 : dev;
+    size_t len = strlen(base);
+    if (!len || !is_digit(base[len - 1]))
+        return false;
+    if (!strncmp(base, "nvme", 4)) {
+        const char *pp = strrchr(base, 'p');
+        const char *nn = strrchr(base, 'n');
+        return pp && nn && pp > nn;
+    }
+    return true;
+}
+
+static void part_name(char *out, size_t cap, const char *dev, int n)
+{
+    size_t len = strlen(dev);
+    snprintf(out, cap, "%s%s%d", dev, len && is_digit(dev[len - 1]) ? "p" : "", n);
+}
+
 static int ensure_dir(const char *path)
 {
     if (mkdir(path, 0755) < 0 && errno != EEXIST) {
@@ -309,14 +335,13 @@ int main(int argc, char **argv)
         fprintf(stderr, "uso: instalar /dev/sdX [--sim]\n");
         return 2;
     }
+    if (is_partition(dev)) {
+        fprintf(stderr, "instalar: %s parece uma particao; use o disco inteiro\n", dev);
+        return 1;
+    }
     struct stat st;
     if (stat(dev, &st) < 0 || !S_ISBLK(st.st_mode)) {
         fprintf(stderr, "instalar: %s nao e um disco\n", dev);
-        return 1;
-    }
-    size_t len = strlen(dev);
-    if (len && dev[len - 1] >= '0' && dev[len - 1] <= '9') {
-        fprintf(stderr, "instalar: %s parece uma particao; use o disco inteiro\n", dev);
         return 1;
     }
     if (access(PAYLOAD "/boot/orion.elf", R_OK) < 0) {
@@ -350,8 +375,8 @@ int main(int argc, char **argv)
     if (partition(dev, sectors, &root_first, &root_last) < 0)
         return 1;
     char esp[64], rootp[64];
-    snprintf(esp, sizeof(esp), "%s1", dev);
-    snprintf(rootp, sizeof(rootp), "%s2", dev);
+    part_name(esp, sizeof(esp), dev, 1);
+    part_name(rootp, sizeof(rootp), dev, 2);
     if (access(esp, F_OK) < 0 || access(rootp, F_OK) < 0) {
         fprintf(stderr, "instalar: as particoes novas nao apareceram (%s, %s)\n", esp, rootp);
         return 1;

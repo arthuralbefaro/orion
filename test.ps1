@@ -33,6 +33,7 @@ param(
     [switch]$Audio,
     [string]$Vga = "",
     [switch]$UsbHub,
+    [string]$ExtraNvme = "",
     [string]$AudioWav = "out/audio.wav",
     [string]$LoginUser = "root",
     [string]$LoginPassword = "orion"
@@ -154,6 +155,7 @@ function Get-QemuArgs {
     if ($Usb -and $UsbFat) { $a += @("-blockdev", "driver=raw,node-name=stick2,file.driver=file,file.filename=out/stick2.img", "-device", "usb-storage,bus=xhci.0,drive=stick2,id=pen2") }
     if ($Disk) { $a += @("-drive", "format=raw,file=out/disk.img") }
     foreach ($extra in $ExtraDisks) { $a += @("-drive", "format=raw,file=$extra") }
+    if ($ExtraNvme) { $a += @("-drive", "if=none,id=nx,format=raw,file=$ExtraNvme", "-device", "nvme,drive=nx,serial=orionx") }
     return $a | Where-Object { $_ } | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
 }
 

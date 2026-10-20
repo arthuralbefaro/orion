@@ -3626,3 +3626,14 @@ O que mudou na 5.7 e por que:
   "nenhuma", novo no `reboot:` dos dois harnesses) e boota do disco: raiz
   ext2 do sda2, particao EFI em /boot/efi, login, programas rodando,
   `/etc/shadow` 0600 e `su` setuid; o que e gravado sobrevive a outro reboot.
+
+## v3.0.0-a2 (etapa 7.4: roteiro de hardware real)
+
+- `docs/teste-hardware-real.md` passou a ter o roteiro inteiro do teste num
+  PC de verdade (gravacao, firmware, etapas do boot, o que mandar se falhar,
+  instalacao opcional, limitacoes). A 7.4 fica `[!]` ate o dono testar.
+- `instalar` em NVMe: o nome do disco termina em digito (`nvme0n1`) e as
+  particoes ganham `p` (`nvme0n1p1`), a mesma regra que o kernel usa para
+  nomear. Uma particao e reconhecida pelo nome (para `sdX`/`vdX`, digito no
+  fim; para NVMe, um `p` depois do `n`) antes de qualquer outra checagem,
+  inclusive para uma particao que ainda nao existe.
