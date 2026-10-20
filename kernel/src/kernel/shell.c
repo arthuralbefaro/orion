@@ -20,6 +20,7 @@
 #include <kernel/smp.h>
 #include <drivers/pci.h>
 #include <drivers/usb.h>
+#include <drivers/hda.h>
 #include <kernel/irqctx.h>
 #include <kernel/syscall.h>
 #include <fs/block.h>
@@ -592,6 +593,42 @@ static void cmd_irqtest(const char *args)
         kprintf("irqtest: falhou (codigo %d)\n", r);
 }
 
+static uint32_t parse_u32(const char **p, uint32_t def)
+{
+    while (**p == ' ')
+        (*p)++;
+    if (**p < '0' || **p > '9')
+        return def;
+    uint32_t v = 0;
+    while (**p >= '0' && **p <= '9' && v < 100000000)
+        v = v * 10 + (uint32_t)(*(*p)++ - '0');
+    return v;
+}
+
+static void cmd_hda(const char *args)
+{
+    (void)args;
+    if (!hda_present()) {
+        kprintf("hda: sem controlador de audio\n");
+        return;
+    }
+    char buf[256];
+    size_t n = hda_report(buf, sizeof(buf));
+    kprintf("%.*s", (int)n, buf);
+}
+
+static void cmd_hdatone(const char *args)
+{
+    const char *p = args ? args : "";
+    uint32_t ms = parse_u32(&p, 2000);
+    uint32_t hz = parse_u32(&p, 1000);
+    int r = hda_tone(ms, hz);
+    if (r == 0)
+        kprintf("hdatone: %u Hz por %u ms no canal esquerdo, tocado\n", hz, ms);
+    else
+        kprintf("hdatone: falhou (codigo %d)\n", r);
+}
+
 static void cmd_arp(const char *args)
 {
     (void)args;
@@ -667,6 +704,8 @@ static const struct command commands[] = {
     { "net",    "estado da rede",                       cmd_net },
     { "tcploss", "descarta 1 em N segmentos TCP (teste)", cmd_tcploss },
     { "usbstall", "forca um STALL no pendrive e recupera (teste)", cmd_usbstall },
+    { "hda", "estado do audio HDA", cmd_hda },
+    { "hdatone", "toca um tom no canal esquerdo: hdatone [ms] [Hz]", cmd_hdatone },
     { "usbtimeout", "cala a campainha de uma transferencia do pendrive (teste)", cmd_usbtimeout },
     { "irqtest", "testa o aviso de kmalloc e espera dentro de interrupcao", cmd_irqtest },
     { "arp",    "cache ARP",                            cmd_arp },

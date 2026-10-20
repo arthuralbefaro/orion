@@ -10,6 +10,7 @@ param(
     [switch]$OnlyV,
     [switch]$OnlyN,
     [switch]$OnlyU,
+    [switch]$OnlyS,
     [switch]$SlowWaits,
     [int]$StressRuns = 1,
     [switch]$Verbose
@@ -21,7 +22,7 @@ $failures = @()
 $checks = 0
 if ($SlowWaits) { $env:ORION_SLOW_WAITS = "1" } else { Remove-Item Env:ORION_SLOW_WAITS -ErrorAction SilentlyContinue }
 $regStart = Get-Date
-$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU)
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -1115,6 +1116,39 @@ if ($runAll -or $OnlyU) {
     Expect $u "mouse-botao\s+a=1 b=0 c=0\s*\n\s*mouse-botao\s+a=0" "botao do mouse USB desce e sobe"
     ExpectNot $u "usb\s+porta \d+: (Enable|Address|descritor)" "nenhuma porta falhou na enumeracao"
     ExpectNot $u "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|rust: " "nenhum panico na sequencia U"
+}
+
+# ---------------- Sequencia S: som ----------------
+if ($runAll -or $OnlyS) {
+    Write-Host "== Sequencia S (audio HDA, conferido pelo WAV do QEMU) ==" -ForegroundColor Cyan
+    Remove-Item (Join-Path $Root "out\audio.wav") -ErrorAction SilentlyContinue
+    $stepsS = @(
+        "key:0B", "cmd:hda", "cmd:hdatone 2000 1000", "until:15:hdatone:", "cmd:hda", "key:0B",
+        "cmd:cat /proc/interrupts", "wait:1"
+    )
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Audio -LogPath "out\reg-s.log" `
+        -Script $stepsS -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
+    $snd = Get-Log "out\reg-s.log"
+    $py = & (Join-Path $Root "tools\python.ps1")
+    $pyArgs = @($py | Select-Object -Skip 1)
+    $wav = & $py[0] @pyArgs (Join-Path $Root "tools\wavcheck.py") out/audio.wav --freq 1000 --dur 2
+    $snd += "`n----- hospedeiro: wavcheck -----`n" + ($wav -join "`n")
+    if ($Verbose) { Write-Output $snd }
+
+    Expect $snd "hda\s+controlador HDA 8086:293e em " "controlador HDA (ich9) achado no PCI"
+    Expect $snd "hda\s+codec 0 \([0-9a-f]{4}:[0-9a-f]{4}\): AFG \d+, DAC \d+, stream de saida \d+, MSI" "codec achado, grafo percorrido ate um DAC, MSI ligada"
+    Expect $snd "hda\s+pino \d+ \(line out\): caminho \d+ -> \d+" "pino de saida achado pela configuracao padrao, com caminho ate o DAC"
+    Expect $snd "hdatone: 1000 Hz por 2000 ms no canal esquerdo, tocado" "hdatone toca o tom de teste"
+    Expect $snd "hda: [1-9]\d+ interrupcao\(oes\), 0 falta\(s\) de dado" "IOC por entrada da BDL repoe o anel por interrupcao, sem falta de dado"
+    Expect $snd "(?s)cat /proc/interrupts.*?\n\s*\d+:(\s+\d+){4}\s+hda" "/proc/interrupts conta a MSI do HDA"
+    ExpectNot $snd "(?s)cat /proc/interrupts.*?\n\s*\d+:\s+0\s+0\s+0\s+0\s+hda" "a MSI do HDA chegou de fato"
+    Expect $snd "wavcheck: 48000 Hz, 2 canal\(is\), 16 bits" "WAV do QEMU em 48 kHz, estereo, 16 bits"
+    Expect $snd "wavcheck: som no canal esquerdo por [\d.]+ s \(esperado 2\.00 \+- 0\.10\): ok" "duracao do som na margem"
+    Expect $snd "wavcheck: frequencia \d+ Hz pelos cruzamentos de zero \(esperado 1000 \+- 20\): ok" "frequencia ~1 kHz pelos cruzamentos de zero"
+    Expect $snd "wavcheck: canal direito em silencio \(pico \d+\): ok" "canal direito em silencio"
+    Expect $snd "wavcheck: maior buraco dentro do som: \d+ ms: ok" "sem buraco no meio do som"
+    ExpectNot $snd "BUG: [^\n]*dentro de interrupcao" "nenhum aviso de contexto de interrupcao no audio"
+    ExpectNot $snd "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico na sequencia S"
 }
 
 # ---------------- Sequencia E: estresse de processos ----------------

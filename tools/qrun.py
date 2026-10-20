@@ -121,8 +121,10 @@ SLOW_WAITS_ENV = "ORION_SLOW_WAITS"
 class Machine:
     def __init__(self, smp=4, memory=512, disk=False, extra_disks=(), serial_port=4444, monitor_port=4445,
                  boot_timeout=60.0, image=False, hostfwd=(), login=("root", "orion"), media=None, bios=False,
-                 nic="e1000e", bus="ahci", usb=False, no_ps2=False, usb_disk=False, usb_fat=False, no_strict=False):
+                 nic="e1000e", bus="ahci", usb=False, no_ps2=False, usb_disk=False, usb_fat=False, no_strict=False,
+                 audio=False):
         self.image = image
+        self.audio = audio
         self.no_strict = no_strict
         self.usb_disk = usb_disk
         self.usb_fat = usb_fat
@@ -184,6 +186,8 @@ class Machine:
         ]
         if not self.no_strict:
             args += ["-fw_cfg", "name=opt/orion/strict,string=1"]
+        if self.audio:
+            args += ["-audiodev", "wav,id=snd0,path=out/audio.wav,out.frequency=48000,out.channels=2,out.format=s16", "-device", "ich9-intel-hda,id=hda", "-device", "hda-output,audiodev=snd0,bus=hda.0"]
         if self.usb:
             args += ["-device", "qemu-xhci,id=xhci,p2=8,p3=8", "-device", "usb-kbd,bus=xhci.0", "-device", "usb-mouse,bus=xhci.0"]
         if self.usb and self.usb_disk:
@@ -540,7 +544,7 @@ def write_autostart(gui):
 def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_build=False, boot_timeout=60.0,
         command_delay=1.0, settle=2.0, log_path="out/test-serial.log", kernel_shell=False, image=False,
         hostfwd=(), iso=False, iso_disk=False, bios=False, nic="e1000e", bus="ahci", usb=False, no_ps2=False, usb_disk=False,
-        usb_fat=False, no_strict=False):
+        usb_fat=False, no_strict=False, audio=False):
     if not no_build:
         build(gui, image, iso or iso_disk)
     elif gui:
@@ -554,7 +558,7 @@ def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_buil
     media = "cd" if iso else "isodisk" if iso_disk else None
     m = Machine(smp=smp, memory=memory, disk=disk, extra_disks=extra_disks, boot_timeout=boot_timeout,
                 image=image, hostfwd=hostfwd, media=media, bios=bios, nic=nic, bus=bus, usb=usb, no_ps2=no_ps2, usb_disk=usb_disk,
-                usb_fat=usb_fat, no_strict=no_strict)
+                usb_fat=usb_fat, no_strict=no_strict, audio=audio)
     code = 0
     try:
         m.start()
@@ -603,6 +607,7 @@ def main():
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--slow-waits", action="store_true", help="esperas fixas antigas, sem esperar o prompt")
     ap.add_argument("--no-strict", action="store_true", help="sem o fw_cfg opt/orion/strict (como num PC de verdade)")
+    ap.add_argument("--audio", action="store_true", help="liga um HDA (ich9) com codec hda-output gravando em out/audio.wav")
     ap.add_argument("--kernel-shell", action="store_true")
     ap.add_argument("--boot-timeout", type=float, default=60.0)
     ap.add_argument("--delay", type=float, default=1.0)
@@ -617,7 +622,7 @@ def main():
                      boot_timeout=a.boot_timeout, command_delay=a.delay, settle=a.settle,
                      log_path=a.log, kernel_shell=a.kernel_shell, image=a.image, iso=a.iso,
                      iso_disk=a.iso_disk, bios=a.bios, nic=a.nic, bus=a.bus, usb=a.usb, no_ps2=a.no_ps2, usb_disk=a.usb_disk,
-                     usb_fat=a.usb_fat, no_strict=a.no_strict)
+                     usb_fat=a.usb_fat, no_strict=a.no_strict, audio=a.audio)
     if not a.quiet:
         print(f"----- {a.log} -----")
         print(text)

@@ -3356,3 +3356,60 @@ O que mudou na 5.7 e por que:
   `kreclaim` ainda cheia (ate 268 paginas logo depois do ultimo `unlink`). Em
   vez de subir a tolerancia, ele passou a medir de novo a cada 10 ms enquanto
   as paginas livres ainda sobem, ate 1 s.
+
+## v2.4.0-a26 (etapa 5.8 parte 1: driver HDA)
+
+- Controlador: reset pelo `GCTL.CRST` (baixa, espera, sobe e espera 2 ms
+  para os codecs se anunciarem no `STATESTS`), CORB e RIRB de 256 entradas
+  na mesma pagina. Os verbos do codec vao pelo CORB e a resposta e lida por
+  consulta no RIRB (prazo de 200 ms por verbo), sem interrupcao: so a
+  configuracao usa verbo, e e rara. Depois de cada resposta o `RIRBSTS` e
+  limpo e o `RINTCNT` fica em 255: o QEMU (e controladores reais) param de
+  andar no CORB quando o contador de respostas chega ao limite sem o status
+  ser limpo. Resposta nao solicitada (bit 4 do `response_ex`) e pulada.
+- Codec sem IDs fixos: o driver acha o AFG pelo tipo de grupo de funcao, le
+  as capacidades, a configuracao padrao e a lista de conexoes de cada
+  widget, e escolhe os pinos de saida pela configuracao padrao (capaz de
+  saida, conectividade diferente de "nenhuma", dispositivo line out, depois
+  alto-falante, depois fone). De cada pino ele desce pelas conexoes (ate 6
+  nos, sem passar duas vezes pelo mesmo) ate um conversor de saida que nao
+  seja digital; o primeiro DAC achado e usado por todos os pinos que chegam
+  nele (ate 4), entao num notebook alto-falante e fone tocam juntos. Em cada
+  no do caminho: energia D0 (se o no controla energia), selecao de conexao
+  (seletor e pino com mais de uma entrada), amplificador de entrada do mixer
+  na entrada usada e de saida de todo no com amplificador, sem mudo e no
+  ganho de 0 dB (o "offset" da capacidade do amplificador, nao o maximo,
+  para nao estourar caixa de som). No pino: saida ligada, HP ligado se for
+  fone, e EAPD se o pino tiver (amplificador externo de muitos notebooks,
+  que sem isso ficam mudos).
+- Pensando no hardware real (7.4), ficou de fora: deteccao de fone
+  (unsolicited response e troca entre alto-falante e fone), codecs com
+  quirks (pinos com configuracao padrao errada, GPIO para ligar
+  amplificador), HDMI/DisplayPort (conversores digitais sao pulados) e mais
+  de um codec (usa o primeiro que respondeu). Se a 7.4 voltar muda, o
+  primeiro suspeito e o caminho escolhido (o log mostra pino e caminho) e o
+  EAPD.
+- Stream: o primeiro stream de saida (indice = numero de streams de
+  entrada, do `GCAP`), tag 1, BDL de 8 entradas de 4 KiB (anel de 32 KiB,
+  ~170 ms em 48 kHz estereo de 16 bits) com IOC em cada entrada, a BDL numa
+  pagina propria (alinhada bem alem dos 128 bytes pedidos), o mesmo formato
+  no `SDnFMT` e no conversor (`SET_CONV_FORMAT`) e a tag no conversor
+  (`SET_CONV_STREAM_CHAN`). Interrupcao por MSI; sem MSI, uma thread consulta
+  a cada 5 ms.
+- Posicao: o driver le o `LPIB` na interrupcao e em cada escrita e mantem
+  contadores que so crescem (consumido, escrito e "ja zerado"). Tudo que o
+  hardware vai tocar e ainda nao foi escrito e zerado na hora: com a fila
+  vazia toca silencio, nunca o ultimo trecho repetido. Escrita atrasada
+  (consumido passou o escrito) conta como falta de dado e pula para a
+  posicao do hardware.
+- Parar com dreno espera o hardware passar do ultimo byte escrito mais
+  60 ms de silencio: parando no ultimo byte, o FIFO do controlador (e o
+  buffer do QEMU) perdia o fim do som (o tom de 2 s saia com 1,96 s).
+- Teste: `hdatone [ms] [Hz]` no shell do kernel gera um seno (aproximacao de
+  Bhaskara em inteiros, o kernel nao usa ponto flutuante) so no canal
+  esquerdo. A sequencia S liga `ich9-intel-hda` com o codec `hda-output` e
+  `-audiodev wav`; o `test.ps1` fecha o QEMU pelo monitor (`quit`) antes da
+  leitura, para o cabecalho do WAV sair certo, e o `tools/wavcheck.py` confere
+  no hospedeiro: nao mudo, duracao na margem, ~1 kHz pelos cruzamentos de
+  zero, canal direito em silencio e nenhum buraco de mais de 10 ms, sem
+  comparar amostra por amostra. O audio so e ligado nessa sequencia.

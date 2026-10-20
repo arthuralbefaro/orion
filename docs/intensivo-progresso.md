@@ -46,9 +46,10 @@ na ISO na F, no virtio (disco e rede) na V, no NVMe na N e com USB na U,
 com 585 verificacoes em ~18 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.8, audio HDA (requisitos logo abaixo das regras), depois 5.9
-e 5.10 (hub USB 2); a regressao completa volta no fim da Fase 5. Versao
-2.4.0-a26 em diante.
+Proxima etapa: 5.8 parte 2, `/dev/dsp` no estilo OSS e o `play` (requisitos
+4 da 5.8 logo abaixo das regras), depois a parte 3 (Doom com efeitos
+sonoros), 5.9 e 5.10; a regressao completa volta no fim da Fase 5. Versao
+2.4.0-a27 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -96,6 +97,19 @@ notebook, que vem caindo com tela azul):
   (nem build, nem `test.ps1`), porque a regressao reconstroi a imagem no meio
   (depois da D e antes da F) e testaria codigo pela metade. Cada commit leva
   so os arquivos da parte dele.
+
+Regra de trabalho continuo (decidida pelo dono em 2026-10-20, vale ate o fim
+do plano):
+- Nao parar depois de um commit, de um relatorio ou de uma frase como "sigo
+  para a proxima". Depois de cada parte: resumo curto e, na mesma resposta,
+  ja comecar a proxima parte (ler o diario, planejar, editar, rodar). Nunca
+  terminar uma resposta anunciando o que vai fazer: fazer.
+- O dono nao precisa aprovar nada entre partes ou etapas; nao esperar
+  resposta.
+- Parar so nos casos extremos ja combinados: RAM abaixo de 1 GB depois de
+  esperar, decisao que nao da para desfazer, erro que nao se resolve depois
+  de investigar, ou a 7.4 (hardware real), que fica `[!]` e e pulada.
+- Resposta longa: relatorio em poucas linhas e continuar trabalhando.
 
 Requisitos da 5.7 parte 2 (pendrive robusto), decididos pelo dono em
 2026-10-19:
@@ -235,7 +249,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 5.5 | xHCI | [x] | 14:10 | 14:55 | ver `git log` |
 | 5.6 | USB HID | [x] | 14:55 | 15:55 | ver `git log` |
 | 5.7 | USB armazenamento | [x] | 15:55 | 18:16 | `05ee35e` |
-| 5.8 | Audio HDA | [ ] | | | |
+| 5.8 | Audio HDA | [~] | 10:54 | | |
 | 5.9 | Video BGA e virtio-gpu | [ ] | | | |
 | 5.10 | Hub USB 2 basico (extra, decidido em 2026-10-19) | [ ] | | | |
 | 6.1 | Protocolo de janelas | [x] | 11:06 | 11:47 | ver `git log` |
@@ -1748,6 +1762,27 @@ a linha do modo estrito dizia "vira panico" e F, V, N, U e E procuravam
 mostrou o panico do estresse; 20:06, 584 com 2 falhas do `tmptest` (a fila
 da `kreclaim`, terceira vez) e o estresse 3 vezes verde.
 Versao 2.4.0-a25.
+
+#### 5.8 parte 1 Driver HDA - 10:54 a 11:05 - FEITO
+A 5.8 vai em tres partes: driver (esta), `/dev/dsp` e `play`, Doom com
+efeitos sonoros. `drivers/hda.c` (novo): reset do controlador, CORB e RIRB
+(verbos por consulta), grafo do codec percorrido sem IDs fixos (AFG, pinos
+pela configuracao padrao, caminho ate um DAC; D0, sem mudo, 0 dB e EAPD em
+cada no), stream de saida com BDL de 8 x 4 KiB, IOC por entrada, LVI, o
+mesmo formato no stream e no conversor, tag no conversor, MSI, silencio no
+que nao foi escrito. Shell do kernel: `hda` (estado) e `hdatone [ms] [Hz]`.
+`test.ps1 -Audio` / `qrun.py --audio` ligam `ich9-intel-hda` + `hda-output`
+com `-audiodev wav`; `tools/wavcheck.py` (novo) confere o WAV no hospedeiro.
+Detalhes e o que ficou pensado para hardware real: `docs/DECISOES.md`,
+v2.4.0-a26.
+Verificacao: sequencia S (nova), 14 verificacoes, verde: codec 1af4:0012,
+AFG 1, DAC 2, pino 3 (line out), MSI com ~93 interrupcoes por 2 s, 0 falta
+de dado, WAV com 2 s de 1 kHz no canal esquerdo, direito mudo, sem buraco.
+Versao 2.4.0-a26. RAM livre antes: 5,1 GB.
+Problemas: (1) o dreno parava o stream assim que o DMA chegava ao ultimo
+byte e o fim do som se perdia no FIFO (1,96 s em vez de 2 s); agora espera
+mais 60 ms de silencio. (2) O fim do dreno contava como falta de dado; nao
+conta mais.
 
 ### Sessao 2 - 2026-10-17
 

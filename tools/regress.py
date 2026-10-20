@@ -61,6 +61,7 @@ def parse_sequences():
             seq["usb_disk"] = bool(re.search(r"-UsbDisk\b", c))
             seq["usb_fat"] = bool(re.search(r"-UsbFat\b", c))
             seq["no_strict"] = bool(re.search(r"-NoStrict\b", c))
+            seq["audio"] = bool(re.search(r"-Audio\b", c))
             hf = re.search(r"-HostFwd\s+@\(([^)]*)\)", c)
             if hf:
                 seq["hostfwd"] = [ps_string(s) for s in STRING.finditer(hf.group(1))]
@@ -79,6 +80,8 @@ def parse_sequences():
         seq["remove_disk"] = bool(re.search(r'Remove-Item \(Join-Path \$Root "out\\disk\.img"\)', body))
         seq["remove"] = re.findall(r'Remove-Item \(Join-Path \$Root "out\\(stick\d*\.img)"\)', body)
         seq["hostfat"] = re.findall(r'tools\\mkfat\.py"\) le (\S+) (\S+)', body)
+        seq["hostwav"] = re.findall(r'tools\\wavcheck\.py"\) (\S+) (.+)$', body, flags=re.M)
+        seq["remove"] += re.findall(r'Remove-Item \(Join-Path \$Root "out\\(audio\.wav)"\)', body)
         for e in re.finditer(r'^\s*(Expect|ExpectNot) \$\w+ ("(?:[^"`]|`.)*"|\'(?:[^\']|\'\')*\') ("(?:[^"`]|`.)*"|\'(?:[^\']|\'\')*\')\s*$',
                              body, flags=re.M):
             pat = ps_string(STRING.match(e.group(2)))
@@ -200,7 +203,7 @@ def run_stress(seq, rep, runs, smp, image=False):
 
 def main():
     ap = argparse.ArgumentParser(description="Regressao do Orion (le os passos do regressao.ps1)")
-    ap.add_argument("which", nargs="?", default="ABCDFVNUE", help="sequencias, ex.: ABCDFVNUE ou AC")
+    ap.add_argument("which", nargs="?", default="ABCDFVNUSE", help="sequencias, ex.: ABCDFVNUSE ou AC")
     ap.add_argument("--smp", type=int, default=4)
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--stress-runs", type=int, default=1)
@@ -253,7 +256,8 @@ def main():
                               bios=seq.get("bios", False), nic=seq.get("nic", "e1000e"),
                               bus=seq.get("bus", "ahci"), usb=seq.get("usb", False),
                               no_ps2=seq.get("no_ps2", False), usb_disk=seq.get("usb_disk", False),
-                              usb_fat=seq.get("usb_fat", False), no_strict=seq.get("no_strict", False))
+                              usb_fat=seq.get("usb_fat", False), no_strict=seq.get("no_strict", False),
+                              audio=seq.get("audio", False))
         finally:
             if web:
                 web.kill()
@@ -261,6 +265,10 @@ def main():
             got = subprocess.run([sys.executable, str(ROOT / "tools" / "mkfat.py"), "le", image_path, name],
                                  cwd=ROOT, capture_output=True, text=True, encoding="latin-1")
             log += f"\n----- hospedeiro: {name} -----\n" + got.stdout
+        for wav_path, wav_args in seq["hostwav"]:
+            got = subprocess.run([sys.executable, str(ROOT / "tools" / "wavcheck.py"), wav_path] + wav_args.split(),
+                                 cwd=ROOT, capture_output=True, text=True)
+            log += "\n----- hospedeiro: wavcheck -----\n" + got.stdout
         built = built or not seq["gui"]
         if seq["gui"]:
             qrun.write_autostart(False)
