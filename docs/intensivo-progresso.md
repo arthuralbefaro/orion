@@ -28,22 +28,22 @@ propria do Orion para eles esta em `user/include/orion.h`; o Rust do kernel em
 10. Nunca rodar o `test.ps1` enquanto a regressao roda: ele mata o QEMU dela
 (mesmas portas 4444/4445).
 
-Estado (2026-10-19, 20:50, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
-`v2.2` e `v2.3`), mais 8.7, 7.1, 7.2, 5.1, 6.1 a 6.6 (apps `imgview`, `monitor`,
-`arquivos`, `editor`, `config` e `terminal`) e 6.7 (barra de tarefas,
-Alt+Tab, minimizar e maximizar, lancador de apps): Fase 6 inteira; e a
-5.2 (MSI: AHCI na CPU 1, rede `e1000e` na CPU 2), a 5.3 (virtio-blk e
-virtio-net com MSI-X), a 5.4 (NVMe), a 5.5 (xHCI e `lsusb`, em Rust) e a
-5.6 (teclado e mouse USB, inclusive sem PS/2) e a 5.7 inteira
-(pendrive USB: Bulk-Only, despachante unico, prazos, recuperacao, remocao e
-segundo plug; parte 4: contexto de interrupcao vigiado). Versao 2.4.0-a25. O
+Estado (2026-10-20, 12:45, sessao 3): Fases 2, 3 e 4 inteiras (tags `v2.1`,
+`v2.2` e `v2.3`), Fases 5 e 6 inteiras (tag `v2.4`): uACPI, MSI/MSI-X,
+virtio-blk e virtio-net, NVMe, USB (xHCI em Rust, teclado e mouse, pendrive
+robusto com remocao, hub USB 2), audio HDA com `/dev/dsp` e Doom com efeitos
+sonoros, video Bochs/BGA e virtio-gpu com `fbset`; desktop com wm, apps,
+barra de tarefas e lancador. Mais 8.7, 7.1 e 7.2, e o comeco da 8.2 (contador
+de travas de spin por thread). Contexto de interrupcao vigiado (aviso e, na
+regressao, panico). Versao 2.4.0-a31. O
 boot pede usuario e senha (`root`/`orion`); o `test.ps1` e o `qrun.py` entram
 sozinhos como root. SMEP, SMAP e ASLR ligados. `build.ps1 -Iso` gera a ISO
 hibrida e live. ACPI pelo uACPI. Apps graficos em processos separados com a
 `libgui` (areas sujas); o `wm` usa fontes TrueType e papel de parede PNG. A
 regressao roda no `out\orion.img` (GPT, raiz em ext2) nas sequencias A a E,
-na ISO na F, no virtio (disco e rede) na V, no NVMe na N e com USB na U,
-com 585 verificacoes em ~18 min; a sequencia A sobe o `tools/hostweb.py`
+na ISO na F, no virtio (disco e rede) na V, no NVMe na N, com USB na U, com
+hub na H, com audio na S e com troca de video na G (BGA) e na W
+(virtio-gpu), com 646 verificacoes em ~20 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
 Proxima etapa: regressao completa do fim da Fase 5 (todas as sequencias,
@@ -1890,6 +1890,12 @@ todos os bits. (2) Na U, a verificacao do `lsusb` depois da remocao contava
 as linhas ate "eventos" e quebrou com as linhas novas de relatorios HID; a
 expressao passou a aceitar essas linhas, conferindo os mesmos 3
 dispositivos.
+
+#### Fecho da Fase 5 - regressao completa - 12:20 a 12:41 - VERDE
+Regressao completa (criterio novo: fim de fase): 646 verificacoes, 0 falhas,
+20,1 min, com as sequencias novas S (audio), G (Bochs/BGA), W (virtio-gpu) e
+H (hub USB). RAM livre antes: 4,2 GB. Tag `v2.4` (Fases 5 e 6; as duas foram
+feitas como 2.4.0-aNN).
 
 ### Sessao 2 - 2026-10-17
 
