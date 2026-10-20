@@ -48,6 +48,7 @@ const TRB_ENABLE_SLOT: u32 = 9;
 const TRB_DISABLE_SLOT: u32 = 10;
 const TRB_ADDRESS_DEVICE: u32 = 11;
 const TRB_CONFIGURE_EP: u32 = 12;
+const TRB_EVALUATE_CTX: u32 = 13;
 const TRB_RESET_EP: u32 = 14;
 const TRB_STOP_EP: u32 = 15;
 const TRB_SET_DEQUEUE: u32 = 16;
@@ -239,6 +240,7 @@ struct Done {
 enum HidKind {
     Keyboard,
     Mouse,
+    Hub,
 }
 
 struct HidPipe {
@@ -250,6 +252,7 @@ struct HidPipe {
     bufs: Dma,
     prev: [u8; 8],
     keys: Vec<hid::KeyEvent>,
+    reports: u64,
 }
 
 struct Disp {
@@ -262,6 +265,7 @@ struct Disp {
     waiters: [Waiter; WAITERS],
     hids: Vec<HidPipe>,
     ports: u32,
+    hub_changes: u64,
     late: u64,
     stray: u64,
 }
@@ -351,7 +355,9 @@ impl Disp {
             return true;
         }
         let off = (buf - h.bufs.phys) as usize;
+        let mut hub_hit = None;
         if ev.code() == CC_SUCCESS || ev.code() == CC_SHORT_PACKET {
+            h.reports += 1;
             let len = (h.mps as usize).saturating_sub((ev.status & 0x00FF_FFFF) as usize);
             let data = &h.bufs.bytes(off + len)[off..];
             match h.kind {
@@ -371,10 +377,18 @@ impl Disp {
                         unsafe { usb_mouse(m.dx, m.dy, m.dz, m.buttons) };
                     }
                 }
+                HidKind::Hub => {
+                    if data.iter().any(|&b| b != 0) {
+                        hub_hit = Some(h.slot);
+                    }
+                }
             }
         }
         h.ring.push(buf, h.mps as u32, (TRB_NORMAL << 10) | (1 << 5) | (1 << 2));
         unsafe { wr(db, h.slot as usize * 4, h.dci) };
+        if let Some(slot) = hub_hit {
+            self.hub_changes |= 1u64 << (slot & 63);
+        }
         true
     }
 
@@ -485,6 +499,22 @@ struct EpSetup {
     dequeue: u64,
 }
 
+#[derive(Clone, Copy)]
+struct Loc {
+    root_port: u8,
+    route: u32,
+    parent: Option<(usize, u8)>,
+    tt_slot: u8,
+    tt_port: u8,
+    depth: u8,
+}
+
+impl Loc {
+    fn root(port: u32) -> Loc {
+        Loc { root_port: port as u8, route: 0, parent: None, tt_slot: 0, tt_port: 0, depth: 0 }
+    }
+}
+
 pub struct Device {
     pub port: u8,
     pub slot: u8,
@@ -495,6 +525,8 @@ pub struct Device {
     pub product: String,
     hid: bool,
     gone: bool,
+    loc: Loc,
+    hub_ports: u8,
     ep0: Ring,
     input: Dma,
     output: Dma,
@@ -632,6 +664,7 @@ impl Xhci {
             waiters: [NO_WAITER; WAITERS],
             hids: Vec::with_capacity(8),
             ports: 0,
+            hub_changes: 0,
             late: 0,
             stray: 0,
         });
@@ -722,6 +755,10 @@ impl Xhci {
     }
 
     fn configure_endpoints(&mut self, dev: usize, eps: &[EpSetup], drop: bool) -> bool {
+        self.configure_endpoints_ex(dev, eps, drop, [0; 3])
+    }
+
+    fn configure_endpoints_ex(&mut self, dev: usize, eps: &[EpSetup], drop: bool, slot_or: [u32; 3]) -> bool {
         let c = self.ctx_size;
         let slot = self.devices[dev].slot as u32;
         let input = &self.devices[dev].input;
@@ -742,7 +779,9 @@ impl Xhci {
         }
         let slot0 = input.read32(c);
         let entries = ((slot0 >> 27) & 0x1F).max(last);
-        input.write32(c, (slot0 & !(0x1F << 27)) | (entries << 27));
+        input.write32(c, (slot0 & !(0x1F << 27)) | (entries << 27) | slot_or[0]);
+        input.write32(c + 4, input.read32(c + 4) | slot_or[1]);
+        input.write32(c + 8, input.read32(c + 8) | slot_or[2]);
         for e in eps {
             let ep = (e.dci as usize + 1) * c;
             input.write32(ep, e.interval << 16);
@@ -797,7 +836,7 @@ impl Xhci {
             let buf = bufs.phys + (i * HID_BUF) as u64;
             ring.push(buf, mps as u32, (TRB_NORMAL << 10) | (1 << 5) | (1 << 2));
         }
-        let pipe = HidPipe { slot, dci, kind, mps, ring, bufs, prev: [0; 8], keys: Vec::with_capacity(64) };
+        let pipe = HidPipe { slot, dci, kind, mps, ring, bufs, prev: [0; 8], keys: Vec::with_capacity(64), reports: 0 };
         with_disp(|d| d.hids.push(pipe));
         self.devices[dev].hid = true;
         unsafe { wr(self.db, slot as usize * 4, dci) };
@@ -932,7 +971,22 @@ impl Xhci {
         Some((sc >> 10) & 0xF)
     }
 
-    fn attach(&mut self, port: u32, speed: u32) -> Result<(), &'static str> {
+    fn port_name(&self, dev: usize) -> String {
+        let d = &self.devices[dev];
+        let mut out = String::new();
+        match d.loc.parent {
+            Some((hub, p)) => {
+                let _ = write!(out, "{}.{}", self.port_name(hub), p);
+            }
+            None => {
+                let _ = write!(out, "{}", d.loc.root_port);
+            }
+        }
+        out
+    }
+
+    fn attach(&mut self, loc: Loc, speed: u32) -> Result<(), &'static str> {
+        let port = loc.root_port as u32;
         let done = self.command(0, TRB_ENABLE_SLOT << 10).ok_or("Enable Slot sem resposta")?;
         if done.code != CC_SUCCESS {
             return Err("Enable Slot recusado");
@@ -944,8 +998,9 @@ impl Xhci {
         self.dcbaa.write64(slot as usize * 8, output.phys);
         let c = self.ctx_size;
         input.write32(4, 0b11);
-        input.write32(c, (speed << 20) | (1 << 27));
+        input.write32(c, (loc.route & 0xFFFFF) | (speed << 20) | (1 << 27));
         input.write32(c + 4, port << 16);
+        input.write32(c + 8, loc.tt_slot as u32 | ((loc.tt_port as u32) << 8));
         let mps = desc::max_packet0_for(speed as u8) as u32;
         input.write32(2 * c + 4, (3 << 1) | (4 << 3) | (mps << 16));
         input.write64(2 * c + 8, ep0.dequeue());
@@ -963,12 +1018,29 @@ impl Xhci {
             product: String::new(),
             hid: false,
             gone: false,
+            loc,
+            hub_ports: 0,
             ep0,
             input,
             output,
             msc: None,
         });
         let dev = self.devices.len() - 1;
+        let name = self.port_name(dev);
+        if speed < 3 {
+            let head = self.get_descriptor(dev, desc::DT_DEVICE, 0, 0, 8).ok_or("descritor do dispositivo nao veio")?;
+            let real = head.get(7).copied().unwrap_or(8) as u32;
+            if real != mps && (real == 8 || real == 16 || real == 32 || real == 64) {
+                let input = &self.devices[dev].input;
+                input.clear(4096);
+                input.write32(4, 0b10);
+                input.write32(2 * c + 4, (3 << 1) | (4 << 3) | (real << 16));
+                let phys = input.phys;
+                if !self.command_ok(phys, (TRB_EVALUATE_CTX << 10) | ((slot as u32) << 24)) {
+                    return Err("Evaluate Context recusado");
+                }
+            }
+        }
         let raw = self.get_descriptor(dev, desc::DT_DEVICE, 0, 0, 18).ok_or("descritor do dispositivo nao veio")?;
         let d = desc::parse_device(&raw).ok_or("descritor do dispositivo invalido")?;
         self.devices[dev].desc = d;
@@ -991,7 +1063,7 @@ impl Xhci {
                 let _ = write!(
                     msg,
                     "porta {}: {} HID pronto, protocolo de boot",
-                    port,
+                    name,
                     if kind == HidKind::Keyboard { "teclado" } else { "mouse" }
                 );
                 log(&msg);
@@ -999,17 +1071,155 @@ impl Xhci {
             Ok(None) => {}
             Err(why) => {
                 let mut msg = String::new();
-                let _ = write!(msg, "porta {}: HID nao iniciou: {}", port, why);
+                let _ = write!(msg, "porta {}: HID nao iniciou: {}", name, why);
+                log(&msg);
+            }
+        }
+        if Self::device_class(&self.devices[dev]) == 9 {
+            if let Err(why) = self.setup_hub(dev) {
+                let mut msg = String::new();
+                let _ = write!(msg, "porta {}: hub nao iniciou: {}", name, why);
                 log(&msg);
             }
         }
         Ok(())
     }
 
+    fn setup_hub(&mut self, dev: usize) -> Result<(), &'static str> {
+        let d = &self.devices[dev];
+        if d.speed >= 4 {
+            return Err("hub USB 3 (lado SuperSpeed) nao suportado");
+        }
+        if d.loc.depth >= 5 {
+            return Err("hubs demais em cascata");
+        }
+        let speed = d.speed;
+        let protocol = d.desc.protocol;
+        let cfg = d.config.clone().ok_or("sem configuracao")?;
+        let iface = cfg.interfaces.iter().find(|i| i.class == 9).copied().ok_or("sem interface de hub")?;
+        let ep = cfg
+            .endpoints
+            .iter()
+            .find(|e| e.interface == iface.number && e.address & 0x80 != 0 && e.attributes & 3 == 3)
+            .copied()
+            .ok_or("sem endpoint de mudanca de estado")?;
+        self.buffer.clear(71);
+        self.control(dev, [0xA0, 6, 0, 0x29, 0, 0, 71, 0], 71).ok_or("descritor do hub nao veio")?;
+        let hd = self.buffer.bytes(9);
+        if hd[1] != 0x29 {
+            return Err("descritor do hub invalido");
+        }
+        let ports = hd[2].min(15);
+        let chars = u16::from_le_bytes([hd[3], hd[4]]);
+        let power_ms = (hd[5] as u64 * 2).max(100);
+        let ttt = if speed == 3 { ((chars >> 5) & 3) as u32 } else { 0 };
+        let mtt = speed == 3 && protocol == 2;
+        if !self.control_out(dev, [0x00, 9, cfg.value, 0, 0, 0, 0, 0]) {
+            return Err("Set Configuration recusado");
+        }
+        let mps = ep.max_packet.clamp(1, HID_BUF as u16);
+        let dci = ((ep.address & 0x0F) as u32) * 2 + 1;
+        let mut ring = Ring::new().ok_or("sem memoria")?;
+        let bufs = Dma::new(1).ok_or("sem memoria")?;
+        let interval = hid::interval_for(speed, ep.interval);
+        let setup = EpSetup { dci, kind: 7, mps, interval, dequeue: ring.dequeue() };
+        let slot_or = [(1 << 26) | if mtt { 1 << 25 } else { 0 }, (ports as u32) << 24, ttt << 16];
+        if !self.configure_endpoints_ex(dev, &[setup], false, slot_or) {
+            return Err("Configure Endpoint do hub recusado");
+        }
+        let slot = self.devices[dev].slot;
+        for i in 0..HID_TRBS {
+            let buf = bufs.phys + (i * HID_BUF) as u64;
+            ring.push(buf, mps as u32, (TRB_NORMAL << 10) | (1 << 5) | (1 << 2));
+        }
+        let pipe = HidPipe { slot, dci, kind: HidKind::Hub, mps, ring, bufs, prev: [0; 8], keys: Vec::new(), reports: 0 };
+        with_disp(|d| d.hids.push(pipe));
+        unsafe { wr(self.db, slot as usize * 4, dci) };
+        self.devices[dev].hub_ports = ports;
+        for p in 1..=ports {
+            self.control_out(dev, [0x23, 3, 8, 0, p, 0, 0, 0]);
+        }
+        unsafe { usb_sleep_ms(power_ms) };
+        let name = self.port_name(dev);
+        let mut msg = String::new();
+        let _ = write!(
+            msg,
+            "porta {}: hub {} com {} porta(s){}{}",
+            name,
+            desc::speed_name(speed),
+            ports,
+            if speed == 3 { if mtt { ", TT por porta" } else { ", um TT" } } else { "" },
+            if self.devices[dev].loc.depth > 0 { ", em cascata" } else { "" }
+        );
+        log(&msg);
+        for p in 1..=ports {
+            self.hub_port_attach(dev, p);
+        }
+        Ok(())
+    }
+
+    fn hub_port_status(&mut self, hub: usize, port: u8) -> Option<(u16, u16)> {
+        self.buffer.clear(4);
+        self.control(hub, [0xA3, 0, 0, 0, port, 0, 4, 0], 4)?;
+        let b = self.buffer.bytes(4);
+        Some((u16::from_le_bytes([b[0], b[1]]), u16::from_le_bytes([b[2], b[3]])))
+    }
+
+    fn hub_clear(&mut self, hub: usize, port: u8, feature: u8) {
+        self.control_out(hub, [0x23, 1, feature, 0, port, 0, 0, 0]);
+    }
+
+    fn hub_port_attach(&mut self, hub: usize, port: u8) -> Option<usize> {
+        let (status, _) = self.hub_port_status(hub, port)?;
+        self.hub_clear(hub, port, 16);
+        if status & 1 == 0 {
+            return None;
+        }
+        self.control_out(hub, [0x23, 3, 4, 0, port, 0, 0, 0]);
+        let end = now_us() + 500_000;
+        let mut st = 0;
+        while now_us() < end {
+            unsafe { usb_sleep_ms(10) };
+            let (s, change) = self.hub_port_status(hub, port)?;
+            st = s;
+            if change & (1 << 4) != 0 || (s & (1 << 4) == 0 && s & 2 != 0) {
+                break;
+            }
+        }
+        self.hub_clear(hub, port, 20);
+        self.hub_clear(hub, port, 16);
+        let name = self.port_name(hub);
+        if st & 2 == 0 {
+            let mut msg = String::new();
+            let _ = write!(msg, "porta {}.{}: o hub nao habilitou a porta depois do reset", name, port);
+            log(&msg);
+            return None;
+        }
+        let speed = if st & (1 << 9) != 0 { 2 } else if st & (1 << 10) != 0 { 3 } else { 1 };
+        unsafe { usb_sleep_ms(10) };
+        let h = &self.devices[hub];
+        let (tt_slot, tt_port) = if h.speed == 3 && speed < 3 { (h.slot, port) } else { (h.loc.tt_slot, h.loc.tt_port) };
+        let loc = Loc {
+            root_port: h.loc.root_port,
+            route: h.loc.route | ((port.min(15) as u32) << (4 * h.loc.depth as u32)),
+            parent: Some((hub, port)),
+            tt_slot,
+            tt_port,
+            depth: h.loc.depth + 1,
+        };
+        if let Err(why) = self.attach(loc, speed) {
+            let mut msg = String::new();
+            let _ = write!(msg, "porta {}.{}: {}", name, port, why);
+            log(&msg);
+            return None;
+        }
+        Some(self.devices.len() - 1)
+    }
+
     fn enumerate(&mut self) {
         for port in 1..=self.max_ports {
             let Some(speed) = self.reset_port(port) else { continue };
-            if let Err(why) = self.attach(port, speed) {
+            if let Err(why) = self.attach(Loc::root(port), speed) {
                 let mut msg = String::new();
                 let _ = write!(msg, "porta {}: {}", port, why);
                 log(&msg);
@@ -1068,8 +1278,14 @@ impl Xhci {
     }
 
     fn detach(&mut self, dev: usize, gone: &mut Vec<u32>) {
+        let children: Vec<usize> = (0..self.devices.len())
+            .filter(|&i| !self.devices[i].gone && self.devices[i].loc.parent.map(|p| p.0) == Some(dev))
+            .collect();
+        for child in children {
+            self.detach(child, gone);
+        }
         let slot = self.devices[dev].slot;
-        let port = self.devices[dev].port;
+        let port = self.port_name(dev);
         self.devices[dev].gone = true;
         if let Some(st) = self.devices[dev].msc.as_mut() {
             st.dead = true;
@@ -1103,9 +1319,9 @@ impl Xhci {
         log(&msg);
     }
 
-    fn port_changed(&mut self, port: u32, gone: &mut Vec<u32>, fresh: &mut Vec<(usize, u8)>) {
+    fn port_changed(&mut self, port: u32, gone: &mut Vec<u32>, fresh: &mut Vec<(usize, String)>) {
         let sc = self.ack_port(port);
-        let live = self.devices.iter().position(|d| !d.gone && d.port as u32 == port);
+        let live = self.devices.iter().position(|d| !d.gone && d.loc.parent.is_none() && d.port as u32 == port);
         if let Some(dev) = live {
             if sc & PORTSC_CCS != 0 && sc & PORTSC_CSC == 0 {
                 return;
@@ -1116,24 +1332,78 @@ impl Xhci {
             return;
         }
         let Some(speed) = self.reset_port(port) else { return };
-        if let Err(why) = self.attach(port, speed) {
+        let first = self.devices.len();
+        if let Err(why) = self.attach(Loc::root(port), speed) {
             let mut msg = String::new();
             let _ = write!(msg, "porta {}: {}", port, why);
             log(&msg);
             return;
         }
-        let dev = self.devices.len() - 1;
-        let mut msg = String::new();
-        let d = &self.devices[dev];
-        let _ = write!(msg, "porta {}: conectado {:04x}:{:04x} {} ({})", port, d.desc.vendor, d.desc.product, d.product, desc::speed_name(d.speed));
-        log(&msg);
-        match self.prepare_msc(dev) {
-            Ok(true) => fresh.push((dev, port as u8)),
-            Ok(false) => {}
-            Err(why) => {
-                let mut m = String::new();
-                let _ = write!(m, "porta {}: armazenamento nao iniciou: {}", port, why);
-                log(&m);
+        self.adopt(first, fresh);
+    }
+
+    fn hub_changed(&mut self, bits: u64, gone: &mut Vec<u32>, fresh: &mut Vec<(usize, String)>) {
+        let count = self.devices.len();
+        for dev in 0..count {
+            let d = &self.devices[dev];
+            if d.gone || d.hub_ports == 0 || bits & (1u64 << (d.slot & 63)) == 0 {
+                continue;
+            }
+            let ports = d.hub_ports;
+            self.buffer.clear(4);
+            if self.control(dev, [0xA0, 0, 0, 0, 0, 0, 4, 0], 4).is_some() {
+                let hub_change = u16::from_le_bytes([self.buffer.bytes(4)[2], self.buffer.bytes(4)[3]]);
+                for feature in 0..2u8 {
+                    if hub_change & (1 << feature) != 0 {
+                        self.control_out(dev, [0x20, 1, feature, 0, 0, 0, 0, 0]);
+                    }
+                }
+            }
+            for port in 1..=ports {
+                if self.devices[dev].gone {
+                    break;
+                }
+                let Some((status, change)) = self.hub_port_status(dev, port) else { continue };
+                for bit in 0..5u8 {
+                    if change & (1 << bit) != 0 {
+                        self.hub_clear(dev, port, 16 + bit);
+                    }
+                }
+                if change & 1 == 0 {
+                    continue;
+                }
+                let child = (0..self.devices.len())
+                    .find(|&i| !self.devices[i].gone && self.devices[i].loc.parent == Some((dev, port)));
+                if let Some(child) = child {
+                    self.detach(child, gone);
+                }
+                if status & 1 != 0 {
+                    let first = self.devices.len();
+                    self.hub_port_attach(dev, port);
+                    self.adopt(first, fresh);
+                }
+            }
+        }
+    }
+
+    fn adopt(&mut self, first: usize, fresh: &mut Vec<(usize, String)>) {
+        for dev in first..self.devices.len() {
+            if self.devices[dev].gone {
+                continue;
+            }
+            let name = self.port_name(dev);
+            let mut msg = String::new();
+            let d = &self.devices[dev];
+            let _ = write!(msg, "porta {}: conectado {:04x}:{:04x} {} ({})", name, d.desc.vendor, d.desc.product, d.product, desc::speed_name(d.speed));
+            log(&msg);
+            match self.prepare_msc(dev) {
+                Ok(true) => fresh.push((dev, name.clone())),
+                Ok(false) => {}
+                Err(why) => {
+                    let mut m = String::new();
+                    let _ = write!(m, "porta {}: armazenamento nao iniciou: {}", name, why);
+                    log(&m);
+                }
             }
         }
     }
@@ -1159,11 +1429,11 @@ impl Xhci {
     }
 
     pub fn report(&self, out: &mut String) {
-        for d in self.devices.iter().filter(|d| !d.gone) {
+        for (i, d) in self.devices.iter().enumerate().filter(|(_, d)| !d.gone) {
             let _ = writeln!(
                 out,
                 "Porta {} Slot {}: ID {:04x}:{:04x} {} {} (USB {:x}.{:02x}, {}, classe {})",
-                d.port,
+                self.port_name(i),
                 d.slot,
                 d.desc.vendor,
                 d.desc.product,
@@ -1290,7 +1560,7 @@ fn scsi(dev: usize, cdb: &[u8], data_in: bool, len: usize) -> Result<usize, Fail
     Err(Fail::Error)
 }
 
-fn start_msc(dev: usize, port: u8) -> Option<(u32, u64, String)> {
+fn start_msc(dev: usize, port: String) -> Option<(u32, u64, String)> {
     let mut name = String::new();
     if scsi(dev, &msc::inquiry(36), true, 36).is_ok() {
         if let Some((v, m)) =
@@ -1398,7 +1668,7 @@ pub unsafe extern "C" fn xhci_start(mmio: *mut u8, irq: bool) -> i32 {
     let mut storages = Vec::new();
     for dev in 0..hc.devices.len() {
         match hc.prepare_msc(dev) {
-            Ok(true) => storages.push((dev, hc.devices[dev].port)),
+            Ok(true) => storages.push((dev, hc.port_name(dev))),
             Ok(false) => {}
             Err(why) => {
                 let mut m = String::new();
@@ -1408,9 +1678,9 @@ pub unsafe extern "C" fn xhci_start(mmio: *mut u8, irq: bool) -> i32 {
         }
     }
     let n = hc.devices.len() as i32;
-    for d in &hc.devices {
+    for (i, d) in hc.devices.iter().enumerate() {
         let mut line = String::new();
-        let _ = write!(line, "porta {}: {:04x}:{:04x} {} ({})", d.port, d.desc.vendor, d.desc.product, d.product, desc::speed_name(d.speed));
+        let _ = write!(line, "porta {}: {:04x}:{:04x} {} ({})", hc.port_name(i), d.desc.vendor, d.desc.product, d.product, desc::speed_name(d.speed));
         log(&line);
     }
     for port in 1..=hc.max_ports {
@@ -1427,7 +1697,8 @@ pub unsafe extern "C" fn xhci_start(mmio: *mut u8, irq: bool) -> i32 {
 
 fn hotplug() {
     let changed = with_disp(|d| core::mem::take(&mut d.ports)).unwrap_or(0);
-    if changed == 0 {
+    let hubs = with_disp(|d| core::mem::take(&mut d.hub_changes)).unwrap_or(0);
+    if changed == 0 && hubs == 0 {
         return;
     }
     let mut gone = Vec::new();
@@ -1438,6 +1709,9 @@ fn hotplug() {
                 if changed & (1 << port) != 0 {
                     hc.port_changed(port, &mut gone, &mut fresh);
                 }
+            }
+            if hubs != 0 {
+                hc.hub_changed(hubs, &mut gone, &mut fresh);
             }
         }
     });
@@ -1468,6 +1742,23 @@ pub unsafe extern "C" fn xhci_report(buf: *mut u8, cap: usize) -> usize {
             }
         }
     });
+    let mut pipes = [(0u8, HidKind::Hub, 0u64); 16];
+    let count = with_disp(|d| {
+        let n = d.hids.len().min(pipes.len());
+        for (i, h) in d.hids.iter().take(n).enumerate() {
+            pipes[i] = (h.slot, h.kind, h.reports);
+        }
+        n
+    })
+    .unwrap_or(0);
+    for &(slot, kind, reports) in pipes.iter().take(count) {
+        let what = match kind {
+            HidKind::Keyboard => "teclado",
+            HidKind::Mouse => "mouse",
+            HidKind::Hub => "hub",
+        };
+        let _ = writeln!(text, "HID: slot {} ({}): {} relatorio(s)", slot, what, reports);
+    }
     if let Some((late, stray)) = with_disp(|d| (d.late, d.stray)) {
         let _ = writeln!(text, "eventos: {} conclusao(oes) tardia(s) ignorada(s), {} sem dono", late, stray);
     }

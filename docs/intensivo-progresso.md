@@ -46,11 +46,9 @@ na ISO na F, no virtio (disco e rede) na V, no NVMe na N e com USB na U,
 com 585 verificacoes em ~18 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 5.10, hub USB 2 basico (extra da Fase 5; descritor do hub,
-energia, reset e estado das portas, endpoint de mudanca de estado, contexto
-do slot com Hub e route string, TT para full/low speed atras de hub high
-speed; criterio: teclado e pendrive atras de `-device usb-hub` no QEMU),
-depois a regressao completa do fim da Fase 5. Versao 2.4.0-a31 em diante.
+Proxima etapa: regressao completa do fim da Fase 5 (todas as sequencias,
+inclusive S, G, W e H); depois 7.3, 7.4 (fazer so o possivel sem PC de
+verdade e marcar `[!]`), 7.5 e a Fase 8. Versao 2.4.0-a32 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -252,7 +250,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 5.7 | USB armazenamento | [x] | 15:55 | 18:16 | `05ee35e` |
 | 5.8 | Audio HDA | [x] | 10:54 | 11:40 | `3c0cacd` |
 | 5.9 | Video BGA e virtio-gpu | [x] | 11:42 | 12:05 | `0a14450` |
-| 5.10 | Hub USB 2 basico (extra, decidido em 2026-10-19) | [ ] | | | |
+| 5.10 | Hub USB 2 basico (extra, decidido em 2026-10-19) | [x] | 12:08 | 12:20 | (5.10) |
 | 6.1 | Protocolo de janelas | [x] | 11:06 | 11:47 | ver `git log` |
 | 6.2 | libgui | [x] | 11:48 | 12:27 | ver `git log` |
 | 6.3 | Fontes TrueType | [x] | 12:27 | 13:05 | ver `git log` |
@@ -1869,6 +1867,29 @@ a fundo (suspeita: o `screendump` do QEMU com virtio-gpu espera a proxima
 atualizacao de tela); a W usa o primeiro plano. Fica anotado para a 7.x.
 A 5.9 fecha com as duas partes; a regressao completa fica para o fim da
 Fase 5.
+
+#### 5.10 Hub USB 2 - 12:08 a 12:20 - FEITO
+`xhci.rs`: hub de classe 9 (descritor do hub, Set Configuration, contexto
+do slot com Hub, numero de portas, MTT e tempo de TT; portas ligadas e
+resetadas uma a uma), dispositivos atras dele com route string, porta raiz e
+TT (para full/low speed atras de hub high speed), nome de porta "12.2",
+`Evaluate Context` para o MaxPacketSize0 real de dispositivo full/low
+speed, endpoint de mudanca de estado do hub no despachante e plug e remocao
+atras do hub (filhos removidos junto com o hub). `/proc/usb` conta
+relatorios HID por slot. `test.ps1 -UsbHub` / `qrun.py --usb-hub`.
+Sequencia H (nova). `docs/teste-hardware-real.md` atualizado (so hub USB 3
+fica de fora). Detalhes: `docs/DECISOES.md`, v2.4.0-a31.
+Verificacao: sequencias H (17 verificacoes) e U (55), verdes: hub full speed
+com 8 portas, teclado e pendrive atras dele em full speed, a tecla chega
+pelo teclado do hub (relatorios no slot dele), pendrive formatado, gravado e
+relido, `device_del`/`device_add` na porta do hub. Versao 2.4.0-a31. RAM
+livre antes: 4,1 GB.
+Problemas: (1) sem limpar os bits de mudanca das portas, o hub do QEMU
+mandava relatorio sem parar (51 em 10 s); o tratamento de mudanca limpa
+todos os bits. (2) Na U, a verificacao do `lsusb` depois da remocao contava
+as linhas ate "eventos" e quebrou com as linhas novas de relatorios HID; a
+expressao passou a aceitar essas linhas, conferindo os mesmos 3
+dispositivos.
 
 ### Sessao 2 - 2026-10-17
 

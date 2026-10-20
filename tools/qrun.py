@@ -122,8 +122,9 @@ class Machine:
     def __init__(self, smp=4, memory=512, disk=False, extra_disks=(), serial_port=4444, monitor_port=4445,
                  boot_timeout=60.0, image=False, hostfwd=(), login=("root", "orion"), media=None, bios=False,
                  nic="e1000e", bus="ahci", usb=False, no_ps2=False, usb_disk=False, usb_fat=False, no_strict=False,
-                 audio=False, audio_wav="out/audio.wav", vga=""):
+                 audio=False, audio_wav="out/audio.wav", vga="", usb_hub=False):
         self.image = image
+        self.usb_hub = usb_hub
         self.vga = vga
         self.audio = audio
         self.audio_wav = audio_wav
@@ -200,6 +201,11 @@ class Machine:
                 with open(stick, "wb") as f:
                     f.truncate(16 * 1024 * 1024)
             args += ["-drive", "if=none,id=stick,format=raw,file=out/stick.img", "-device", "usb-storage,bus=xhci.0,drive=stick,id=pen1"]
+        if self.usb and self.usb_hub:
+            if not (OUT / "stick3.img").exists():
+                with open(OUT / "stick3.img", "wb") as f:
+                    f.truncate(16 * 1024 * 1024)
+            args += ["-device", "usb-hub,bus=xhci.0,port=4,id=hub1", "-device", "usb-kbd,bus=xhci.0,port=4.1,id=kbd2", "-blockdev", "driver=raw,node-name=stick3,file.driver=file,file.filename=out/stick3.img", "-device", "usb-storage,bus=xhci.0,port=4.2,drive=stick3,id=pen3"]
         if self.usb and self.usb_fat:
             if not (OUT / "stick2.img").exists():
                 subprocess.run([sys.executable, str(ROOT / "tools" / "mkfat.py"), "cria", str(OUT / "stick2.img"),
@@ -548,7 +554,7 @@ def write_autostart(gui):
 def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_build=False, boot_timeout=60.0,
         command_delay=1.0, settle=2.0, log_path="out/test-serial.log", kernel_shell=False, image=False,
         hostfwd=(), iso=False, iso_disk=False, bios=False, nic="e1000e", bus="ahci", usb=False, no_ps2=False, usb_disk=False,
-        usb_fat=False, no_strict=False, audio=False, audio_wav="out/audio.wav", vga=""):
+        usb_fat=False, no_strict=False, audio=False, audio_wav="out/audio.wav", vga="", usb_hub=False):
     if not no_build:
         build(gui, image, iso or iso_disk)
     elif gui:
@@ -562,7 +568,7 @@ def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_buil
     media = "cd" if iso else "isodisk" if iso_disk else None
     m = Machine(smp=smp, memory=memory, disk=disk, extra_disks=extra_disks, boot_timeout=boot_timeout,
                 image=image, hostfwd=hostfwd, media=media, bios=bios, nic=nic, bus=bus, usb=usb, no_ps2=no_ps2, usb_disk=usb_disk,
-                usb_fat=usb_fat, no_strict=no_strict, audio=audio, audio_wav=audio_wav, vga=vga)
+                usb_fat=usb_fat, no_strict=no_strict, audio=audio, audio_wav=audio_wav, vga=vga, usb_hub=usb_hub)
     code = 0
     try:
         m.start()
@@ -614,6 +620,7 @@ def main():
     ap.add_argument("--audio", action="store_true", help="liga um HDA (ich9) com codec hda-output gravando em out/audio.wav")
     ap.add_argument("--audio-wav", default="out/audio.wav", help="com --audio, onde gravar o WAV")
     ap.add_argument("--vga", default="", help="virtio troca a VGA padrao por um virtio-gpu-pci")
+    ap.add_argument("--usb-hub", action="store_true", help="com --usb, liga um usb-hub na porta 4 com teclado e pendrive atras")
     ap.add_argument("--kernel-shell", action="store_true")
     ap.add_argument("--boot-timeout", type=float, default=60.0)
     ap.add_argument("--delay", type=float, default=1.0)
@@ -628,7 +635,8 @@ def main():
                      boot_timeout=a.boot_timeout, command_delay=a.delay, settle=a.settle,
                      log_path=a.log, kernel_shell=a.kernel_shell, image=a.image, iso=a.iso,
                      iso_disk=a.iso_disk, bios=a.bios, nic=a.nic, bus=a.bus, usb=a.usb, no_ps2=a.no_ps2, usb_disk=a.usb_disk,
-                     usb_fat=a.usb_fat, no_strict=a.no_strict, audio=a.audio, audio_wav=a.audio_wav, vga=a.vga)
+                     usb_fat=a.usb_fat, no_strict=a.no_strict, audio=a.audio, audio_wav=a.audio_wav, vga=a.vga,
+                     usb_hub=a.usb_hub)
     if not a.quiet:
         print(f"----- {a.log} -----")
         print(text)

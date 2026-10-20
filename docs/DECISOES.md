@@ -3549,3 +3549,44 @@ O que mudou na 5.7 e por que:
   `virtio-gpu-pci`. Sequencia W (nova): tela do boot visivel (o flush
   funciona), 1920x1080 pelo tamanho da captura e o `fbtest` desenhando pelo
   mmap aparecendo na tela.
+
+## v2.4.0-a31 (etapa 5.10: hub USB 2)
+
+- Hub USB 2 (o lado USB 2 de um hub USB 3 tambem): depois da enumeracao
+  comum, um dispositivo de classe 9 ganha o descritor do hub (numero de
+  portas, caracteristicas com o tempo de TT, tempo para a energia ficar
+  boa), Set Configuration e um `Configure Endpoint` que, alem do endpoint de
+  mudanca de estado, marca o contexto do slot como hub: bit Hub, numero de
+  portas e, num hub high speed, TT por porta (MTT, protocolo 2) e o tempo de
+  TT. As portas sao ligadas (`SET_FEATURE(PORT_POWER)`) e, depois do tempo
+  de energia (no minimo 100 ms), cada porta conectada leva reset
+  (`SET_FEATURE(PORT_RESET)`, espera o `C_PORT_RESET`, limpa os bits de
+  mudanca) e a velocidade sai do estado da porta (low, high ou full).
+- Dispositivo atras do hub: route string (o numero da porta do hub no
+  nibble do nivel do hub, ate 5 niveis), porta raiz do primeiro hub e, se o
+  dispositivo e full/low speed atras de um hub high speed, o slot e a porta
+  desse hub como TT (dispositivo atras de um hub full speed que esta atras de
+  um high speed herda o TT dele). O resto (HID, Bulk-Only, remocao) e o mesmo
+  caminho dos dispositivos nas portas raiz. Nome da porta: "12.2" e a porta 2
+  do hub ligado na porta raiz 12.
+- MaxPacketSize0: dispositivo full/low speed comeca com 8 (sempre da para
+  ler os 8 primeiros bytes do descritor) e, se o descritor disser outro
+  valor, um `Evaluate Context` corrige o endpoint 0 antes do resto. Antes,
+  um dispositivo full speed com 64 so funcionava porque o QEMU nao reclama.
+- Mudancas nas portas do hub: o endpoint de interrupcao do hub entra no
+  despachante como os de teclado e mouse; um relatorio com algum bit marca o
+  hub, e a thread `usbd` le o estado de cada porta, limpa todos os bits de
+  mudanca (das portas e do proprio hub) e, se a conexao mudou, desliga o que
+  estava ali (com os filhos, se for hub) e enumera o que entrou. Sem limpar
+  os bits, o hub do QEMU avisava sem parar (51 relatorios em 10 s).
+- Ficou de fora: hub USB 3 (lado SuperSpeed, descritor 0x2A e route string
+  com profundidade de hub), suspensao seletiva de portas, sobrecorrente
+  (os bits sao limpos e ignorados) e hub atras de hub alem de 5 niveis.
+- Teste (sequencia H, nova): `-UsbHub` liga um `usb-hub` (USB 1.1, full
+  speed, 8 portas) na porta 4 com um teclado e um pendrive atras. Os dois
+  sao enumerados em full speed, a tecla mandada pelo monitor chega pelo
+  teclado do hub (o `/proc/usb` agora conta relatorios por slot), o pendrive
+  e formatado, gravado e relido, e sai e volta por `device_del`/`device_add`
+  na porta do hub. O hub do QEMU e full speed, entao o caminho de TT so foi
+  feito pela especificacao e fica para a 7.4 (teclado atras de hub de
+  verdade).

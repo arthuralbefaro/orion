@@ -13,6 +13,7 @@ param(
     [switch]$OnlyS,
     [switch]$OnlyG,
     [switch]$OnlyW,
+    [switch]$OnlyH,
     [switch]$SlowWaits,
     [int]$StressRuns = 1,
     [switch]$Verbose
@@ -24,7 +25,7 @@ $failures = @()
 $checks = 0
 if ($SlowWaits) { $env:ORION_SLOW_WAITS = "1" } else { Remove-Item Env:ORION_SLOW_WAITS -ErrorAction SilentlyContinue }
 $regStart = Get-Date
-$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG -or $OnlyW)
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG -or $OnlyW -or $OnlyH)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -1107,7 +1108,7 @@ if ($runAll -or $OnlyU) {
     Expect $u "block\s+sdc: disco removido, \d+ setor\(es\) sujo\(s\) descartado\(s\), 1 usuario\(s\) ainda com ele" "o disco removido continua existindo enquanto esta montado"
     Expect $u "cat /tmp/fat/LEIAME\.TXT\s*\ncat: /tmp/fat/LEIAME\.TXT: Erro de entrada/saida" "leitura no pendrive removido devolve EIO"
     Expect $u "echo depois > /tmp/fat/DEPOIS\.TXT\s*\nsh: /tmp/fat/DEPOIS\.TXT: Erro de entrada/saida" "escrita no pendrive removido devolve EIO"
-    Expect $u "(?s)DEPOIS\.TXT.*?\$ lsusb\s*\n(Porta[^\n]*\n){3}eventos" "lsusb sem o pendrive removido"
+    Expect $u "(?s)DEPOIS\.TXT.*?\$ lsusb\s*\n(Porta[^\n]*\n){3}(HID:[^\n]*\n)*eventos" "lsusb sem o pendrive removido"
     Expect $u "(?s)vfs\s+/dev/sdc desmontado de /tmp/fat.{0,300}?block\s+sdc: disco removido liberado, ninguem mais o usa" "umount do pendrive removido funciona e libera o disco"
     Expect $u "(?s)disco removido liberado.*?\nshell-vivo" "o shell continua respondendo depois da remocao"
     Expect $u "usb\s+porta \d+: conectado 46f4:0001 QEMU USB HARDDRIVE" "device_add: o segundo plug e reconhecido"
@@ -1242,6 +1243,43 @@ if ($runAll -or $OnlyW) {
     Expect $vg "fbtest: gradiente \+ retangulo desenhados" "fbtest desenha no framebuffer do virtio-gpu"
     Expect $vg "(?s)fbset 1280x800.*?fbset: 1280x800, 32 bpp, 5120 bytes por linha" "volta ao modo do boot"
     ExpectNot $vg "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico na sequencia W"
+}
+
+# ---------------- Sequencia H: hub USB ----------------
+if ($runAll -or $OnlyH) {
+    Write-Host "== Sequencia H (hub USB 2: teclado e pendrive atras do hub) ==" -ForegroundColor Cyan
+    Remove-Item (Join-Path $Root "out\stick3.img") -ErrorAction SilentlyContinue
+    $stepsH = @(
+        "cmd:lsusb", "wait:1", "cmd:evtest 5", "wait:0.8", "mon:sendkey b", "until:10:evento(s)", "cmd:cat /proc/usb",
+        "cmd:mkfs /dev/sdb HUB", "wait:5", "cmd:mkdir /tmp/h", "cmd:mount -t vfat /dev/sdb /tmp/h",
+        "cmd:echo atras-do-hub > /tmp/h/x.txt", "cmd:umount /tmp/h", "cmd:mount -t vfat /dev/sdb /tmp/h",
+        "cmd:cat /tmp/h/x.txt", "cmd:umount /tmp/h",
+        "mon:device_del pen3", "wait:2", "cmd:lsusb", "wait:1",
+        "mon:device_add usb-storage,bus=xhci.0,port=4.2,drive=stick3,id=pen3", "until:15:conectado 46f4", "wait:3",
+        "cmd:mount -t vfat /dev/sdb /tmp/h", "cmd:cat /tmp/h/x.txt", "cmd:umount /tmp/h", "cmd:cat /proc/usb", "wait:1"
+    )
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Usb -UsbHub -NoPs2 -LogPath "out\reg-h.log" `
+        -Script $stepsH -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
+    $hub = Get-Log "out\reg-h.log"
+    if ($Verbose) { Write-Output $hub }
+
+    Expect $hub "usb\s+porta \d+: hub full speed com 8 porta\(s\)" "hub achado: descritor do hub, portas ligadas"
+    Expect $hub "usb\s+porta \d+\.1: teclado HID pronto, protocolo de boot" "teclado atras do hub configurado (route string, contexto do slot)"
+    Expect $hub "(?s)\$ lsusb.*?Porta \d+\.1 Slot \d+: ID 0627:0001 QEMU QEMU USB Keyboard \(USB 2\.00, full speed, classe hid\)" "lsusb mostra o teclado na porta do hub"
+    Expect $hub "(?s)\$ lsusb.*?Porta \d+\.2 Slot \d+: ID 46f4:0001 QEMU QEMU USB HARDDRIVE \(USB 2\.00, full speed, classe armazenamento\)" "lsusb mostra o pendrive na porta do hub"
+    Expect $hub "usb\s+porta \d+\.2: armazenamento 'QEMU QEMU HARDDISK', 32768 blocos de 512 bytes" "pendrive atras do hub: Bulk-Only, INQUIRY e READ CAPACITY"
+    Expect $hub "tecla-desce\s+scancode=30 ascii=98" "tecla chega ao /dev/input"
+    Expect $hub "(?s)Porta \d+\.1 Slot (\d+): ID 0627:0001.*?HID: slot \1 \(teclado\): [1-9]\d* relatorio\(s\)" "a tecla veio do teclado atras do hub (relatorios no slot dele)"
+    Expect $hub "mkfs: /dev/sdb, 32768 setores" "mkfs formata o pendrive atras do hub"
+    Expect $hub "(?s)umount /tmp/h.*?mount -t vfat /dev/sdb /tmp/h.*?cat /tmp/h/x\.txt\s*\natras-do-hub" "o que foi gravado no pendrive atras do hub volta depois de remontar"
+    Expect $hub "usb\s+porta \d+\.2: dispositivo removido, Disable Slot do slot \d+ ok" "device_del atras do hub: o endpoint de mudanca de estado avisa e o slot e desabilitado"
+    Expect $hub "block\s+sdb: disco removido liberado, ninguem mais o usa" "o disco do pendrive removido e liberado"
+    Expect $hub "usb\s+porta \d+\.2: conectado 46f4:0001 QEMU USB HARDDRIVE \(full speed\)" "device_add atras do hub: o pendrive e reconhecido de novo"
+    Expect $hub "(?s)conectado 46f4:0001.*?cat /tmp/h/x\.txt\s*\natras-do-hub" "o pendrive ligado de novo atras do hub monta com o arquivo"
+    ExpectNot $hub "HID: slot \d+ \(hub\): \d{3,} relatorio" "o endpoint do hub nao dispara sem parar (mudancas limpas)"
+    ExpectNot $hub "usb\s+porta \d+(\.\d+)*: (Enable|Address|descritor|o hub nao)" "nenhuma porta falhou na enumeracao"
+    ExpectNot $hub "BUG: [^\n]*dentro de interrupcao" "nenhum aviso de contexto de interrupcao com hub"
+    ExpectNot $hub "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico na sequencia H"
 }
 
 # ---------------- Sequencia E: estresse de processos ----------------

@@ -32,6 +32,7 @@ param(
     [switch]$NoStrict,
     [switch]$Audio,
     [string]$Vga = "",
+    [switch]$UsbHub,
     [string]$AudioWav = "out/audio.wav",
     [string]$LoginUser = "root",
     [string]$LoginPassword = "orion"
@@ -72,6 +73,11 @@ if ($UsbDisk) {
         $fs.SetLength(16MB)
         $fs.Close()
     }
+}
+if ($UsbHub -and -not (Test-Path (Join-Path $OutDir "stick3.img"))) {
+    $fs = [System.IO.File]::Create((Join-Path $OutDir "stick3.img"))
+    $fs.SetLength(16MB)
+    $fs.Close()
 }
 if ($UsbFat -and -not (Test-Path (Join-Path $OutDir "stick2.img"))) {
     $py = & (Join-Path $Root "tools\python.ps1")
@@ -143,6 +149,7 @@ function Get-QemuArgs {
             "-object", "filter-dump,id=d0,netdev=n0,file=out/net.pcap")
     if ($Usb) { $a += @("-device", "qemu-xhci,id=xhci,p2=8,p3=8", "-device", "usb-kbd,bus=xhci.0", "-device", "usb-mouse,bus=xhci.0") }
     if ($Usb -and $UsbDisk) { $a += @("-drive", "if=none,id=stick,format=raw,file=out/stick.img", "-device", "usb-storage,bus=xhci.0,drive=stick,id=pen1") }
+    if ($Usb -and $UsbHub) { $a += @("-device", "usb-hub,bus=xhci.0,port=4,id=hub1", "-device", "usb-kbd,bus=xhci.0,port=4.1,id=kbd2", "-blockdev", "driver=raw,node-name=stick3,file.driver=file,file.filename=out/stick3.img", "-device", "usb-storage,bus=xhci.0,port=4.2,drive=stick3,id=pen3") }
     if ($Usb -and $UsbFat) { $a += @("-blockdev", "driver=raw,node-name=stick2,file.driver=file,file.filename=out/stick2.img", "-device", "usb-storage,bus=xhci.0,drive=stick2,id=pen2") }
     if ($Disk) { $a += @("-drive", "format=raw,file=out/disk.img") }
     foreach ($extra in $ExtraDisks) { $a += @("-drive", "format=raw,file=$extra") }
