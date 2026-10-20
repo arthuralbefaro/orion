@@ -1848,7 +1848,7 @@ fbdev), verdes: `fbset 1920x1080` muda a tela (a captura do QEMU sai
 EBUSY com o `fbtest` no framebuffer, volta a 1280x800. Versao 2.4.0-a29. RAM
 livre antes: 3,8 GB.
 
-#### 5.9 parte 2 virtio-gpu - 12:05 a 12:05 - FEITO
+#### 5.9 parte 2 virtio-gpu - 11:57 a 12:05 - FEITO
 `drivers/virtio_gpu.c` (novo): virtio-gpu 2D pela camada virtio que ja
 existia; recurso B8G8R8X8 com backing de memoria contigua do kernel,
 scanout 0, thread de flush a cada 33 ms quando o console mudou (contador de
