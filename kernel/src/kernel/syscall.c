@@ -1209,6 +1209,13 @@ static uint32_t prot_to_vma(int prot)
     return f;
 }
 
+static bool more_than_ram(uint64_t bytes)
+{
+    struct pmm_stats st;
+    pmm_get_stats(&st);
+    return bytes / PAGE_SIZE > st.total_pages;
+}
+
 static long do_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, uint64_t off)
 {
     struct process *p = process_current();
@@ -1218,6 +1225,8 @@ static long do_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, ui
     if (len > USER_MMAP_END)
         return -ENOMEM;
     len = PAGE_ALIGN_UP(len);
+    if ((flags & MAP_ANONYMOUS) && (prot & PROT_WRITE) && more_than_ram(len))
+        return -ENOMEM;
     bool fixed = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) != 0;
     if (fixed && (!IS_ALIGNED(addr, PAGE_SIZE) || addr == 0 || addr >= USER_STACK_TOP ||
                   len > USER_STACK_TOP - addr))
@@ -1278,16 +1287,19 @@ static long do_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, ui
         uint64_t pte_flags = vma_pte_flags(vflags);
         bool none = !(vflags & (VMA_READ | VMA_WRITE | VMA_EXEC));
         for (uint64_t va = base; va < base + len; va += PAGE_SIZE) {
-            uint64_t phys = pmm_alloc_page();
+            uint64_t phys = pmm_alloc_user_page();
             if (!phys) {
                 vma_unmap(p, base, base + len);
                 return -ENOMEM;
             }
             memset(phys_to_virt(phys), 0, PAGE_SIZE);
-            if (none)
-                vmm_set_pte_in(p->pml4_phys, va, phys | (pte_flags & ~PTE_PRESENT) | PTE_PROTNONE);
-            else
-                vmm_map_page_in(p->pml4_phys, va, phys, pte_flags);
+            bool mapped = none ? vmm_set_pte_in(p->pml4_phys, va, phys | (pte_flags & ~PTE_PRESENT) | PTE_PROTNONE)
+                               : vmm_map_page_in(p->pml4_phys, va, phys, pte_flags);
+            if (!mapped) {
+                pmm_free_page(phys);
+                vma_unmap(p, base, base + len);
+                return -ENOMEM;
+            }
             p->pages++;
         }
     }
@@ -1628,7 +1640,7 @@ static long sys_brk(uint64_t addr)
 {
     struct process *p = process_current();
     mutex_lock(&p->mm_lock);
-    long r = do_brk(p, addr);
+    long r = addr > p->brk && more_than_ram(addr - p->brk) ? (long)p->brk : do_brk(p, addr);
     mutex_unlock(&p->mm_lock);
     return r;
 }

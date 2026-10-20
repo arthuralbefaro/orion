@@ -31,11 +31,11 @@ uint64_t vmm_kernel_pml4(void);
 
 uint64_t vmm_create_address_space(void);
 void     vmm_destroy_address_space(uint64_t pml4_phys);
-void     vmm_map_page_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags);
+bool     vmm_map_page_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags);
 void     vmm_unmap_page_in(uint64_t pml4_phys, uint64_t virt);
 uint64_t vmm_virt_to_phys_in(uint64_t pml4_phys, uint64_t virt);
 uint64_t vmm_get_pte_in(uint64_t pml4_phys, uint64_t virt);
-void     vmm_set_pte_in(uint64_t pml4_phys, uint64_t virt, uint64_t pte);
+bool     vmm_set_pte_in(uint64_t pml4_phys, uint64_t virt, uint64_t pte);
 
 bool     vmm_cow_fault(uint64_t pml4_phys, uint64_t virt, uint64_t *release);
 void     vmm_cow_stats(uint64_t *faults, uint64_t *copies);

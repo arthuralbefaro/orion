@@ -144,35 +144,67 @@ static uint64_t find_free_run(uint64_t start, size_t count)
     return (uint64_t)-1;
 }
 
-uint64_t pmm_alloc_pages(size_t count)
+static uint64_t alloc_locked(size_t count)
 {
-    if (count == 0)
-        return 0;
-
-    uint64_t flags = spin_lock_irqsave(&pmm_lock);
-
     uint64_t idx = find_free_run(search_hint, count);
     if (idx == (uint64_t)-1)
         idx = find_free_run(1, count);
-
-    if (idx == (uint64_t)-1) {
-        spin_unlock_irqrestore(&pmm_lock, flags);
-        log_error("pmm", "sem memoria: pedido de %zu pagina(s)", count);
+    if (idx == (uint64_t)-1)
         return 0;
-    }
-
     for (size_t i = 0; i < count; i++)
         bit_set(idx + i);
     used_pages += count;
     search_hint = idx + count;
-
-    spin_unlock_irqrestore(&pmm_lock, flags);
     return idx * PAGE_SIZE;
+}
+
+uint64_t pmm_reserve_pages(void)
+{
+    uint64_t r = total_pages / 64;
+    if (r < 256)
+        r = 256;
+    if (r > 4096)
+        r = 4096;
+    return r;
+}
+
+uint64_t pmm_alloc_pages(size_t count)
+{
+    if (count == 0)
+        return 0;
+    uint64_t flags = spin_lock_irqsave(&pmm_lock);
+    uint64_t phys = alloc_locked(count);
+    spin_unlock_irqrestore(&pmm_lock, flags);
+    if (!phys)
+        log_error_limited("pmm", "sem memoria: pedido de %zu pagina(s)", count);
+    return phys;
 }
 
 uint64_t pmm_alloc_page(void)
 {
     return pmm_alloc_pages(1);
+}
+
+uint64_t pmm_alloc_user_page(void)
+{
+    uint64_t flags = spin_lock_irqsave(&pmm_lock);
+    uint64_t phys = 0;
+    if (total_pages - used_pages > pmm_reserve_pages())
+        phys = alloc_locked(1);
+    spin_unlock_irqrestore(&pmm_lock, flags);
+    return phys;
+}
+
+uint64_t pmm_free_count(void)
+{
+    return total_pages - __atomic_load_n(&used_pages, __ATOMIC_RELAXED);
+}
+
+uint64_t pmm_user_pages_available(void)
+{
+    uint64_t free = pmm_free_count();
+    uint64_t r = pmm_reserve_pages();
+    return free > r ? free - r : 0;
 }
 
 void pmm_free_pages(uint64_t phys, size_t count)

@@ -3854,3 +3854,66 @@ O que mudou na 5.7 e por que:
   quando ha menos de N (o regex do .NET tenta todas as divisoes do log). A
   forma usada e `\A(?s)(?>.*?X){N}`: ancorada no comeco e com grupo atomico,
   sem voltar atras.
+
+## v3.0.0-a7 (etapa 8.4: falta de memoria e matador de processo)
+
+- Antes: com a memoria cheia, a falha de pagina de usuario devolvia SIGSEGV
+  para quem falhou (qualquer processo, nao o maior), e faltar pagina para
+  uma tabela de paginas era panico do kernel (`next_level` no `vmm.c`), o
+  que podia acontecer numa falha de pagina, num `fork` ou num `mremap`.
+- Reserva do kernel: `pmm_alloc_user_page` (paginas de dados de usuario:
+  falha de pagina anonima e de arquivo, copia na escrita, carga do ELF,
+  `mmap` compartilhado anonimo) recusa quando sobram menos que a reserva
+  (1/64 da RAM, entre 256 e 4096 paginas; 7 MiB com 453 MiB). O resto do
+  kernel (heap, tabelas de paginas, cache de arquivos, rede) continua com
+  `pmm_alloc_page` e pode usar a reserva, inclusive o caminho de saida do
+  processo, que fecha arquivos e solta memoria e pode alocar no meio (rede,
+  por exemplo). O `tmpfs` ja tinha a reserva propria dele (1/16 da RAM).
+- Tabela de paginas sem memoria: `vmm_map_page_in` e `vmm_set_pte_in`
+  devolvem falso num espaco de usuario (no espaco do kernel continua panico)
+  e quem chama trata: falha de pagina (devolve a pagina e pede OOM), copia
+  na escrita, `fork` (a copia dos PTEs para e o `fork` da ENOMEM), carga do
+  ELF, `mmap` compartilhado anonimo e do framebuffer (ENOMEM) e `mremap`,
+  que agora mapeia o destino antes de desmapear a origem (antes a pagina se
+  perdia se o destino falhasse).
+- `vma_fault` devolve ok, SIGSEGV ou sem memoria. Sem memoria, a falha de
+  pagina ja soltou a `mm_lock` (o matador nunca roda com trava de memoria
+  do processo) e chama `oom_recover`, depois tenta a falha de novo, ate 50
+  vezes. `oom_recover`, em ordem: (1) devolve cache limpo
+  (`vfs_cache_reclaim`, 256 paginas) e volta se isso bastou; (2) se ha uma
+  vitima a caminho, espera ela sair (ate 5 s) em vez de escolher outra; (3)
+  senao escolhe a vitima, o processo com mais paginas que nao e o init, nao
+  e zumbi e nao esta saindo (threads do kernel nao sao processos e nunca
+  entram), marca "vitima a caminho", manda SIGKILL e registra no log
+  ("sem memoria: matando pid N 'nome' (P paginas)"); (4) espera ela virar
+  zumbi, que e quando a memoria dela ja foi solta (`vma_release_all` antes
+  do estado zumbi), e registra "pid N saiu". Se a vitima for o proprio
+  processo que falhou, ele nao espera: volta da falha e o SIGKILL o mata na
+  saida da excecao, sem panico. Quem esta esperando e recebe SIGKILL tambem
+  desiste e morre. Se a vitima nao sai em 5 s, o proximo pedido escolhe
+  outra. Falha de pagina do kernel (copia de usuario) sem memoria vira
+  EFAULT na syscall.
+- O SIGKILL acorda a vitima de qualquer espera interrompivel (o envio do
+  sinal tira a thread da fila de espera e a poe pronta, e o `exit_group`
+  acorda as outras threads).
+- Politica de `mmap`/`brk`: aceitam e as paginas vem na falha (o OOM age
+  ali), como o overcommit do Linux; recusam com ENOMEM na hora so um pedido
+  anonimo para escrita maior que toda a RAM (uma reserva PROT_NONE desse
+  tamanho passa). O `mmap` compartilhado anonimo continua alocando tudo na
+  hora e da ENOMEM se nao couber.
+- `wm` como vitima: pode ser escolhido, sem protecao especial (no uso normal
+  e pequeno perto de quem enche a memoria). No modo grafico o `wm` e o
+  programa que o init mantem vivo (`shell /bin/wm` no autostart) e o init ja
+  o relanca meio segundo depois de qualquer morte, inclusive SIGKILL do OOM:
+  o desktop volta sozinho (os programas abertos nele se perdem). O init
+  nunca e vitima.
+- `/proc/meminfo` ganhou `Reserve`, `OomKills`, `OomSelfKills` e
+  `OomReclaims`; a falta de pagina no `pmm` passou a ter limite de 10 linhas
+  por segundo no log.
+- Teste `oomtest` (novo), sequencia M: recusa de `mmap`/`brk` maiores que a
+  RAM; um filho que enche a memoria e e o maior (mata a si mesmo); um
+  processo parado com 60% da memoria e outro enchendo (o parado morre
+  primeiro e o outro espera ele sair, depois morre ele mesmo); dois
+  enchendo ao mesmo tempo (um de cada vez); a memoria livre volta. A
+  sequencia confere no log do kernel que nunca aparecem dois "matando" sem
+  o "saiu" do primeiro entre eles.

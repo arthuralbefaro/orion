@@ -107,6 +107,7 @@ struct process *process_spawn_path(const char *path, const char *const *argv);
 struct process *process_current(void);
 struct process *process_find(uint32_t pid);
 struct process *process_get(uint32_t pid);
+struct process *process_oom_pick(void);
 void process_put(struct process *p);
 int process_pids(uint32_t *out, int max);
 uint32_t process_ppid(struct process *p);

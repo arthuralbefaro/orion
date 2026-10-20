@@ -99,7 +99,8 @@ static int64_t fb_mmap(struct file *f, uint64_t base, uint64_t len, int prot, ui
     if (prot & PROT_WRITE)
         flags |= PTE_WRITABLE;
     for (uint64_t off = 0; off < bytes; off += PAGE_SIZE)
-        vmm_map_page_in(p->pml4_phys, base + off, phys + off, flags);
+        if (!vmm_map_page_in(p->pml4_phys, base + off, phys + off, flags))
+            return -ENOMEM;
 
     mapped_pages += bytes / PAGE_SIZE;
     if (!f->priv) {

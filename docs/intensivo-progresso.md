@@ -48,10 +48,11 @@ hub na H, com audio na S e com troca de video na G (BGA) e na W
 (virtio-gpu), com 646 verificacoes em ~20 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 8.4, falta de memoria (o kernel recusa em vez de travar;
-matador de processo). Fase 7 fechada com a tag `v3.0-rc1`; a tag `v3.0`
-(marco M5) so depois que o dono testar em hardware real e a 7.4 fechar
-(decisao do dono, 2026-10-20). Versao 3.0.0-a6 em diante.
+Proxima etapa: 8.4 parte 2, falha injetada no `kmalloc` (1 em 1000, so
+no modo estrito) junto do fuzz curto. Fase 7 fechada com a tag
+`v3.0-rc1`; a tag `v3.0` (marco M5) so depois que o dono testar em
+hardware real e a 7.4 fechar (decisao do dono, 2026-10-20). Versao
+3.0.0-a7 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -83,8 +84,8 @@ notebook, que vem caindo com tela azul):
   processos, threads ou sinais -> E; ISO ou boot -> F; virtio -> V; NVMe -> N;
   USB -> U; audio -> S; video BGA -> G; virtio-gpu -> W; hub USB -> H;
   instalador ou pacotes -> I; escalonador, nice ou afinidade -> P; fuzzer ou
-  syscalls em geral -> Z (10 min com `-Noturna`). Na duvida, inclui a
-  sequencia. A etapa recebe o `[x]` com isso.
+  syscalls em geral -> Z (10 min com `-Noturna`); falta de memoria -> M. Na
+  duvida, inclui a sequencia. A etapa recebe o `[x]` com isso.
 - Regressao completa so no fim de cada FASE (fim da Fase 5, fim da 7.3 e da
   7.5, antes de cada tag) e em parte que mexe no nucleo do kernel
   (interrupcoes, memoria, escalonador, preempcao, travas, syscalls de uso
@@ -2110,6 +2111,28 @@ e a noturna de 10 min verde (926 mil chamadas em 3058 filhos, 0 morte
 inesperada, maior intervalo sem sinal de vida 822 ms, memoria e processos
 de volta). A correcao do log mexe em syscalls de uso geral: regressao
 completa verde, 706 verificacoes (Z incluida), 29,5 min, RAM livre antes 1,4 GB depois de esperar (estava em 0,4 GB com o PowerShell travado no regex).
+
+#### 8.4 parte 1 Falta de memoria e matador de processo - 17:40 a 18:24 - FEITO
+Requisitos 1 a 8 da 8.4 (logo abaixo das regras). Reserva do kernel para
+as paginas de usuario (`pmm_alloc_user_page`), tabela de paginas sem
+memoria devolve falha num espaco de usuario em vez de panico (falha de
+pagina, COW, fork, ELF, mmap compartilhado, framebuffer, mremap), falha de
+pagina com tres resultados e o OOM chamado ja sem a `mm_lock`: primeiro
+cache limpo, depois uma vitima por vez (o maior processo que nao e o init),
+com espera de ate 5 s; a propria vitima morre ao voltar da falha.
+`mmap`/`brk` maiores que a RAM recusados na hora. O `wm` pode ser vitima e
+o init ja o relanca (e o programa que ele mantem vivo no modo grafico).
+`oomtest` (novo) e sequencia M nova. Detalhes: `docs/DECISOES.md`,
+v3.0.0-a7.
+Primeira versao do `oomtest` so exercitou a vitima que mata a si mesma;
+entrou o caso "outro" (um parado com 60% e outro enchendo), que exercita a
+espera pela vitima. Alarme falso na verificacao de ordem: o `(\d+)` podia
+capturar so "1" de "10"; agora exige o `'` depois do numero. Uma rodada
+teve o enchimento em 29 s em vez de 2 s, duas vezes seguidas, e depois nao
+se repetiu (o proprio convidado mediu o tempo, entao foi o QEMU mais lento;
+anotado).
+Verificacao (nucleo: memoria e falha de pagina): sequencia M verde 3 vezes;
+regressao completa verde, 719 verificacoes (M incluida), 28,8 min, RAM livre antes 6,3 GB.
 
 ### Sessao 2 - 2026-10-17
 

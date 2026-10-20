@@ -17,6 +17,7 @@ param(
     [switch]$OnlyI,
     [switch]$OnlyP,
     [switch]$OnlyZ,
+    [switch]$OnlyM,
     [switch]$Noturna,
     [switch]$SlowWaits,
     [int]$StressRuns = 1,
@@ -29,7 +30,7 @@ $failures = @()
 $checks = 0
 if ($SlowWaits) { $env:ORION_SLOW_WAITS = "1" } else { Remove-Item Env:ORION_SLOW_WAITS -ErrorAction SilentlyContinue }
 $regStart = Get-Date
-$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG -or $OnlyW -or $OnlyH -or $OnlyI -or $OnlyP -or $OnlyZ)
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG -or $OnlyW -or $OnlyH -or $OnlyI -or $OnlyP -or $OnlyZ -or $OnlyM)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -1409,6 +1410,32 @@ if ($runAll -or $OnlyZ) {
     Expect $zl "echo depois-do-fuzz\s*\ndepois-do-fuzz" "o shell continua respondendo depois do fuzz"
     ExpectNot $zl "ls /tmp\s*\n[^\n]*fuzz" "o fuzz apaga o diretorio dele em /tmp"
     ExpectNot $zl "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|BUG: " "nenhum panico nem BUG na sequencia Z"
+}
+
+# ---------------- Sequencia M: falta de memoria ----------------
+if ($runAll -or $OnlyM) {
+    Write-Host "== Sequencia M (falta de memoria e matador de processo) ==" -ForegroundColor Cyan
+    $stepsM = @(
+        "cmd:oomtest", "until:400:oomtest: fim", "cmd:echo depois-do-oom", "cmd:cat /proc/meminfo", "wait:1"
+    )
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -LogPath "out\reg-m.log" `
+        -Script $stepsM -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
+    $ml = Get-Log "out\reg-m.log"
+    if ($Verbose) { Write-Output $ml }
+
+    Expect $ml "oomtest: recusa: mmap de \d+ MiB para escrita da Out of memory, sbrk do mesmo tamanho da Out of memory, reserva\s+PROT_NONE aceita: sim\s+ok" "mmap e brk maiores que a RAM sao recusados na hora; reserva PROT_NONE passa"
+    Expect $ml "oomtest: sozinho: [^\n]*morreu com SIGKILL; OomKills \+1, OomSelfKills \+1 \(matou a si\s+mesmo\)\s+ok" "o maior processo, que enche a memoria, morre com SIGKILL ao voltar da falha"
+    Expect $ml "oomtest: outro: [^\n]*OomKills \+2, OomSelfKills \+1\s+ok" "o OOM mata o maior processo parado e quem falhou espera ele sair"
+    Expect $ml "oomtest: dois: [^\n]*os dois morreram com SIGKILL: sim; OomKills \+2\s+ok" "dois processos enchendo juntos: cada um morre na sua vez"
+    Expect $ml "oomtest: memoria livre volta: [^\n]*ok" "a memoria livre volta depois do OOM"
+    Expect $ml "oomtest: TUDO OK" "oomtest TUDO OK"
+    Expect $ml "oom\s+sem memoria: matando pid \d+ 'oomtest' \(\d+ paginas\)" "o OOM registra a vitima no log"
+    Expect $ml "oom\s+pid \d+ saiu; \d+ paginas livres" "o OOM registra quando a vitima saiu"
+    ExpectNot $ml "oom\s+sem memoria: matando pid (\d+) '[^\n]*\n(?:(?!\S*\s*oom\s+pid \1 saiu)[^\n]*\n)*?[^\n]*oom\s+sem memoria: matando" "uma vitima por vez: nenhuma outra antes de a anterior sair"
+    ExpectNot $ml "matando pid 1 |'init'|'sh' \(" "o OOM nunca escolhe o init nem o shell"
+    Expect $ml "echo depois-do-oom\s*\ndepois-do-oom" "o shell continua respondendo depois do OOM"
+    Expect $ml "OomKills:\s+5\s*\n" "/proc/meminfo conta as 5 mortes por OOM"
+    ExpectNot $ml "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|BUG: " "nenhum panico nem BUG na sequencia M"
 }
 
 # ---------------- Sequencia E: estresse de processos ----------------

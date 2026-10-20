@@ -1,4 +1,5 @@
 #include <fs/procfs.h>
+#include <mm/oom.h>
 #include <fs/vfs.h>
 #include <fs/block.h>
 #include <kernel/file.h>
@@ -348,6 +349,12 @@ static void gen_meminfo(struct pbuf *b)
     pb_printf(b, "SwapTotal:      %8lu kB\n", 0ul);
     pb_printf(b, "SwapFree:       %8lu kB\n", 0ul);
     pb_printf(b, "KernelHeap:     %8lu kB\n", (hs.slab_bytes_used + hs.large_bytes_used) / 1024);
+    struct oom_stats os;
+    oom_stats(&os);
+    pb_printf(b, "Reserve:        %8lu kB\n", pmm_reserve_pages() * kb);
+    pb_printf(b, "OomKills:       %8lu\n", os.kills);
+    pb_printf(b, "OomSelfKills:   %8lu\n", os.self_kills);
+    pb_printf(b, "OomReclaims:    %8lu\n", os.reclaims);
     pb_printf(b, "CowShared:      %8lu kB\n", pmm_shared_pages() * kb);
     pb_printf(b, "CowFaults:      %8lu\n", faults);
     pb_printf(b, "CowCopies:      %8lu\n", copies);

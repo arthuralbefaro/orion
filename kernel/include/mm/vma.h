@@ -37,7 +37,11 @@ bool vma_resize(struct process *p, struct vma *v, uint64_t new_end);
 long vma_remap(struct process *p, uint64_t old, uint64_t old_len, uint64_t new_len, bool may_move);
 bool vma_copy_all(struct process *dst, struct process *src);
 void vma_release_all(struct process *p);
-bool vma_fault(struct process *p, uint64_t addr, uint64_t err);
+#define VMA_FAULT_OK    0
+#define VMA_FAULT_SEGV  1
+#define VMA_FAULT_NOMEM 2
+
+int vma_fault(struct process *p, uint64_t addr, uint64_t err);
 bool vma_covers(struct process *p, uint64_t addr);
 uint64_t vma_pte_flags(uint32_t flags);
 uint64_t vma_count(struct process *p);

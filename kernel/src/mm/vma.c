@@ -287,9 +287,16 @@ long vma_remap(struct process *p, uint64_t old, uint64_t old_len, uint64_t new_l
         uint64_t pte = vmm_get_pte_in(p->pml4_phys, old + off);
         if (!(pte & (PTE_PRESENT | PTE_PROTNONE)))
             continue;
-        vmm_unmap_page_in(p->pml4_phys, old + off);
-        vmm_map_page_in(p->pml4_phys, dst + off, pte & PTE_ADDR_MASK, pte & ~PTE_ADDR_MASK);
+        if (!vmm_map_page_in(p->pml4_phys, dst + off, pte & PTE_ADDR_MASK, pte & ~PTE_ADDR_MASK)) {
+            for (uint64_t back = 0; back < off; back += PAGE_SIZE)
+                vmm_unmap_page_in(p->pml4_phys, dst + back);
+            vma_unmap(p, dst, dst + new_len);
+            return -ENOMEM;
+        }
     }
+    for (uint64_t off = 0; off < old_len; off += PAGE_SIZE)
+        if (vmm_get_pte_in(p->pml4_phys, old + off) & (PTE_PRESENT | PTE_PROTNONE))
+            vmm_unmap_page_in(p->pml4_phys, old + off);
     long r = vma_unmap(p, old, old_end);
     return r < 0 ? r : (long)dst;
 }
@@ -331,63 +338,72 @@ bool vma_covers(struct process *p, uint64_t addr)
     return found;
 }
 
-static bool fault_locked(struct process *p, uint64_t addr, uint64_t err);
+static int fault_locked(struct process *p, uint64_t addr, uint64_t err);
 
-bool vma_fault(struct process *p, uint64_t addr, uint64_t err)
+int vma_fault(struct process *p, uint64_t addr, uint64_t err)
 {
     if (interrupts_enabled())
         mutex_lock(&p->mm_lock);
     else if (!mutex_trylock(&p->mm_lock))
-        return false;
-    bool ok = fault_locked(p, addr, err);
+        return VMA_FAULT_SEGV;
+    int r = fault_locked(p, addr, err);
     mutex_unlock(&p->mm_lock);
-    return ok;
+    return r;
 }
 
-static bool fault_locked(struct process *p, uint64_t addr, uint64_t err)
+static int map_or_drop(struct process *p, uint64_t page, uint64_t phys, uint64_t flags)
+{
+    if (!vmm_map_page_in(p->pml4_phys, page, phys, flags)) {
+        pmm_free_page(phys);
+        return VMA_FAULT_NOMEM;
+    }
+    p->pages++;
+    return VMA_FAULT_OK;
+}
+
+static int fault_locked(struct process *p, uint64_t addr, uint64_t err)
 {
     struct vma *v = vma_find(p, addr);
     if (!v || !vma_accessible(v->flags) || (v->flags & VMA_NOFREE))
-        return false;
+        return VMA_FAULT_SEGV;
     bool present = err & 1;
     bool write = err & 2;
     bool fetch = err & 16;
     if (write && !(v->flags & VMA_WRITE))
-        return false;
+        return VMA_FAULT_SEGV;
     if (fetch && !(v->flags & VMA_EXEC))
-        return false;
+        return VMA_FAULT_SEGV;
 
     uint64_t page = PAGE_ALIGN_DOWN(addr);
     uint64_t pte = vmm_get_pte_in(p->pml4_phys, page);
     if ((pte & PTE_PRESENT) && (!write || (pte & PTE_WRITABLE)) && (!fetch || !(pte & PTE_NX))) {
         invlpg(page);
-        return true;
+        return VMA_FAULT_OK;
     }
     if (present) {
         uint64_t old = 0;
         if (!write || !(pte & PTE_COW))
-            return false;
+            return VMA_FAULT_SEGV;
         if (!vmm_cow_fault(p->pml4_phys, page, &old) &&
             (!vfs_cache_reclaim(16) || !vmm_cow_fault(p->pml4_phys, page, &old)))
-            return false;
+            return VMA_FAULT_NOMEM;
         if (old)
             process_defer_free(p, old);
         process_mm_tlb_sync(p);
-        return true;
+        return VMA_FAULT_OK;
     }
     if (pte & PTE_PROTNONE)
-        return false;
+        return VMA_FAULT_SEGV;
     if ((v->flags & VMA_FILE) && !interrupts_enabled())
-        return false;
+        return VMA_FAULT_SEGV;
 
     if ((v->flags & (VMA_FILE | VMA_SHARED)) == (VMA_FILE | VMA_SHARED) && v->file->vn->mnt->type->getpage) {
         struct vnode *vn = v->file->vn;
         uint64_t phys = 0;
-        if (vn->mnt->type->getpage(vn, (v->offset + (page - v->start)) / PAGE_SIZE, &phys) < 0)
-            return false;
-        vmm_map_page_in(p->pml4_phys, page, phys, vma_pte_flags(v->flags));
-        p->pages++;
-        return true;
+        int r = vn->mnt->type->getpage(vn, (v->offset + (page - v->start)) / PAGE_SIZE, &phys);
+        if (r < 0)
+            return r == -ENOMEM ? VMA_FAULT_NOMEM : VMA_FAULT_SEGV;
+        return map_or_drop(p, page, phys, vma_pte_flags(v->flags));
     }
 
     if (v->flags & VMA_FILE) {
@@ -401,19 +417,17 @@ static bool fault_locked(struct process *p, uint64_t addr, uint64_t err)
                 vfs_cache_reclaim(16);
             uint64_t cached = pcache_get(vn, off / PAGE_SIZE, &err);
             if (!cached)
-                return false;
+                return err == -ENOMEM ? VMA_FAULT_NOMEM : VMA_FAULT_SEGV;
             uint64_t flags = (vma_pte_flags(v->flags) & ~PTE_WRITABLE) | PTE_COW;
-            vmm_map_page_in(p->pml4_phys, page, cached, flags);
-            p->pages++;
-            return true;
+            return map_or_drop(p, page, cached, flags);
         }
     }
 
-    uint64_t phys = pmm_alloc_page();
+    uint64_t phys = pmm_alloc_user_page();
     if (!phys && vfs_cache_reclaim(16))
-        phys = pmm_alloc_page();
+        phys = pmm_alloc_user_page();
     if (!phys)
-        return false;
+        return VMA_FAULT_NOMEM;
     uint8_t *mem = phys_to_virt(phys);
     memset(mem, 0, PAGE_SIZE);
     if (v->flags & VMA_FILE) {
@@ -424,13 +438,11 @@ static bool fault_locked(struct process *p, uint64_t addr, uint64_t err)
                 n = PAGE_SIZE;
             if (vfs_read(v->file->vn, off, mem, n) < 0) {
                 pmm_free_page(phys);
-                return false;
+                return VMA_FAULT_SEGV;
             }
         }
     }
-    vmm_map_page_in(p->pml4_phys, page, phys, vma_pte_flags(v->flags));
-    p->pages++;
-    return true;
+    return map_or_drop(p, page, phys, vma_pte_flags(v->flags));
 }
 
 bool vma_add_merge(struct process *p, uint64_t pml4, uint64_t start, uint64_t end, uint32_t flags)

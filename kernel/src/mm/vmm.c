@@ -42,7 +42,7 @@ static uint64_t *next_level(uint64_t *table, size_t index, bool create, const ch
 
     uint64_t phys = pmm_alloc_page();
     if (!phys)
-        panic("vmm: sem memoria para tabela de paginas (%s)", what);
+        return NULL;
     uint64_t *child = phys_to_virt(phys);
     memset(child, 0, PAGE_SIZE);
 
@@ -70,14 +70,24 @@ uint64_t vmm_kernel_pml4(void)
     return kernel_pml4_phys;
 }
 
-void vmm_map_page_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags)
+static uint64_t *leaf_table(uint64_t pml4_phys, uint64_t virt)
+{
+    uint64_t *pml4 = phys_to_virt(pml4_phys);
+    uint64_t *pdpt = next_level(pml4, pml4_index(virt), true, "PML4");
+    uint64_t *pd = pdpt ? next_level(pdpt, pdpt_index(virt), true, "PDPT") : NULL;
+    uint64_t *pt = pd ? next_level(pd, pd_index(virt), true, "PD") : NULL;
+    if (!pt && pml4_phys == kernel_pml4_phys)
+        panic("vmm: sem memoria para tabela de paginas do kernel (%016lx)", virt);
+    return pt;
+}
+
+bool vmm_map_page_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags)
 {
     ASSERT(IS_ALIGNED(virt, PAGE_SIZE) && IS_ALIGNED(phys, PAGE_SIZE));
 
-    uint64_t *pml4 = phys_to_virt(pml4_phys);
-    uint64_t *pdpt = next_level(pml4, pml4_index(virt), true, "PML4");
-    uint64_t *pd   = next_level(pdpt, pdpt_index(virt), true, "PDPT");
-    uint64_t *pt   = next_level(pd,   pd_index(virt),   true, "PD");
+    uint64_t *pt = leaf_table(pml4_phys, virt);
+    if (!pt)
+        return false;
 
     if (!nx_supported)
         flags &= ~PTE_NX;
@@ -85,6 +95,7 @@ void vmm_map_page_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t 
     pt[pt_index(virt)] = (phys & PTE_ADDR_MASK) | (flags & ~PTE_HUGE);
     if (tlb_needs_flush(pml4_phys))
         invlpg(virt);
+    return true;
 }
 
 void vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags)
@@ -179,17 +190,17 @@ uint64_t vmm_get_pte_in(uint64_t pml4_phys, uint64_t virt)
     return pt[pt_index(virt)];
 }
 
-void vmm_set_pte_in(uint64_t pml4_phys, uint64_t virt, uint64_t pte)
+bool vmm_set_pte_in(uint64_t pml4_phys, uint64_t virt, uint64_t pte)
 {
-    uint64_t *pml4 = phys_to_virt(pml4_phys);
-    uint64_t *pdpt = next_level(pml4, pml4_index(virt), true, "PML4");
-    uint64_t *pd   = next_level(pdpt, pdpt_index(virt), true, "PDPT");
-    uint64_t *pt   = next_level(pd,   pd_index(virt),   true, "PD");
+    uint64_t *pt = leaf_table(pml4_phys, virt);
+    if (!pt)
+        return false;
     if (!nx_supported)
         pte &= ~PTE_NX;
     pt[pt_index(virt)] = pte;
     if (tlb_needs_flush(pml4_phys))
         invlpg(virt);
+    return true;
 }
 
 uint64_t vmm_create_address_space(void)
@@ -247,16 +258,20 @@ bool vmm_cow_fault(uint64_t pml4_phys, uint64_t virt, uint64_t *release)
     uint64_t flags = (pte & ~PTE_ADDR_MASK & ~PTE_COW) | PTE_WRITABLE;
 
     if (pmm_ref_count(phys) == 1) {
-        vmm_map_page_in(pml4_phys, virt, phys, flags);
+        if (!vmm_map_page_in(pml4_phys, virt, phys, flags))
+            return false;
         cow_faults++;
         return true;
     }
 
-    uint64_t fresh = pmm_alloc_page();
+    uint64_t fresh = pmm_alloc_user_page();
     if (!fresh)
         return false;
     memcpy(phys_to_virt(fresh), phys_to_virt(phys), PAGE_SIZE);
-    vmm_map_page_in(pml4_phys, virt, fresh, flags);
+    if (!vmm_map_page_in(pml4_phys, virt, fresh, flags)) {
+        pmm_free_page(fresh);
+        return false;
+    }
     *release = phys;
     cow_faults++;
     cow_copies++;

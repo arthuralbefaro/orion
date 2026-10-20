@@ -14,6 +14,7 @@
 #include <mm/heap.h>
 #include <mm/uaccess.h>
 #include <mm/vma.h>
+#include <mm/oom.h>
 #include <kernel/smp.h>
 #include <arch/x86_64/percpu.h>
 #include <kernel/irqctx.h>
@@ -302,10 +303,23 @@ static void handle_exception(struct interrupt_frame *f)
             bool was_on = (f->rflags & RFLAGS_IF) != 0;
             if (was_on)
                 sti();
-            bool ok = vma_fault(p, cr2, f->err_code);
+            int r = vma_fault(p, cr2, f->err_code);
+            for (int tries = 0; r == VMA_FAULT_NOMEM && was_on && tries < OOM_FAULT_TRIES; tries++) {
+                if (!oom_recover())
+                    break;
+                r = vma_fault(p, cr2, f->err_code);
+            }
             cli();
-            if (ok)
+            if (r == VMA_FAULT_OK)
                 return;
+            if (r == VMA_FAULT_NOMEM && (f->cs & 3) == 3) {
+                if (!oom_fatal_pending()) {
+                    log_error_limited("oom", "pid %u '%s': sem memoria para a pagina %016lx; morto", p->pid,
+                                      p->name, cr2);
+                    signal_send(p, SIGKILL);
+                }
+                return;
+            }
         }
     }
 

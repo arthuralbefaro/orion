@@ -42,11 +42,14 @@ static bool map_user_range(struct process *p, uint64_t pml4, uint64_t virt, uint
     for (uint64_t v = start; v < end; v += PAGE_SIZE) {
         if (vmm_virt_to_phys_in(pml4, v))
             continue;
-        uint64_t phys = pmm_alloc_page();
+        uint64_t phys = pmm_alloc_user_page();
         if (!phys)
             return false;
         memset(phys_to_virt(phys), 0, PAGE_SIZE);
-        vmm_map_page_in(pml4, v, phys, flags);
+        if (!vmm_map_page_in(pml4, v, phys, flags)) {
+            pmm_free_page(phys);
+            return false;
+        }
         p->pages++;
     }
     return true;
@@ -635,6 +638,22 @@ struct process *process_get(uint32_t pid)
     return p;
 }
 
+struct process *process_oom_pick(void)
+{
+    uint64_t flags = spin_lock_irqsave(&proc_lock);
+    struct process *best = NULL;
+    for (struct process *c = processes; c; c = c->next) {
+        if (c->pid == 1 || c->state == PROC_ZOMBIE || __atomic_load_n(&c->group_exit, __ATOMIC_ACQUIRE))
+            continue;
+        if (!best || c->pages > best->pages)
+            best = c;
+    }
+    if (best)
+        __atomic_add_fetch(&best->pins, 1, __ATOMIC_SEQ_CST);
+    spin_unlock_irqrestore(&proc_lock, flags);
+    return best;
+}
+
 int process_pids(uint32_t *out, int max)
 {
     uint64_t flags = spin_lock_irqsave(&proc_lock);
@@ -817,7 +836,8 @@ static bool share_user_pages(struct process *child, struct process *parent)
                     uint64_t phys = e & PTE_ADDR_MASK;
                     uint64_t flags = e & ~PTE_ADDR_MASK;
                     if (e & PTE_NOFREE) {
-                        vmm_set_pte_in(child->pml4_phys, virt, e);
+                        if (!vmm_set_pte_in(child->pml4_phys, virt, e))
+                            goto nomem;
                         continue;
                     }
                     struct vma *v = vma_find(parent, virt);
@@ -826,8 +846,9 @@ static bool share_user_pages(struct process *child, struct process *parent)
                         flags = (flags & ~PTE_WRITABLE) | PTE_COW;
                         pt[i1] = phys | flags;
                     }
+                    if (!vmm_set_pte_in(child->pml4_phys, virt, phys | flags))
+                        goto nomem;
                     pmm_ref_inc(phys);
-                    vmm_set_pte_in(child->pml4_phys, virt, phys | flags);
                     child->pages++;
                 }
             }
@@ -835,6 +856,9 @@ static bool share_user_pages(struct process *child, struct process *parent)
     }
     write_cr3(read_cr3());
     return true;
+nomem:
+    write_cr3(read_cr3());
+    return false;
 }
 
 struct fork_start {
