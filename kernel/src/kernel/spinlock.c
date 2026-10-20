@@ -65,7 +65,8 @@ static NORETURN void spin_deadlock(spinlock_t *l, bool recursive, uint32_t secon
 void spin_lock_slow(spinlock_t *l)
 {
     struct thread *me = current_or_null();
-    bool can_yield = me && !me->is_idle && sched_enabled() && interrupts_enabled();
+    bool can_yield = me && !me->is_idle && sched_enabled() && interrupts_enabled() &&
+                     !__atomic_load_n(&me->spin_count, __ATOMIC_ACQUIRE);
     uint32_t seconds = can_yield ? SPIN_TIMEOUT_PREEMPTIBLE : SPIN_TIMEOUT_SECONDS;
     uint64_t limit = tsc_per_second * seconds;
     uint64_t start = rdtsc();

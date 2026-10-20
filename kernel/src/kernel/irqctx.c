@@ -178,19 +178,31 @@ bool irqctx_nmi_probe(void)
 }
 
 static volatile bool helper_stop;
+static volatile bool helper_ran;
 
 static void helper_spin(void *arg)
 {
     (void)arg;
+    helper_ran = true;
     while (!helper_stop)
         pause();
 }
 
-static bool spin_round(uint64_t *deferred, uint64_t *switches)
+struct spin_result {
+    uint64_t deferred;
+    uint64_t switches;
+    uint64_t unlock_preempts;
+    bool same;
+    bool ran_before;
+    bool ran_at_unlock;
+};
+
+static bool spin_round(struct spin_result *r)
 {
     static spinlock_t hold = SPINLOCK_INIT;
     helper_stop = false;
-    struct thread *helper = thread_create("irqtest-ajuda", helper_spin, NULL);
+    helper_ran = false;
+    struct thread *helper = thread_create_for_process_paused("irqtest-ajuda", helper_spin, NULL, NULL);
     if (!helper)
         return false;
     spin_lock(&hold);
@@ -198,6 +210,8 @@ static bool spin_round(uint64_t *deferred, uint64_t *switches)
     struct percpu *p = percpu_get();
     irq_restore(flags);
     struct thread *me = thread_current();
+    sched_set_affinity(helper, 1ull << p->cpu_id);
+    thread_unblock(helper);
     uint64_t d0 = p->preempt_deferred;
     uint64_t s0 = p->context_switches;
     uint64_t t0 = p->ticks;
@@ -206,13 +220,18 @@ static bool spin_round(uint64_t *deferred, uint64_t *switches)
     while (p->ticks < t0 + 3 && time_now_us() < end)
         pause();
     flags = irq_save();
-    *deferred = p->preempt_deferred - d0;
-    *switches = p->context_switches - s0;
-    bool same = percpu_get() == p && thread_current() == me;
+    r->deferred = p->preempt_deferred - d0;
+    r->switches = p->context_switches - s0;
+    r->same = percpu_get() == p && thread_current() == me;
+    r->ran_before = helper_ran;
+    p->need_resched = true;
     irq_restore(flags);
+    uint64_t u0 = p->preempt_unlock;
     spin_unlock(&hold);
+    r->ran_at_unlock = helper_ran;
+    r->unlock_preempts = p->preempt_unlock - u0;
     helper_stop = true;
-    return same;
+    return r->same;
 }
 
 static bool fire(int vector, bool nest)
@@ -277,8 +296,8 @@ int irqctx_selftest(void)
             max_depth = c->irq_depth_max;
     }
 
-    uint64_t deferred = 0, switches = 0;
-    bool held = spin_round(&deferred, &switches);
+    struct spin_result sr = { 0 };
+    bool held = spin_round(&sr);
 
     uint32_t before_nmi = __atomic_load_n(&reports, __ATOMIC_RELAXED);
     bool nmi_ok = nmi_round();
@@ -289,8 +308,8 @@ int irqctx_selftest(void)
     selftest_runs++;
 
     bool ok = fired && depth_ok && in_irq == expect && outside == 0 && nested && max_depth >= 2 &&
-              test_ticks >= 2 && test_same && nmi_ok && nmi_reports == expect && held && deferred >= 1 &&
-              switches == 0;
+              test_ticks >= 2 && test_same && nmi_ok && nmi_reports == expect && held && sr.deferred >= 1 &&
+              sr.switches == 0 && !sr.ran_before && sr.ran_at_unlock && sr.unlock_preempts >= 1;
     log_info("irq",
              "irqtest: kmalloc na IRQ avisou %u vez(es) em 2 chamadas (profundidade %u); trylock nao "
              "avisou; kmalloc com trava de spin fora de IRQ avisou %u vez(es)",
@@ -300,6 +319,9 @@ int irqctx_selftest(void)
              max_depth, test_ticks, test_same ? "sim" : "nao", nmi_reports, nmi_ok ? "sim" : "nao");
     log_info("irq", "irqtest: trava de spin com interrupcoes ligadas: %lu troca(s) adiada(s), %lu troca(s) de thread "
              "na CPU enquanto a trava estava presa, mesma thread e CPU: %s",
-             deferred, switches, held ? "sim" : "nao");
+             sr.deferred, sr.switches, held ? "sim" : "nao");
+    log_info("irq", "irqtest: spin_unlock com troca adiada: a thread da mesma CPU rodou antes: %s, rodou antes do "
+             "spin_unlock voltar: %s (%lu troca(s) na liberacao)",
+             sr.ran_before ? "sim" : "nao", sr.ran_at_unlock ? "sim" : "nao", sr.unlock_preempts);
     return ok ? 0 : -EIO;
 }

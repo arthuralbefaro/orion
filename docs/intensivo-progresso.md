@@ -48,11 +48,10 @@ hub na H, com audio na S e com troca de video na G (BGA) e na W
 (virtio-gpu), com 646 verificacoes em ~20 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 8.2, kernel preemptivo (ver "Requisitos da 8.2": o
-`spin_unlock` chama o escalonador na hora ao zerar o contador com a troca
-adiada). Fase 7 fechada com a tag `v3.0-rc1`; a tag `v3.0` (marco M5) so
-depois que o dono testar em hardware real e a 7.4 fechar (decisao do
-dono, 2026-10-20). Versao 3.0.0-a4 em diante.
+Proxima etapa: 8.3, fuzzer de syscalls (ver "Requisitos da 8.3"). Fase 7
+fechada com a tag `v3.0-rc1`; a tag `v3.0` (marco M5) so depois que o dono
+testar em hardware real e a 7.4 fechar (decisao do dono, 2026-10-20).
+Versao 3.0.0-a5 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -205,6 +204,24 @@ setpriority/getpriority, sched_setaffinity, programa `nice`, teste
    (`PRIO_PROCESS` no minimo; os outros dao `EINVAL` ou sao implementados) e
    se valem por thread ou por processo, como no Linux.
 
+Requisitos da 8.3 (fuzzer de syscalls), decididos pelo dono em 2026-10-20:
+1. Reproducao: semente impressa no comeco e aceita por `--seed`; cada filho
+   guarda as ultimas 32 syscalls (numero e argumentos) num anel em memoria
+   compartilhada, e o pai despeja o anel do filho que morreu de forma
+   inesperada.
+2. Criterio de falha na sequencia: panico (marcador exato), qualquer "BUG:",
+   falta do sinal de vida do pai por mais de N segundos e, no fim, paginas
+   livres e numero de processos de volta perto do inicio (com margem).
+3. Argumentos: alem de lixo e enderecos do kernel, ponteiros validos
+   terminando na borda de uma pagina com a seguinte nao mapeada, tamanhos 0,
+   1, 4095, 4096, 4097 e enormes, e descritores reais de varios tipos (pipe,
+   socket TCP e UNIX, pty, arquivo, diretorio, /proc).
+4. fork/clone com probabilidade baixa, sob o limite de processos. exec so de
+   caminhos inexistentes ou de lixo.
+5. O fuzz roda num diretorio proprio em /tmp, como usuario comum.
+Se o fuzzer achar defeito: cada um corrigido num commit proprio, com um teste
+que reproduz, e registrado no `DECISOES.md`.
+
 Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 1. Verificacao pelo WAV do QEMU (`-audiodev wav`): o `play` toca um sinal
    gerado e conhecido (por exemplo 1 kHz, 2 s, so no canal esquerdo) e o
@@ -297,7 +314,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 7.4 | Hardware real | [!] | 13:00 | 13:08 | aguardando teste do usuario em hardware real, roteiro em docs/teste-hardware-real.md |
 | 7.5 | Pacotes | [x] | 13:10 | 13:30 | |
 | 8.1 | Fila por CPU e nice | [x] | 14:05 | 15:10 | |
-| 8.2 | Kernel preemptivo (comeco: contador de travas de spin por thread, na 5.7 parte 4; falta: troca adiada marca `need_resched` e o `spin_unlock`, ao zerar o `spin_count` com interrupcoes ligadas e a flag marcada, chama o escalonador na hora; ver "Requisitos da 8.2") | [ ] | | | |
+| 8.2 | Kernel preemptivo (contador de travas de spin por thread desde a 5.7 parte 4; troca adiada chamada na hora pelo `spin_unlock`) | [x] | 15:15 | 16:05 | |
 | 8.3 | Fuzzer de syscalls | [ ] | | | |
 | 8.4 | OOM | [ ] | | | |
 | 8.5 | Perfilador | [ ] | | | |
@@ -2015,6 +2032,21 @@ verde. Mexe no escalonador: regressao completa, 690 verificacoes, verde,
 28,7 min, RAM livre antes 3,7 GB. Versao 3.0.0-a4 trocada depois da
 regressao; nenhuma verificacao confere o texto da versao, entao so
 `check.ps1` e build depois da troca.
+
+#### 8.2 Kernel preemptivo - 15:15 a 16:05 - FEITO
+O kernel ja trocava de thread na volta de interrupcao em modo kernel e, desde
+a 5.7 parte 4, adiava a troca com trava de spin presa. Agora o `spin_unlock`,
+ao zerar o contador da thread atual com interrupcoes ligadas e
+`need_resched` marcado, chama o escalonador na hora
+(`sched_unlock_preempt`); o `spin_unlock_irqrestore` confere depois de
+religar as interrupcoes. O `spin_lock_slow` so cede a CPU se a thread nao
+segura outra trava. `irqtest`: a thread de ajuda presa na mesma CPU nao roda
+com a trava presa e roda antes de o `spin_unlock` voltar (1 troca na
+liberacao), verificacao nova na sequencia A. Detalhes: `docs/DECISOES.md`,
+v3.0.0-a5.
+Verificacao (nucleo: travas, escalonador): `irqtest` 2 vezes e `nicetest`
+verdes no QEMU; regressao completa, 691 verificacoes, verde, 26,7 min, RAM
+livre antes 3,7 GB. Versao trocada antes da regressao desta vez.
 
 ### Sessao 2 - 2026-10-17
 

@@ -552,6 +552,7 @@ if ($runAll -or $OnlyA) {
     Expect $a "BUG: teste no NMI dentro de interrupcao \(NMI, anotado e impresso depois\)" "aviso no NMI vai para o buffer da CPU e sai depois"
     Expect $a "irqtest: contexto de interrupcao ok" "irqtest termina bem"
     Expect $a "irqtest: trava de spin com interrupcoes ligadas: [1-9]\d* troca\(s\) adiada\(s\), 0 troca\(s\) de thread na CPU enquanto a trava estava presa, mesma thread e CPU: sim" "thread segurando trava de spin nao e preemptada (contador por thread, comeco da 8.2)"
+    Expect $a "irqtest: spin_unlock com troca adiada: a thread da mesma CPU rodou antes: nao, rodou antes do\s+spin_unlock voltar: sim \([1-9]\d* troca\(s\) na liberacao\)" "spin_unlock com a troca adiada chama o escalonador na hora (8.2)"
     ExpectNot $a "BUG: (?!kmalloc dentro de interrupcao, chamado|teste no NMI)[^\n]*dentro de interrupcao" "nenhum outro aviso de contexto de interrupcao na sequencia A"
     Expect $a "\nalfa Xbeta" "seta para a esquerda insere no meio da linha"
     Expect $a "\nalfa X\n" "Home, End e backspace cortaram o fim da linha"

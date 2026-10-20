@@ -43,6 +43,7 @@ struct percpu {
     uint64_t steals;
     uint64_t balance_moves;
     uint64_t resched_ipis;
+    uint64_t preempt_unlock;
 };
 
 void percpu_init_bsp(uint32_t lapic_id);

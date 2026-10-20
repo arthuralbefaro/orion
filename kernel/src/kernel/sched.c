@@ -885,6 +885,21 @@ void sched_check_preempt(void)
     schedule();
 }
 
+void sched_unlock_preempt(void)
+{
+    if (!enabled || !percpu_ready())
+        return;
+    uint64_t flags = irq_save();
+    struct percpu *cpu = percpu_get();
+    struct thread *cur = cpu->current;
+    if (cpu->need_resched && !cpu->irq_depth && !cpu->in_nmi && cur && !cur->is_idle &&
+        !__atomic_load_n(&cur->spin_count, __ATOMIC_ACQUIRE)) {
+        cpu->preempt_unlock++;
+        schedule();
+    }
+    irq_restore(flags);
+}
+
 void sched_dump(void)
 {
     uint64_t flags = spin_lock_irqsave(&runq_lock);

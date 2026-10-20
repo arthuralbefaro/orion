@@ -19,6 +19,7 @@ void spin_set_owner(spinlock_t *l, uint64_t pc);
 void spin_owner_release(void *thread);
 bool spin_held(spinlock_t *l);
 void spin_set_timeout(uint64_t tsc_hz);
+void sched_unlock_preempt(void);
 
 static inline void spinlock_init(spinlock_t *l)
 {
@@ -51,6 +52,8 @@ static inline void spin_unlock(spinlock_t *l)
     if (owner)
         spin_owner_release(owner);
     __sync_lock_release(&l->locked);
+    if (owner && interrupts_enabled())
+        sched_unlock_preempt();
 }
 
 #define ASSERT_HELD(l) ASSERT(spin_held(l))
@@ -66,4 +69,6 @@ static inline void spin_unlock_irqrestore(spinlock_t *l, uint64_t flags)
 {
     spin_unlock(l);
     irq_restore(flags);
+    if (flags & RFLAGS_IF)
+        sched_unlock_preempt();
 }

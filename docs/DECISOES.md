@@ -3741,3 +3741,38 @@ O que mudou na 5.7 e por que:
   em N CPUs por 3 s (cada uma com pelo menos 35% e o total com 85%), N de
   nice 0 e N de nice 10 soltas por 4 s (razao de 5:1 a 15:1 e o pior nice 0
   com 60%), afinidade e permissoes. Sequencia nova P na regressao.
+
+## v3.0.0-a5 (etapa 8.2: kernel preemptivo)
+
+- O kernel ja trocava de thread na volta de uma interrupcao que chegou em
+  modo kernel (desde a Fase 0), e desde a 5.7 parte 4 nao troca enquanto a
+  thread segura trava de spin (`spin_count` por thread, contado no dono da
+  trava); a troca fica adiada com `need_resched` marcado e
+  `preempt_deferred` contado. A 8.2 fecha o requisito do dono: o
+  `spin_unlock`, quando o contador da thread atual chega a zero com as
+  interrupcoes ligadas e `need_resched` marcado, chama o escalonador na hora
+  (`sched_unlock_preempt`), em vez de esperar a proxima interrupcao (ate uma
+  fatia de 10 ms de atraso para a thread que esperava). O
+  `spin_unlock_irqrestore` faz a mesma conferencia depois de religar as
+  interrupcoes, porque e ali que elas voltam.
+- A conferencia so chama o escalonador fora de interrupcao (profundidade 0,
+  fora de NMI), fora da thread ociosa e com o escalonador ligado. E o mesmo
+  ponto em que uma interrupcao logo depois do `spin_unlock` ja podia trocar
+  de thread, entao nao abre janela nova; o estado das threads (pronta,
+  bloqueada, dormindo) so muda dentro do `sched.c` com a `runq_lock` presa,
+  e nao ha o padrao "marca bloqueada, solta outra trava, depois troca" que
+  quebraria com a troca no meio.
+- O custo no caminho comum e um `pushf` e uma chamada so quando a trava tinha
+  dono e as interrupcoes estao ligadas; a funcao sai logo sem
+  `need_resched`.
+- Junto: o `spin_lock_slow` so cede a CPU (`thread_yield`) enquanto espera
+  uma trava se a thread nao segura nenhuma outra; antes ela podia ceder com
+  outra trava de spin presa, o que contradiz o proprio contador.
+- Contagem por CPU `preempt_unlock` (trocas pedidas na liberacao). Teste no
+  `irqtest`: uma thread de ajuda criada pausada, presa na CPU do teste e solta
+  com a trava segura nao roda enquanto a trava esta presa e roda antes de o
+  `spin_unlock` voltar.
+- Fica para depois: `preempt_disable()`/`preempt_enable()` sem trava (nenhum
+  ponto do kernel precisa hoje; o padrao "ponteiro da CPU e depois o campo"
+  foi auditado na 5.7 parte 4 e usa `irq_save` ou uma leitura relativa ao
+  GS) e dividir a `runq_lock` por CPU (ver v3.0.0-a4).
