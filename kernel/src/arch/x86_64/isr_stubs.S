@@ -1,25 +1,11 @@
-/*
- * isr_stubs.S - pontos de entrada das 256 interrupções.
- *
- * Em vez de 256 labels, geramos os stubs com .rept dentro de um bloco
- * alinhado: cada stub ocupa exatamente ISR_STUB_SIZE bytes, então o stub do
- * vetor N fica em isr_stubs_begin + N * ISR_STUB_SIZE (é assim que idt.c
- * preenche a IDT). Sintaxe GAS/AT&T, montado pelo próprio clang.
- *
- * Cada stub empilha (se a CPU não empilhou) um código de erro falso e o
- * número do vetor, e salta para isr_common, que salva os registradores,
- * chama isr_dispatch(frame) e restaura tudo antes do iretq.
- *
- * Exceções que já vêm com código de erro: 8, 10, 11, 12, 13, 14, 17, 21, 29, 30.
- */
-
 #define ISR_STUB_SIZE 16
+#define MSR_GS_BASE 0xC0000101
 
 .section .text
 
 .extern isr_dispatch
 
-isr_common:
+.macro SAVE_REGS
     pushq %rax
     pushq %rbx
     pushq %rcx
@@ -35,23 +21,9 @@ isr_common:
     pushq %r13
     pushq %r14
     pushq %r15
+.endm
 
-    testq $3, 144(%rsp)
-    jz 1f
-    swapgs
-1:
-    cld
-    cmpb $0, smap_enabled(%rip)
-    je 3f
-    clac
-3:
-    movq %rsp, %rdi
-    call isr_dispatch
-
-    testq $3, 144(%rsp)
-    jz 2f
-    swapgs
-2:
+.macro RESTORE_REGS
     popq %r15
     popq %r14
     popq %r13
@@ -67,8 +39,54 @@ isr_common:
     popq %rcx
     popq %rbx
     popq %rax
+.endm
 
-    addq $16, %rsp              /* descarta int_no e err_code */
+.macro KERNEL_ENTRY
+    cld
+    cmpb $0, smap_enabled(%rip)
+    je 9f
+    clac
+9:
+.endm
+
+isr_common:
+    SAVE_REGS
+    testq $3, 144(%rsp)
+    jz 1f
+    swapgs
+1:
+    KERNEL_ENTRY
+    movq %rsp, %rdi
+    call isr_dispatch
+
+    testq $3, 144(%rsp)
+    jz 2f
+    swapgs
+2:
+    RESTORE_REGS
+    addq $16, %rsp
+    iretq
+
+isr_paranoid:
+    SAVE_REGS
+    xorl %r12d, %r12d
+    movl $MSR_GS_BASE, %ecx
+    rdmsr
+    testl %edx, %edx
+    js 1f
+    swapgs
+    movl $1, %r12d
+1:
+    KERNEL_ENTRY
+    movq %rsp, %rdi
+    call isr_dispatch
+
+    testl %r12d, %r12d
+    jz 2f
+    swapgs
+2:
+    RESTORE_REGS
+    addq $16, %rsp
     iretq
 
 .align ISR_STUB_SIZE
@@ -85,7 +103,11 @@ isr_stubs_begin:
         pushq $0
         pushq $vec
     .endif
-    jmp isr_common
+    .if (vec == 2) || (vec == 8)
+        jmp isr_paranoid
+    .else
+        jmp isr_common
+    .endif
     .set vec, vec + 1
 .endr
 

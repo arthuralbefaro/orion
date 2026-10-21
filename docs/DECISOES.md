@@ -3939,3 +3939,24 @@ O que mudou na 5.7 e por que:
   passou a contar a parte os filhos que nao conseguem se preparar (a
   falha injetada nega o `mmap` da preparacao) em vez de chama-los de morte
   inesperada.
+
+## v3.0.0-a8, achado do perfilador: NMI na janela do swapgs
+
+- Defeito (pendente desde a Fase 0, "um NMI na janela antes do swapgs"): a
+  entrada das interrupcoes decide se faz `swapgs` pelo CS empilhado. Na
+  entrada da syscall (antes do `swapgs`) e na saida (entre o `swapgs` e o
+  `sysretq`/`iretq`) a CPU ja esta em modo kernel com o GS do usuario; uma NMI
+  nessa janela rodava com o GS errado e o `percpu_get` lia lixo. Com a
+  amostragem a 1000 Hz e uma carga cheia de syscalls (`perf logflood`, `perf
+  -z`) o sistema travava em segundos.
+- Correcao: NMI (vetor 2) e #DF (vetor 8) entram por `isr_paranoid`, que le o
+  `MSR_GS_BASE`: se o GS ativo nao e um endereco do kernel (bit alto
+  desligado), faz `swapgs` e o desfaz na volta, como o "paranoid entry" do
+  Linux. As outras interrupcoes nao precisam: elas nao chegam com as
+  interrupcoes desligadas, e a janela da syscall roda com IF desligado. A
+  NMI ja usa uma pilha IST propria, entao a pilha do usuario nessa janela
+  nao e problema.
+- Efeito colateral bom: a taxa de amostras no QEMU subiu de ~85 para ~700
+  por segundo por CPU (antes muitas NMIs caiam nessa janela e se perdiam).
+- Teste que reproduz: `perf logflood` duas vezes seguidas na sequencia P, e
+  o shell responde depois.
