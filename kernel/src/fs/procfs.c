@@ -1,5 +1,7 @@
 #include <fs/procfs.h>
 #include <mm/oom.h>
+#include <drivers/conin.h>
+#include <drivers/serial.h>
 #include <fs/vfs.h>
 #include <fs/block.h>
 #include <kernel/file.h>
@@ -481,6 +483,8 @@ static void gen_sched(struct pbuf *b)
                   st.busy ? "sim" : "nao", st.context_switches, st.migrations, st.steals, st.balance_moves,
                   st.resched_ipis);
     }
+    pb_printf(b, "entrada do console: %lu despertar(es) por tecla ou serial, %lu por prazo, %lu IRQ(s) da serial\n",
+              conin_wakeups(), conin_timeouts(), serial_rx_irqs());
 }
 
 static void gen_stacks(struct pbuf *b)

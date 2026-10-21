@@ -32,6 +32,7 @@
 #include <arch/x86_64/interrupts.h>
 #include <arch/x86_64/lapic.h>
 #include <drivers/serial.h>
+#include <drivers/conin.h>
 #include <drivers/console.h>
 #include <drivers/pic.h>
 #include <drivers/acpi.h>
@@ -128,6 +129,7 @@ void kmain(void)
     time_init();
     rtc_init();
     keyboard_init();
+    serial_enable_irq();
     mouse_init();
     sched_init();
     syscall_init();
@@ -200,7 +202,7 @@ void kmain(void)
             else
                 tty_input((char)c);
         } else if (irqs_ok) {
-            thread_sleep_ms(2);
+            conin_wait(1000);
         } else {
             pause();
         }

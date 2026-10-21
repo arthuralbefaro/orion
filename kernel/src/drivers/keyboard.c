@@ -5,6 +5,7 @@
 #include <arch/x86_64/interrupts.h>
 #include <kernel/log.h>
 #include <kernel/spinlock.h>
+#include <drivers/conin.h>
 
 #define PS2_DATA   0x60
 #define PS2_STATUS 0x64
@@ -71,6 +72,7 @@ static void push_char(char c)
         return;
     buf[buf_head] = c;
     buf_head = next;
+    conin_kick();
 }
 
 static const char *extended_sequence(uint8_t code)

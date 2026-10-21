@@ -4022,3 +4022,22 @@ O que mudou na 5.7 e por que:
   e M e falha se o maior uso chegar a 75%.
 - Na regressao completa o maior uso foi 8640 bytes (52%), na thread `netrx`
   durante os testes de rede da sequencia A.
+
+## v3.0.0-a10 (etapa 8.8: thread main acordada pela entrada)
+
+- A thread `main` do kernel (entrada do teclado e da serial para o tty e o
+  shell do kernel) dormia 2 ms em laco (desde a 8.1; antes era `hlt` em
+  laco, sempre pronta). Agora dorme numa fila de espera (`conin`, novo) com
+  prazo de 1 s, e quem tem entrada nova acorda a fila: o teclado ao guardar
+  uma tecla (PS/2 pela IRQ1 e o USB pelo `keyboard_feed`, que passam pelo
+  mesmo `push_char`) e a COM1 pela IRQ4 de recepcao, ligada agora
+  (`IER` com recepcao; antes a serial so era lida por varredura). Uma marca
+  "pendente" evita perder o aviso que chega entre a `main` olhar a entrada e
+  dormir.
+- A serial guarda o que chega num anel de 1024 bytes com trava (a IRQ vem na
+  CPU 0 e a `main` pode estar em qualquer CPU); `serial_getc` ainda le a
+  UART direto se o anel estiver vazio, e o prazo de 1 s cobre uma maquina em
+  que a IRQ da serial nao chegue.
+- Medido parado por ~8 s: trocas de contexto caem de ~6000 para ~1900; a
+  `main` acorda uma vez por comando digitado. `/proc/sched` ganhou a linha
+  "entrada do console" (despertares por entrada, por prazo e IRQs da serial).

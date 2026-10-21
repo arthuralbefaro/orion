@@ -48,11 +48,11 @@ hub na H, com audio na S e com troca de video na G (BGA) e na W
 (virtio-gpu), com 646 verificacoes em ~20 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 8.8, a thread `main` do kernel dorme numa fila de espera
-acordada pela IRQ do teclado e da serial (em vez de acordar a cada 2 ms).
-Fase 7 fechada com a tag `v3.0-rc1`; a tag `v3.0` (marco M5) so depois
-que o dono testar em hardware real e a 7.4 fechar (decisao do dono,
-2026-10-20). Versao 3.0.0-a9 em diante.
+Proxima etapa: nenhuma no plano; todas as etapas estao feitas, menos a 7.4
+(`[!]`, aguardando o teste do dono em hardware real, roteiro em
+docs/teste-hardware-real.md). Fase 7 fechada com a tag `v3.0-rc1` e a
+Fase 8 com a `v3.0-rc2`; a tag `v3.0` (marco M5) so depois que a 7.4
+fechar (decisao do dono, 2026-10-20). Versao 3.0.0-a10.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -350,7 +350,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 8.5 | Perfilador | [x] | 19:05 | 21:47 | |
 | 8.6 | Pilhas do kernel medidas | [x] | 21:50 | 22:24 | |
 | 8.7 | memcpy/memset/memmove do kernel em assembly (rep movsb/stosb) | [x] | 20:05 | 22:00 | `9ad91e7` |
-| 8.8 | Thread main do kernel dorme numa fila de espera acordada pela IRQ do teclado/serial (hoje acorda a cada 2 ms; anotado pelo dono na 8.1) | [ ] | | | |
+| 8.8 | Thread main do kernel dorme numa fila de espera acordada pela IRQ do teclado/serial (anotado pelo dono na 8.1) | [x] | 22:25 | 23:03 | |
 
 ## Diario
 
@@ -2182,6 +2182,23 @@ regressao le `/proc/stacks` no fim de A, Z e M e falha a partir de 75%; na
 regressao completa o maior foi 8640 bytes (52%), na `netrx` (testes de rede).
 Detalhes: `docs/DECISOES.md`, v3.0.0-a9.
 Verificacao (nucleo: criacao de threads): regressao completa verde, 731 verificacoes, 29,9 min, RAM livre antes 6,6 GB.
+
+#### 8.8 Thread main acordada pela entrada - 22:25 a 23:03 - FEITO
+A `main` dorme na fila `conin` (prazo de 1 s) e o teclado (PS/2 e USB) e a
+COM1 a acordam; a COM1 ganhou a IRQ4 de recepcao e um anel de 1024 bytes
+com trava. Parado por ~8 s, as trocas de contexto cairam de ~6000 para
+~1900; a `main` acorda uma vez por comando digitado. `/proc/sched` mostra
+os despertares. Detalhes: `docs/DECISOES.md`, v3.0.0-a10.
+Verificacao (nucleo: interrupcoes e escalonamento da entrada): regressao
+completa verde, 733 verificacoes, 30,0 min, RAM livre antes 6,4 GB.
+
+#### Fim da Fase 8 - 23:03
+8.1 a 8.8 feitas (fila por CPU e nice, kernel preemptivo, fuzzer, OOM e
+falha injetada no kmalloc, perfilador, pilhas medidas, memcpy em assembly,
+main acordada pela entrada), mais as correcoes achadas no caminho: log do
+kernel inundavel pelo usuario, NMI na janela do `swapgs`, verificacoes da
+regressao dependentes do tempo. A regressao completa acima e a do fim da
+fase. Tag `v3.0-rc2` (a `v3.0` espera a 7.4).
 
 ### Sessao 2 - 2026-10-17
 

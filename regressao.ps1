@@ -1393,6 +1393,8 @@ if ($runAll -or $OnlyP) {
     Expect $pl "(?s)perf -z 2.*?perf:\s+[\d.]+%\s+\d+\s+\d+\s+(uaccess_copy|memset)\s*\n" "perf mostra a copia para o usuario na leitura do /dev/zero"
     Expect $pl "su orion -c perf\s*\nperf: nao consegui ligar a amostragem: Operation not permitted" "so o root liga o perfilador"
     ExpectNot $pl "NMI inesperada" "toda NMI da amostragem e reconhecida pelo perfilador"
+    Expect $pl "entrada do console: [1-9]\d* despertar\(es\) por tecla ou serial, \d+ por prazo, [1-9]\d* IRQ\(s\) da serial" "a thread main dorme e acorda pela IRQ da serial (8.8)"
+    Expect $pl "serial\s+COM1 com IRQ4 de recepcao" "a COM1 recebe por interrupcao"
     Expect $pl "(?s)perf logflood.*?perf: fim.*?perf logflood.*?perf: fim.*?echo vivo-depois-do-perf\s*\nvivo-depois-do-perf" "NMI no meio de syscalls e forks (janela do swapgs) nao trava o sistema"
     ExpectNot $pl "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|BUG: " "nenhum panico nem BUG na sequencia P"
 }
