@@ -15,6 +15,7 @@
 #include <mm/uaccess.h>
 #include <mm/vma.h>
 #include <mm/oom.h>
+#include <kernel/prof.h>
 #include <kernel/smp.h>
 #include <arch/x86_64/percpu.h>
 #include <kernel/irqctx.h>
@@ -400,7 +401,7 @@ void isr_dispatch(struct interrupt_frame *frame)
         if (vec == EXC_NMI) {
             if (pc)
                 irqctx_enter(pc, vec, true, &saved_vec, &saved_nmi);
-            if (!irqctx_nmi_probe())
+            if (!irqctx_nmi_probe() && !prof_nmi(frame))
                 handle_exception(frame);
             if (pc)
                 irqctx_leave(pc, saved_vec, saved_nmi);

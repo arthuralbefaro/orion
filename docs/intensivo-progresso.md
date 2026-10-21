@@ -48,11 +48,11 @@ hub na H, com audio na S e com troca de video na G (BGA) e na W
 (virtio-gpu), com 646 verificacoes em ~20 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 8.5, perfilador por amostragem (NMI do timer guarda os
-RIPs; `perf` mostra as funcoes mais quentes). Fase 7 fechada com a tag
-`v3.0-rc1`; a tag `v3.0` (marco M5) so depois que o dono testar em
-hardware real e a 7.4 fechar (decisao do dono, 2026-10-20). Versao
-3.0.0-a7 em diante.
+Proxima etapa: 8.6, pilhas do kernel de 16 KiB medidas (pintura da pilha e
+marca d'agua); trocar para 32 KiB se alguma passar de 75%. Fase 7 fechada
+com a tag `v3.0-rc1`; a tag `v3.0` (marco M5) so depois que o dono testar
+em hardware real e a 7.4 fechar (decisao do dono, 2026-10-20). Versao
+3.0.0-a8 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -347,7 +347,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 8.2 | Kernel preemptivo (contador de travas de spin por thread desde a 5.7 parte 4; troca adiada chamada na hora pelo `spin_unlock`) | [x] | 15:15 | 16:05 | |
 | 8.3 | Fuzzer de syscalls | [x] | 16:10 | 17:37 | |
 | 8.4 | OOM | [x] | 17:40 | 19:04 | |
-| 8.5 | Perfilador | [ ] | | | |
+| 8.5 | Perfilador | [x] | 19:05 | 21:47 | |
 | 8.6 | Pilhas do kernel medidas | [ ] | | | |
 | 8.7 | memcpy/memset/memmove do kernel em assembly (rep movsb/stosb) | [x] | 20:05 | 22:00 | `9ad91e7` |
 | 8.8 | Thread main do kernel dorme numa fila de espera acordada pela IRQ do teclado/serial (hoje acorda a cada 2 ms; anotado pelo dono na 8.1) | [ ] | | | |
@@ -2145,6 +2145,33 @@ com 1 em 1000; a F confere o EPERM fora do modo estrito. O fuzz conta a
 parte os filhos que nao conseguem se preparar. Detalhes: `docs/DECISOES.md`.
 Verificacao: Z e F verdes (36 verificacoes); mexe no `kmalloc` (nucleo de
 memoria): regressao completa verde, 722 verificacoes, 29,5 min, RAM livre antes 6,1 GB.
+
+#### 8.5 Perfilador por amostragem - 19:05 a 21:47 - FEITO
+O timer de cada CPU manda uma NMI a CPU seguinte com a marca "amostra
+pendente"; a NMI grava RIP, pid, CPU, usuario e se as interrupcoes estavam
+desligadas num vetor por CPU sem trava. Syscall do Orion 1003 (so root)
+para ligar, desligar e ler; `perf` (novo) resolve os nomes do kernel pela
+tabela de simbolos do `orion.elf` na particao EFI e mostra as funcoes mais
+quentes. Teste no modo estrito: o kernel gira com interrupcoes desligadas
+em `prof_selftest_irqoff`, e ela aparece com todas as amostras sem IRQ.
+Sequencia P com 7 verificacoes novas (21, verde). Detalhes:
+`docs/DECISOES.md`, v3.0.0-a8.
+Defeito achado e corrigido em commit proprio: a NMI na janela do `swapgs`
+(entrada e saida da syscall), pendente desde a Fase 0, travava o sistema
+em segundos com a amostragem ligada e muitas syscalls; NMI e #DF agora
+entram pela entrada paranoica (decidem o `swapgs` pelo `MSR_GS_BASE`).
+Antes de achar isso, a trava foi atribuida por engano a mudanca na espera
+do ICR. Outro ajuste em commit proprio: a verificacao de mortes por sinal
+do `logflood` dependia do tempo (num periodo lento do hospedeiro os 60
+`fork` levaram 6,7 s, nenhum segundo passou de 10 mortes e a regressao
+completa acusou); agora os 60 filhos morrem juntos. A primeira regressao
+completa desta etapa foi interrompida no meio da sequencia I (queda da
+sessao); arvore conferida (sem bytes nulos, `git fsck` limpo).
+Medido: no QEMU sem aceleracao ~700 amostras/s por CPU a 1000 Hz, e o
+envio da NMI pesa ~20%. Achado: ~12% das amostras em `spin_lock_slow` (a
+`runq_lock` unica disputada pelos timers).
+Verificacao (nucleo: timer, NMI, entrada de interrupcao): P verde 2 vezes;
+regressao completa verde, 728 verificacoes, 31,7 min, RAM livre antes 6,9 GB.
 
 ### Sessao 2 - 2026-10-17
 

@@ -3940,6 +3940,47 @@ O que mudou na 5.7 e por que:
   falha injetada nega o `mmap` da preparacao) em vez de chama-los de morte
   inesperada.
 
+## v3.0.0-a8 (etapa 8.5: perfilador por amostragem)
+
+- Amostragem por NMI, para pegar tambem o codigo do kernel que roda com
+  interrupcoes desligadas (o timer comum nunca o interrompe): a cada tick
+  (ou a cada N ticks, conforme a frequencia pedida) o timer de cada CPU marca
+  "amostra pendente" na CPU seguinte e manda uma NMI a ela; o tratador da NMI
+  ve a marca, grava o RIP interrompido, o pid, a CPU, se era usuario e se as
+  interrupcoes estavam desligadas num vetor por CPU (16384 amostras, sem
+  trava: so a NMI daquela CPU escreve) e volta. Com uma CPU so, o timer grava
+  o proprio quadro. Os timers do QEMU nao andam em fase, entao a NMI chega
+  num ponto qualquer do vizinho. NMI sem a marca continua indo para os
+  tratadores de antes (relatorio de deadlock, teste do `irqtest`).
+- Sem contador de desempenho (PMU): o QEMU sem aceleracao nao tem, e a NMI
+  pelo LAPIC funciona igual em hardware real.
+- Controle pela syscall do Orion 1003, so root: ligar (frequencia por CPU,
+  1 a 1000 Hz), desligar, ler as amostras e ler o resumo. Uma operacao de
+  teste, so no modo estrito, gira o kernel por N ms com as interrupcoes
+  desligadas numa funcao com nome proprio (`prof_selftest_irqoff`).
+- `perf` (novo): liga, roda um comando (ou espera `-t` segundos, ou a carga
+  de teste `-z`, que le `/dev/zero`), desliga e mostra as funcoes mais
+  quentes. Os nomes do kernel vem da tabela de simbolos do proprio
+  `orion.elf` na particao EFI (`/boot/efi/boot/orion.elf`), lida pelo `perf`
+  em espaco de usuario, sem tabela embutida no kernel; o usuario aparece por
+  processo.
+- Custo e limites medidos no QEMU sem aceleracao: o timer do convidado
+  atrasa com 4 CPUs, entao 1000 Hz pedidos viram ~700 amostras por segundo
+  por CPU (~85 antes da correcao do `swapgs`, abaixo); e o envio da NMI pelo
+  xAPIC (escrita no ICR e espera da entrega) aparece em ~20% das amostras.
+  Esperar a entrega da IPI anterior antes de escrever o ICR, em vez de
+  depois (como o Linux faz), nao reduz esse custo no QEMU (a propria escrita
+  MMIO e que pesa) e ficou o jeito antigo. Na primeira tentativa o sistema
+  travou no `perf -z`, mas a culpa era da NMI na janela do `swapgs` (entrada
+  abaixo), nao do ICR: com ela corrigida, as duas formas passam.
+- Achado do primeiro uso: com 4 CPUs a 1000 Hz, ~12% das amostras na leitura
+  do `/dev/zero` estao em `spin_lock_slow`, com interrupcoes desligadas: a
+  `runq_lock` unica disputada pelos timers das 4 CPUs (`sched_tick`). Reforca
+  dividir a trava do escalonador por CPU (ver v3.0.0-a4).
+- Teste na sequencia P: `perf -i 500` mostra `prof_selftest_irqoff` com todas
+  as amostras sem IRQ; `perf -z 2` mostra `uaccess_copy` ou `memset`; usuario
+  comum recebe EPERM; nenhuma NMI fica sem dono.
+
 ## v3.0.0-a8, achado do perfilador: NMI na janela do swapgs
 
 - Defeito (pendente desde a Fase 0, "um NMI na janela antes do swapgs"): a

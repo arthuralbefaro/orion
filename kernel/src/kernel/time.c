@@ -9,6 +9,7 @@
 #include <arch/x86_64/percpu.h>
 #include <kernel/smp.h>
 #include <kernel/spinlock.h>
+#include <kernel/prof.h>
 
 static volatile uint64_t ticks;
 static const char *source = "nenhuma";
@@ -21,6 +22,7 @@ static void tick_handler(struct interrupt_frame *frame, void *ctx)
     if (percpu_cpu_id() == 0)
         ticks++;
     smp_watchdog_tick();
+    prof_tick(frame);
     sched_tick(time_ticks(), (frame->cs & 3) == 3);
 }
 

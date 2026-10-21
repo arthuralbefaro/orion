@@ -1364,7 +1364,9 @@ if ($runAll -or $OnlyP) {
     Write-Host "== Sequencia P (escalonador: fila por CPU, nice, afinidade) ==" -ForegroundColor Cyan
     $stepsP = @(
         "cmd:nicetest", "until:120:nicetest: fim",
-        "cmd:nice -n 5 nice", "cmd:nice -n -3 nice", "cmd:su orion -c nice", "cmd:cat /proc/sched", "wait:1"
+        "cmd:nice -n 5 nice", "cmd:nice -n -3 nice", "cmd:su orion -c nice", "cmd:cat /proc/sched", "wait:1",
+        "cmd:perf -i 500", "until:30:perf: fim", "cmd:perf -z 2", "until:30:perf: fim", "cmd:perf logflood", "until:60:perf: fim",
+        "cmd:perf logflood", "until:60:perf: fim", "cmd:echo vivo-depois-do-perf", "cmd:su orion -c perf", "wait:1"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -LogPath "out\reg-p.log" `
         -Script $stepsP -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
@@ -1385,6 +1387,12 @@ if ($runAll -or $OnlyP) {
     Expect $pl "su orion -c nice\s*\n0\s*\n" "nice sem comando mostra o nice atual (0 para outro usuario)"
     Expect $pl "cpu  fila  carga  ocupada  trocas  migracoes  roubos  balanceamentos  ipis\s*\n(\s*\d+\s+\d+\s+\d+\s+(sim|nao)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s*\n){4}" "/proc/sched mostra as 4 filas"
     ExpectNot $pl "nicetest: [^\n]*FALHOU" "nenhuma falha no nicetest"
+    Expect $pl "perf: [1-9]\d* amostra\(s\) em \d+ ms, 1000 Hz em 4 CPU\(s\), \d+ perdida\(s\); simbolos de /boot/efi/boot/orion\.elf" "perf amostra as 4 CPUs e le os simbolos do kernel na particao EFI"
+    Expect $pl "perf:\s+[\d.]+%\s+(\d{2,})\s+\1\s+prof_selftest_irqoff" "a amostragem por NMI pega o kernel com interrupcoes desligadas"
+    Expect $pl "(?s)perf -z 2.*?perf:\s+[\d.]+%\s+\d+\s+\d+\s+(uaccess_copy|memset)\s*\n" "perf mostra a copia para o usuario na leitura do /dev/zero"
+    Expect $pl "su orion -c perf\s*\nperf: nao consegui ligar a amostragem: Operation not permitted" "so o root liga o perfilador"
+    ExpectNot $pl "NMI inesperada" "toda NMI da amostragem e reconhecida pelo perfilador"
+    Expect $pl "(?s)perf logflood.*?perf: fim.*?perf logflood.*?perf: fim.*?echo vivo-depois-do-perf\s*\nvivo-depois-do-perf" "NMI no meio de syscalls e forks (janela do swapgs) nao trava o sistema"
     ExpectNot $pl "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|BUG: " "nenhum panico nem BUG na sequencia P"
 }
 

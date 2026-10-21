@@ -162,6 +162,7 @@
 #define SYS_READDIR       1000
 #define SYS_OPENPTY       1001
 #define SYS_KFAULT        1002
+#define SYS_PROF          1003
 
 #define WNOHANG 1
 

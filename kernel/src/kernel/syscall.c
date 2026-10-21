@@ -29,6 +29,7 @@
 #include <net/socket.h>
 #include <kernel/smp.h>
 #include <kernel/version.h>
+#include <kernel/prof.h>
 
 extern void syscall_entry(void);
 
@@ -2156,6 +2157,7 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_READDIR:     ret = sys_readdir((int)f->rdi, (struct user_dirent *)f->rsi, f->rdx); break;
     case SYS_OPENPTY:     ret = sys_openpty((int *)f->rdi); break;
     case SYS_KFAULT:      ret = sys_kfault(f->rdi, f->rsi); break;
+    case SYS_PROF:        ret = sys_prof(f->rdi, f->rsi, f->rdx, f->r10); break;
     case SYS_POLL:        ret = sys_poll((struct user_pollfd *)f->rdi, f->rsi, (int)f->rdx); break;
     case SYS_SELECT:      ret = sys_select((int)f->rdi, (uint64_t *)f->rsi, (uint64_t *)f->rdx, (uint64_t *)f->r10,
                                            (struct user_timeval *)f->r8); break;
