@@ -35,6 +35,7 @@ enum pkind {
     P_INTERRUPTS,
     P_USB,
     P_SCHED,
+    P_STACKS,
     P_PIDDIR = 16,
     P_STATUS,
     P_CMDLINE,
@@ -55,6 +56,7 @@ static const struct pent root_ents[] = {
     { "diskstats", P_DISKSTATS }, { "stat", P_SYSSTAT },
     { "interrupts", P_INTERRUPTS }, { "usb", P_USB },
     { "sched", P_SCHED },
+    { "stacks", P_STACKS },
 };
 
 static const struct pent pid_ents[] = {
@@ -481,6 +483,21 @@ static void gen_sched(struct pbuf *b)
     }
 }
 
+static void gen_stacks(struct pbuf *b)
+{
+    struct stack_use exited, live;
+    uint32_t threads = 0;
+    sched_stack_peak(&exited, &live, &threads);
+    struct stack_use *top = exited.used >= live.used ? &exited : &live;
+    uint64_t size = THREAD_STACK_SIZE;
+    pb_printf(b, "pilha do kernel: %lu bytes por thread, %u thread(s) com pilha propria agora\n", size, threads);
+    pb_printf(b, "maior uso: %lu bytes (%lu%%) em '%s' (tid %u)\n", top->used, top->used * 100 / size, top->name,
+              top->tid);
+    pb_printf(b, "maior uso entre as que sairam: %lu bytes em '%s' (tid %u)\n", exited.used, exited.name,
+              exited.tid);
+    pb_printf(b, "maior uso entre as vivas: %lu bytes em '%s' (tid %u)\n", live.used, live.name, live.tid);
+}
+
 static void gen_usb(struct pbuf *b)
 {
     char *tmp = kmalloc(8192);
@@ -666,6 +683,7 @@ static int proc_open(struct vnode *v, int flags, struct file **out)
     case P_INTERRUPTS: gen_interrupts(&b); break;
     case P_USB: gen_usb(&b); break;
     case P_SCHED: gen_sched(&b); break;
+    case P_STACKS: gen_stacks(&b); break;
     case P_STATUS:  gen_status(&b, p); break;
     case P_STAT:    gen_stat(&b, p); break;
     case P_CMDLINE: gen_cmdline(&b, p); break;

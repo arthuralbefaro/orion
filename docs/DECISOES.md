@@ -4001,3 +4001,24 @@ O que mudou na 5.7 e por que:
   por segundo por CPU (antes muitas NMIs caiam nessa janela e se perdiam).
 - Teste que reproduz: `perf logflood` duas vezes seguidas na sequencia P, e
   o shell responde depois.
+
+## v3.0.0-a9 (etapa 8.6: pilhas do kernel medidas)
+
+- Cada pilha de thread do kernel (16 KiB) e pintada com 0x5A na criacao,
+  com o canario no primeiro word como antes. O uso e a marca d'agua: do
+  fundo para cima, ate o primeiro word que nao e mais a pintura. Medido ao
+  liberar cada thread (o maior uso entre as que sairam fica guardado) e, sob
+  demanda, em todas as vivas. `/proc/stacks` (novo) mostra o tamanho, o maior
+  uso com a porcentagem e a thread, e o maior entre as que sairam e entre as
+  vivas. Custo: um `memset` de 16 KiB por thread criada.
+- As interrupcoes rodam na pilha da thread interrompida (nao ha pilha
+  separada de IRQ), entao o uso medido ja inclui IRQ aninhada; a NMI e o #DF
+  usam pilhas IST proprias, fora desta medicao.
+- Medicao: depois de `stress` com 300 processos, fuzz, `oomtest`, `perf` e
+  `irqtest` (IRQ aninhada), o maior uso foi 6680 bytes (40%), na thread do
+  `dhcp` no boot; as vivas ficaram em ate 3760 bytes. Nenhuma passou de 75%,
+  entao a pilha fica em 16 KiB, como o plano manda.
+- A regressao le `/proc/stacks` no fim das sequencias A (antes do reboot), Z
+  e M e falha se o maior uso chegar a 75%.
+- Na regressao completa o maior uso foi 8640 bytes (52%), na thread `netrx`
+  durante os testes de rede da sequencia A.

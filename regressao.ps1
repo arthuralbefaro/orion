@@ -309,7 +309,7 @@ if ($runAll -or $OnlyA) {
         "key:0B", "cmd:heaptest", "wait:1", "cmd:preempt", "wait:2",
         "cmd:arp", "cmd:net",
         "cmd:dev", "cmd:pty", "cmd:mutex", "cmd:mem", "key:0B",
-        "cmd:echo sobrevive-ao-reboot > /reboot.txt", "cmd:sync", "wait:3", "reboot:",
+        "cmd:cat /proc/stacks", "cmd:echo sobrevive-ao-reboot > /reboot.txt", "cmd:sync", "wait:3", "reboot:",
         "cmd:cat /reboot.txt", "cmd:rm /reboot.txt", "cmd:mount", "wait:1"
     )
     $web = Start-HostWeb 8088
@@ -421,6 +421,7 @@ if ($runAll -or $OnlyA) {
     Expect $a "dash-executavel" "dash: test -x (faccessat2)"
     Expect $a "saiu com 7" "dash: exit 7 volta para o sh com o codigo"
     Expect $a "futex: 0 thread\(s\) esperando" "nenhuma thread esquecida na fila do futex"
+    Expect $a "pilha do kernel: 16384 bytes por thread[^\n]*\nmaior uso: \d+ bytes \(([0-6]?\d|7[0-4])%\) em " "pilhas do kernel abaixo de 75% depois dos testes da sequencia A (8.6)"
     ExpectNot $a "syscall (?!777 )\d+ desconhecida" "nenhuma syscall desconhecida na sequencia A (fora a 777 do logflood)"
     Expect $a "logflood: 1000 de 1000 syscalls desconhecidas deram ENOSYS, 60 de 60 filhos mortos por SIGSEGV juntos, fim" "logflood: usuario provoca 1000 mensagens de syscall desconhecida e 60 mortes por sinal de uma vez"
     Expect $a "\(\d+ mensagem\(ns\) parecida\(s\) suprimida\(s\): limite de 10 por segundo\)" "o log do kernel corta a inundacao provocada pelo usuario"
@@ -1404,7 +1405,7 @@ if ($runAll -or $OnlyZ) {
         "key:0B", "cmd:kmfail 1000", "key:0B",
         "cmd:fuzz $fuzzSecs", "until:900:fuzz: fim", "wait:1",
         "key:0B", "cmd:kmfail", "cmd:kmfail 0", "key:0B",
-        "cmd:echo depois-do-fuzz", "cmd:ls /tmp", "wait:1"
+        "cmd:echo depois-do-fuzz", "cmd:ls /tmp", "cmd:cat /proc/stacks", "wait:1"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -LogPath "out\reg-z.log" `
         -Script $stepsZ -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
@@ -1421,6 +1422,7 @@ if ($runAll -or $OnlyZ) {
     Expect $zl "fuzz: fim \(semente \d+\)" "fuzz terminou"
     Expect $zl "kmfail: taxa 1/1000 nos kmalloc de processos de usuario comum, [1-9]\d* falha\(s\) injetada\(s\)" "fuzz com 1 em 1000 kmalloc falhando nos filhos (modo estrito)"
     Expect $zl "kmfail: desligado" "a falha injetada desliga no fim"
+    Expect $zl "pilha do kernel: 16384 bytes por thread[^\n]*\nmaior uso: \d+ bytes \(([0-6]?\d|7[0-4])%\) em " "pilhas do kernel abaixo de 75% depois do fuzz (8.6)"
     Expect $zl "echo depois-do-fuzz\s*\ndepois-do-fuzz" "o shell continua respondendo depois do fuzz"
     ExpectNot $zl "ls /tmp\s*\n[^\n]*fuzz" "o fuzz apaga o diretorio dele em /tmp"
     ExpectNot $zl "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|BUG: " "nenhum panico nem BUG na sequencia Z"
@@ -1430,7 +1432,7 @@ if ($runAll -or $OnlyZ) {
 if ($runAll -or $OnlyM) {
     Write-Host "== Sequencia M (falta de memoria e matador de processo) ==" -ForegroundColor Cyan
     $stepsM = @(
-        "cmd:oomtest", "until:400:oomtest: fim", "cmd:echo depois-do-oom", "cmd:cat /proc/meminfo", "wait:1"
+        "cmd:oomtest", "until:400:oomtest: fim", "cmd:echo depois-do-oom", "cmd:cat /proc/meminfo", "cmd:cat /proc/stacks", "wait:1"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -LogPath "out\reg-m.log" `
         -Script $stepsM -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
@@ -1449,6 +1451,7 @@ if ($runAll -or $OnlyM) {
     ExpectNot $ml "matando pid 1 |'init'|'sh' \(" "o OOM nunca escolhe o init nem o shell"
     Expect $ml "echo depois-do-oom\s*\ndepois-do-oom" "o shell continua respondendo depois do OOM"
     Expect $ml "OomKills:\s+5\s*\n" "/proc/meminfo conta as 5 mortes por OOM"
+    Expect $ml "pilha do kernel: 16384 bytes por thread[^\n]*\nmaior uso: \d+ bytes \(([0-6]?\d|7[0-4])%\) em " "pilhas do kernel abaixo de 75% depois do OOM (8.6)"
     ExpectNot $ml "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|BUG: " "nenhum panico nem BUG na sequencia M"
 }
 

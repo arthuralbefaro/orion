@@ -48,11 +48,11 @@ hub na H, com audio na S e com troca de video na G (BGA) e na W
 (virtio-gpu), com 646 verificacoes em ~20 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: 8.6, pilhas do kernel de 16 KiB medidas (pintura da pilha e
-marca d'agua); trocar para 32 KiB se alguma passar de 75%. Fase 7 fechada
-com a tag `v3.0-rc1`; a tag `v3.0` (marco M5) so depois que o dono testar
-em hardware real e a 7.4 fechar (decisao do dono, 2026-10-20). Versao
-3.0.0-a8 em diante.
+Proxima etapa: 8.8, a thread `main` do kernel dorme numa fila de espera
+acordada pela IRQ do teclado e da serial (em vez de acordar a cada 2 ms).
+Fase 7 fechada com a tag `v3.0-rc1`; a tag `v3.0` (marco M5) so depois
+que o dono testar em hardware real e a 7.4 fechar (decisao do dono,
+2026-10-20). Versao 3.0.0-a9 em diante.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -348,7 +348,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 8.3 | Fuzzer de syscalls | [x] | 16:10 | 17:37 | |
 | 8.4 | OOM | [x] | 17:40 | 19:04 | |
 | 8.5 | Perfilador | [x] | 19:05 | 21:47 | |
-| 8.6 | Pilhas do kernel medidas | [ ] | | | |
+| 8.6 | Pilhas do kernel medidas | [x] | 21:50 | 22:24 | |
 | 8.7 | memcpy/memset/memmove do kernel em assembly (rep movsb/stosb) | [x] | 20:05 | 22:00 | `9ad91e7` |
 | 8.8 | Thread main do kernel dorme numa fila de espera acordada pela IRQ do teclado/serial (hoje acorda a cada 2 ms; anotado pelo dono na 8.1) | [ ] | | | |
 
@@ -2172,6 +2172,16 @@ envio da NMI pesa ~20%. Achado: ~12% das amostras em `spin_lock_slow` (a
 `runq_lock` unica disputada pelos timers).
 Verificacao (nucleo: timer, NMI, entrada de interrupcao): P verde 2 vezes;
 regressao completa verde, 728 verificacoes, 31,7 min, RAM livre antes 6,9 GB.
+
+#### 8.6 Pilhas do kernel medidas - 21:50 a 22:24 - FEITO
+Pilha de cada thread pintada com 0x5A na criacao; marca d'agua medida ao
+liberar a thread e sob demanda nas vivas; `/proc/stacks` (novo). Depois de
+`stress` de 300 processos, fuzz, `oomtest`, `perf` e `irqtest`, o maior uso
+foi 6680 de 16384 bytes (40%), no `dhcp` do boot: fica em 16 KiB. A
+regressao le `/proc/stacks` no fim de A, Z e M e falha a partir de 75%; na
+regressao completa o maior foi 8640 bytes (52%), na `netrx` (testes de rede).
+Detalhes: `docs/DECISOES.md`, v3.0.0-a9.
+Verificacao (nucleo: criacao de threads): regressao completa verde, 731 verificacoes, 29,9 min, RAM livre antes 6,6 GB.
 
 ### Sessao 2 - 2026-10-17
 

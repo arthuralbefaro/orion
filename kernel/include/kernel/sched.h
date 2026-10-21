@@ -7,6 +7,7 @@
 #define THREAD_STACK_SIZE (16 * 1024)
 #define SCHED_TIME_SLICE  10
 #define THREAD_STACK_CANARY 0x4F52494F4E535450ull
+#define THREAD_STACK_PAINT 0x5A5A5A5A5A5A5A5Aull
 #define THREAD_PINS 40
 #define NICE_MIN (-20)
 #define NICE_MAX 19
@@ -126,5 +127,13 @@ uint64_t sched_get_affinity(struct thread *t);
 void sched_set_nice(struct thread *t, int nice);
 bool sched_cpu_stat(uint32_t index, struct sched_cpu_stat *out);
 uint32_t sched_weight(int nice);
+
+struct stack_use {
+    uint64_t used;
+    uint32_t tid;
+    char name[THREAD_NAME_MAX];
+};
+
+void sched_stack_peak(struct stack_use *exited, struct stack_use *live, uint32_t *live_threads);
 
 void sched_dump(void);

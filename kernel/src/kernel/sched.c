@@ -25,6 +25,8 @@ extern void thread_trampoline(void);
 #define BALANCE_TICKS  4
 
 static spinlock_t runq_lock = SPINLOCK_INIT;
+static spinlock_t stack_peak_lock = SPINLOCK_INIT;
+static struct stack_use exited_peak;
 static struct thread *all_threads;
 static struct thread *sleeping;
 static uint32_t next_tid = 1;
@@ -326,10 +328,57 @@ static struct thread *detach_zombie(struct percpu *cpu)
     return z;
 }
 
+static uint64_t stack_used(const struct thread *t)
+{
+    if (!t->stack)
+        return 0;
+    const uint64_t *w = t->stack;
+    size_t words = t->stack_size / sizeof(uint64_t);
+    size_t i = 1;
+    while (i < words && w[i] == THREAD_STACK_PAINT)
+        i++;
+    return t->stack_size - i * sizeof(uint64_t);
+}
+
+static void note_exited_stack(const struct thread *t)
+{
+    uint64_t used = stack_used(t);
+    uint64_t flags = spin_lock_irqsave(&stack_peak_lock);
+    if (used > exited_peak.used) {
+        exited_peak.used = used;
+        exited_peak.tid = t->tid;
+        strlcpy(exited_peak.name, t->name, sizeof(exited_peak.name));
+    }
+    spin_unlock_irqrestore(&stack_peak_lock, flags);
+}
+
+void sched_stack_peak(struct stack_use *exited, struct stack_use *live, uint32_t *live_threads)
+{
+    uint64_t flags = spin_lock_irqsave(&stack_peak_lock);
+    *exited = exited_peak;
+    spin_unlock_irqrestore(&stack_peak_lock, flags);
+    memset(live, 0, sizeof(*live));
+    *live_threads = 0;
+    flags = spin_lock_irqsave(&runq_lock);
+    for (struct thread *t = all_threads; t; t = t->all_next) {
+        if (!t->stack)
+            continue;
+        (*live_threads)++;
+        uint64_t used = stack_used(t);
+        if (used > live->used) {
+            live->used = used;
+            live->tid = t->tid;
+            strlcpy(live->name, t->name, sizeof(live->name));
+        }
+    }
+    spin_unlock_irqrestore(&runq_lock, flags);
+}
+
 static void free_thread(struct thread *z)
 {
     if (!z)
         return;
+    note_exited_stack(z);
     if (z->process && __atomic_sub_fetch(&z->process->thread_refs, 1, __ATOMIC_ACQ_REL) == 0)
         process_thread_reaped(z->process);
     kfree(z->stack);
@@ -379,6 +428,7 @@ static struct thread *thread_create_common(const char *name, thread_entry_t entr
         kfree(t);
         return NULL;
     }
+    memset(t->stack, 0x5A, t->stack_size);
     *(uint64_t *)t->stack = THREAD_STACK_CANARY;
 
     uint64_t *sp = (uint64_t *)((uint8_t *)t->stack + t->stack_size);
