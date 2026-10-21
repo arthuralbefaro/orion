@@ -12,24 +12,24 @@ compilados para Linux sem mudar uma linha deles.
 
 | Etapa | Versao | Commit | Regressao depois |
 |---|---|---|---|
-| 0.1 Estabilidade SMP, ps/kill/uptime/free/time, /dev/null, zero e random | 1.9 | `58bb747` | 92 |
-| 0.2 Copia segura de memoria de usuario | 1.9.1 | `8b3d171` | 97 |
-| 0.3 Mutex que dorme, AHCI | 1.9.2 | `4d55e72` | 99 |
-| 0.4 FAT e cache de blocos com mutex | 1.9.3 | `076285d` | 102 |
-| 0.5 Harness em Python e CI | 1.9.4 | `bc9a8e0` | 105 |
-| 0.6 Shell com `;`, `&&`, `\|\|`, `&`, jobs, fg, wait | 1.9.5 | `d924ee2` | 118 |
-| 0.7 256 descritores, limites, ulimit | 1.9.6 | `0af3cc4` | 123 |
-| 1.1 Pilha inicial do Linux (auxv), SSE por thread | 2.0.0-a1 | `88ce390` | 129 |
-| 1.2 Syscalls de partida da musl, 64 sinais | 2.0.0-a2 | `e809b3a` | 134 |
-| 1.3 Arquivos no formato do Linux | 2.0.0-a3 | `dd00ea2` | 139 |
-| 1.4 Areas de memoria, paginas sob demanda, mmap de arquivo | 2.0.0-a4 | `0edfa7e` | 149 |
-| 1.5 Programas contra a musl com `zig cc` | 2.0.0-a5 | `a37486a` | 154 |
-| 1.6 Threads (`clone`) | 2.0.0-a6 | `5871386` | 164 |
-| 1.7 futex | 2.0.0-a7 | `f40fab9` | 179 |
-| 1.8 Tempo e sinais completos | 2.0.0-a8 | `a75d6ab` | 196 |
-| 1.9 dash, lua, sbase | 2.0.0-a9 | `7208886` | 207 |
-| 1.10 Doom | 2.0.0-a10 | `fe72b5e` | 213 |
-| 1.11 tcc dentro do Orion | 2.0.0-a11 | `4f1b270` | 218 |
+| 0.1 Estabilidade SMP, ps/kill/uptime/free/time, /dev/null, zero e random | 1.9 | `e9ce030` | 92 |
+| 0.2 Copia segura de memoria de usuario | 1.9.1 | `9d30113` | 97 |
+| 0.3 Mutex que dorme, AHCI | 1.9.2 | `f9da861` | 99 |
+| 0.4 FAT e cache de blocos com mutex | 1.9.3 | `18bbda3` | 102 |
+| 0.5 Harness em Python e CI | 1.9.4 | `688bedd` | 105 |
+| 0.6 Shell com `;`, `&&`, `\|\|`, `&`, jobs, fg, wait | 1.9.5 | `a7ea980` | 118 |
+| 0.7 256 descritores, limites, ulimit | 1.9.6 | `85b1bd9` | 123 |
+| 1.1 Pilha inicial do Linux (auxv), SSE por thread | 2.0.0-a1 | `fbf6f4f` | 129 |
+| 1.2 Syscalls de partida da musl, 64 sinais | 2.0.0-a2 | `838525e` | 134 |
+| 1.3 Arquivos no formato do Linux | 2.0.0-a3 | `19808ec` | 139 |
+| 1.4 Areas de memoria, paginas sob demanda, mmap de arquivo | 2.0.0-a4 | `97d1768` | 149 |
+| 1.5 Programas contra a musl com `zig cc` | 2.0.0-a5 | `e3608af` | 154 |
+| 1.6 Threads (`clone`) | 2.0.0-a6 | `09c4c75` | 164 |
+| 1.7 futex | 2.0.0-a7 | `86e929a` | 179 |
+| 1.8 Tempo e sinais completos | 2.0.0-a8 | `9aa79fd` | 196 |
+| 1.9 dash, lua, sbase | 2.0.0-a9 | `e9aa706` | 207 |
+| 1.10 Doom | 2.0.0-a10 | `5b9097e` | 213 |
+| 1.11 tcc dentro do Orion | 2.0.0-a11 | `2d6ad29` | 218 |
 | 1.12 Programas proprios na musl, libc propria aposentada | 2.0.0 | (commit do M1, tag `v2.0`) | 218 |
 
 ### Antes e depois
@@ -102,10 +102,10 @@ pronta no arvore de trabalho, sem commit, esperando a regressao final (ver
 
 | Etapa | Versao | Commit | Regressao depois |
 |---|---|---|---|
-| 2.1 VFS com vnodes e montagens, `mount`/`umount`, `..` atravessando montagens | 2.1.0-a1 | `9f729b3` | 243 |
-| 2.2 tmpfs em `/tmp` e `/run` | 2.1.0-a2 | `3b80cdc` | 254 |
-| 2.3 procfs em `/proc`; syscalls 1002/1003 removidas | 2.1.0-a3 | `b0a87e9` | 263 |
-| 2.4 Cache de paginas unificado (read, exec e mmap) | 2.1.0-a4 | `c485b85` | 271 |
+| 2.1 VFS com vnodes e montagens, `mount`/`umount`, `..` atravessando montagens | 2.1.0-a1 | `9a8ae30` | 243 |
+| 2.2 tmpfs em `/tmp` e `/run` | 2.1.0-a2 | `8181913` | 254 |
+| 2.3 procfs em `/proc`; syscalls 1002/1003 removidas | 2.1.0-a3 | `0c3c9fd` | 263 |
+| 2.4 Cache de paginas unificado (read, exec e mmap) | 2.1.0-a4 | `18d27a5` | 271 |
 | 2.5 ext2 so leitura, piloto em Rust | 2.1.0-a5 | (sem commit, pausada) | 278 antes da ultima rodada de correcoes |
 
 ### Como o trabalho foi feito

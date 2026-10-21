@@ -283,32 +283,32 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 
 | # | Etapa | Estado | Inicio | Fim | Commit |
 | --- | --- | --- | --- | --- | --- |
-| 0.1 | Commit da v1.9 e dos programas novos | [x] | 19:22 | 20:20 | `58bb747` |
-| 0.2 | Copia segura de memoria de usuario | [x] | 20:22 | 22:15 | `8b3d171` |
-| 0.3 | Mutex que dorme, AHCI | [x] | 22:16 | 22:41 | `4d55e72` |
-| 0.4 | FAT e cache de blocos com mutex | [x] | 22:42 | 23:08 | `076285d` |
-| 0.5 | Harness em Python e CI | [x] | 23:09 | 23:39 | `bc9a8e0` |
-| 0.6 | Shell: `&`, jobs, fg, wait, `VAR=x cmd`, `&&`, `\|\|`, `;` | [x] | 23:40 | 00:00 | `d924ee2` |
-| 0.7 | Limites: 256 fds, 256 processos, ulimit | [x] | 00:00 | 01:09 | `0af3cc4` |
-| 1.1 | Pilha inicial do Linux (auxv) | [x] | 00:55 | 01:29 | `88ce390` |
-| 1.2 | Syscalls de partida da musl | [x] | 01:29 | 01:51 | `e809b3a` |
-| 1.3 | Arquivos no formato do Linux | [x] | 01:51 | 02:13 | `dd00ea2` |
-| 1.4 | Memoria do jeito Linux (VMAs, mmap) | [x] | 02:13 | 02:51 | `0edfa7e` |
-| 1.5 | Programas contra a musl com `zig cc` (plano B: musl pelo build.ps1) | [x] | 02:52 | 03:10 | `a37486a` |
-| 1.6 | Threads (clone) | [x] | 03:10 | 03:50 | `5871386` |
-| 1.7 | futex | [x] | 03:50 | 04:28 | `f40fab9` |
-| 1.8 | Tempo e sinais completos | [x] | 04:28 | 05:37 | `a75d6ab` |
-| 1.9 | dash, lua, sbase | [x] | 05:37 | 06:28 | `7208886` |
-| 1.10 | Doom | [x] | 06:28 | 07:10 | `fe72b5e` |
-| 1.11 | tcc dentro do Orion | [x] | 07:10 | 07:54 | `4f1b270` |
-| 1.12 | Programas na musl, aposentar a libc propria | [x] | 07:54 | 08:50 | 171ba11 |
-| 2.1 | VFS com inodes | [x] | 08:51 | 11:05 | 9f729b3 |
-| 2.2 | tmpfs | [x] | 11:06 | 11:47 | 3b80cdc |
-| 2.3 | procfs | [x] | 11:48 | 12:52 | b0a87e9 |
-| 2.4 | Cache de paginas unificado | [x] | 12:53 | 14:55 | c485b85 |
+| 0.1 | Commit da v1.9 e dos programas novos | [x] | 19:22 | 20:20 | `e9ce030` |
+| 0.2 | Copia segura de memoria de usuario | [x] | 20:22 | 22:15 | `9d30113` |
+| 0.3 | Mutex que dorme, AHCI | [x] | 22:16 | 22:41 | `f9da861` |
+| 0.4 | FAT e cache de blocos com mutex | [x] | 22:42 | 23:08 | `18bbda3` |
+| 0.5 | Harness em Python e CI | [x] | 23:09 | 23:39 | `688bedd` |
+| 0.6 | Shell: `&`, jobs, fg, wait, `VAR=x cmd`, `&&`, `\|\|`, `;` | [x] | 23:40 | 00:00 | `a7ea980` |
+| 0.7 | Limites: 256 fds, 256 processos, ulimit | [x] | 00:00 | 01:09 | `85b1bd9` |
+| 1.1 | Pilha inicial do Linux (auxv) | [x] | 00:55 | 01:29 | `fbf6f4f` |
+| 1.2 | Syscalls de partida da musl | [x] | 01:29 | 01:51 | `838525e` |
+| 1.3 | Arquivos no formato do Linux | [x] | 01:51 | 02:13 | `19808ec` |
+| 1.4 | Memoria do jeito Linux (VMAs, mmap) | [x] | 02:13 | 02:51 | `97d1768` |
+| 1.5 | Programas contra a musl com `zig cc` (plano B: musl pelo build.ps1) | [x] | 02:52 | 03:10 | `e3608af` |
+| 1.6 | Threads (clone) | [x] | 03:10 | 03:50 | `09c4c75` |
+| 1.7 | futex | [x] | 03:50 | 04:28 | `86e929a` |
+| 1.8 | Tempo e sinais completos | [x] | 04:28 | 05:37 | `9aa79fd` |
+| 1.9 | dash, lua, sbase | [x] | 05:37 | 06:28 | `e9aa706` |
+| 1.10 | Doom | [x] | 06:28 | 07:10 | `5b9097e` |
+| 1.11 | tcc dentro do Orion | [x] | 07:10 | 07:54 | `2d6ad29` |
+| 1.12 | Programas na musl, aposentar a libc propria | [x] | 07:54 | 08:50 | 6edcf79 |
+| 2.1 | VFS com inodes | [x] | 08:51 | 11:05 | 9a8ae30 |
+| 2.2 | tmpfs | [x] | 11:06 | 11:47 | 8181913 |
+| 2.3 | procfs | [x] | 11:48 | 12:52 | 0c3c9fd |
+| 2.4 | Cache de paginas unificado | [x] | 12:53 | 14:55 | 18d27a5 |
 | 2.5 | ext2 leitura, piloto em Rust | [x] | 14:56 | 16:36 | ver `git log` |
 | 2.6 | ext2 escrita, mkfs.ext2, fsck | [x] | 16:36 | 19:00 | ver `git log` (3 partes) |
-| 2.7 | Links simbolicos, chmod, chown, utime | [x] | 20:20 | 22:40 | `921c465` e ver `git log` (parte 2) |
+| 2.7 | Links simbolicos, chmod, chown, utime | [x] | 20:20 | 22:40 | `31aa078` e ver `git log` (parte 2) |
 | 2.8 | GPT e raiz em ext2 | [x] | 22:42 | 23:25 | ver `git log` (tag `v2.1`) |
 | 3.1 | TCP parte 1 | [x] | 23:27 | 23:52 | ver `git log` |
 | 3.2 | TCP parte 2 | [x] | 23:53 | 01:00 | ver `git log` |
@@ -327,10 +327,10 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 5.4 | NVMe | [x] | 13:35 | 14:10 | ver `git log` |
 | 5.5 | xHCI | [x] | 14:10 | 14:55 | ver `git log` |
 | 5.6 | USB HID | [x] | 14:55 | 15:55 | ver `git log` |
-| 5.7 | USB armazenamento | [x] | 15:55 | 18:16 | `05ee35e` |
-| 5.8 | Audio HDA | [x] | 10:54 | 11:40 | `3c0cacd` |
-| 5.9 | Video BGA e virtio-gpu | [x] | 11:42 | 12:05 | `0a14450` |
-| 5.10 | Hub USB 2 basico (extra, decidido em 2026-10-19) | [x] | 12:08 | 12:20 | `3061786` |
+| 5.7 | USB armazenamento | [x] | 15:55 | 18:16 | `196e3c2` |
+| 5.8 | Audio HDA | [x] | 10:54 | 11:40 | `4093935` |
+| 5.9 | Video BGA e virtio-gpu | [x] | 11:42 | 12:05 | `5b89be7` |
+| 5.10 | Hub USB 2 basico (extra, decidido em 2026-10-19) | [x] | 12:08 | 12:20 | `fc2aac4` |
 | 6.1 | Protocolo de janelas | [x] | 11:06 | 11:47 | ver `git log` |
 | 6.2 | libgui | [x] | 11:48 | 12:27 | ver `git log` |
 | 6.3 | Fontes TrueType | [x] | 12:27 | 13:05 | ver `git log` |
@@ -340,7 +340,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 6.7 | Area de trabalho | [x] | 03:05 | 04:20 | ver `git log` (2 partes) |
 | 7.1 | ISO hibrida | [x] | 06:26 | 09:44 | ver `git log` |
 | 7.2 | Live | [x] | 09:44 | 10:13 | ver `git log` |
-| 7.3 | Instalador | [x] | 12:44 | 12:58 | `eb5abed` |
+| 7.3 | Instalador | [x] | 12:44 | 12:58 | `80dfc68` |
 | 7.4 | Hardware real | [!] | 13:00 | 13:08 | aguardando teste do usuario em hardware real, roteiro em docs/teste-hardware-real.md |
 | 7.5 | Pacotes | [x] | 13:10 | 13:30 | |
 | 8.1 | Fila por CPU e nice | [x] | 14:05 | 15:10 | |
@@ -349,7 +349,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 8.4 | OOM | [x] | 17:40 | 19:04 | |
 | 8.5 | Perfilador | [x] | 19:05 | 21:47 | |
 | 8.6 | Pilhas do kernel medidas | [x] | 21:50 | 22:24 | |
-| 8.7 | memcpy/memset/memmove do kernel em assembly (rep movsb/stosb) | [x] | 20:05 | 22:00 | `9ad91e7` |
+| 8.7 | memcpy/memset/memmove do kernel em assembly (rep movsb/stosb) | [x] | 20:05 | 22:00 | `e1c8fcb` |
 | 8.8 | Thread main do kernel dorme numa fila de espera acordada pela IRQ do teclado/serial (anotado pelo dono na 8.1) | [x] | 22:25 | 23:03 | |
 
 ## Diario
@@ -360,7 +360,7 @@ Ponto de partida (19:22): `.\check.ps1` limpo; `.\regressao.ps1` VERMELHA,
 14 de 81. Todas as falhas na sequencia A, do `ping` em diante: o kernel entrou
 em panico (`assert falhou: sched_runq_held()` em `wait.c`) no segundo `ping`.
 
-#### 0.1 Commit da v1.9 - 19:22 as 20:20 - commit 58bb747 - FEITO
+#### 0.1 Commit da v1.9 - 19:22 as 20:20 - commit e9ce030 - FEITO
 Validado no Windows o trabalho da v1.9 que estava fora do git (trava no heap,
 liberacao adiada com TLB shootdown sincrono, paginas de guarda, pilhas IST,
 watchdog, detector de deadlock) e os programas `stress`, `true`, `ps`, `kill`,
@@ -385,7 +385,7 @@ outros escrevem no pipe); o criterio usado e a linha visivel com
 `0 falha(s) ok`, o eco de um marcador depois do pipeline e nenhum
 `PANIC`/`EXCECAO`/`deadlock` no log.
 
-#### 0.2 Copia segura de memoria de usuario - 20:22 as 22:15 - commit 8b3d171 - FEITO
+#### 0.2 Copia segura de memoria de usuario - 20:22 as 22:15 - commit 9d30113 - FEITO
 `copy_from_user`, `copy_to_user` e `strncpy_from_user` com tabela de excecoes
 (`.ex_table` no `linker.ld`, `arch/x86_64/uaccess.S`, `mm/uaccess.c`); o
 handler de `#PF`/`#GP` em ring 0 desvia para a retomada. Todas as syscalls que
@@ -439,12 +439,12 @@ o CR3 (uma preempcao no meio deixava a thread no espaco em construcao), `poll`
 dormindo sem fila nenhuma quando um sinal chegava durante o registro, e
 `getppid` lendo `parent` sem a trava.
 Regressao: 92 -> 97 verificacoes. Estresse 5x verde na versao final (e 25/25
-logo antes, com as correcoes de concorrencia). Observacao: o commit `8b3d171`
+logo antes, com as correcoes de concorrencia). Observacao: o commit `9d30113`
 levou junto as edicoes que o dono fez durante a sessao no arquivo local de regras (regra de
 comentarios para todas as linguagens) e em `docs/PLANO.md` (secao "Linguagens",
 1.5 com `zig cc`, piloto Rust no ext2 em 2.5, etapa nova 8.7).
 
-#### 0.3 Mutex que dorme - 22:16 as 22:41 - commit 4d55e72 - FEITO
+#### 0.3 Mutex que dorme - 22:16 as 22:41 - commit f9da861 - FEITO
 `kernel/mutex.{h,c}`: dono, fila de espera, spinlock interno so do mutex,
 estatisticas (aquisicoes, contencao, espera total e maxima), panico em
 recursao e em disputa com interrupcoes desligadas, aviso a cada 5 s de espera
@@ -458,7 +458,7 @@ cache, que a 0.4 troca por mutex.
 A partir desta etapa, antes de cada commit roda o comando do dono que procura
 `//` e `/*` nos arquivos de codigo staged.
 
-#### 0.4 FAT e cache de blocos com mutex - 22:42 as 23:08 - commit 076285d - FEITO
+#### 0.4 FAT e cache de blocos com mutex - 22:42 as 23:08 - commit 18bbda3 - FEITO
 A trava do cache de setores (`bcache`) e a de cada FAT (`fat-sda1`,
 `fat-sdb`) viraram mutex; ordem `fat-*` -> `bcache` -> `ahci*`. A sequencia C
 roda duas `fstest -a` ao mesmo tempo (diretorios /mnt/p1 e /mnt/p2), as duas
@@ -471,7 +471,7 @@ comentarios antigos no `fat.c` (de antes do intensivo); removidos, o porque
 deles ja estava no DECISOES (v1.3). Tambem tirei um BOM que um
 `Set-Content -Encoding utf8` colocou no diario.
 
-#### 0.5 Harness em Python e CI - 23:09 as 23:39 - commit bc9a8e0 - FEITO
+#### 0.5 Harness em Python e CI - 23:09 as 23:39 - commit 688bedd - FEITO
 `tools/qrun.py` (equivalente ao `test.ps1`, com os mesmos passos) e
 `tools/regress.py`, que le os passos e as verificacoes do proprio
 `regressao.ps1` em vez de manter uma segunda copia. Sequencia nova E no
@@ -888,7 +888,7 @@ perderam os comentarios antigos. Testado no hospedeiro contra uma referencia
 em 200 mil casos (tamanho 0, desalinhado, sobreposicao para os dois lados,
 copias de ate 64 KiB), conferindo retorno e flag de direcao.
 Validada no QEMU na sessao 2 (regressao inteira verde com 291 verificacoes,
-estresse 5x verde) e commitada em `9ad91e7`.
+estresse 5x verde) e commitada em `e1c8fcb`.
 
 #### 2.7 links simbolicos, chmod, chown, utime - 20:20 a 22:40 - FEITO
 Parte 1 (links simbolicos): a VFS segue links na resolucao de caminho (40 no
@@ -901,7 +901,7 @@ inteira verde (291 verificacoes, 3 novas: `linktest` no tmpfs e no ext2 e
 `ln -s`/`readlink` do sbase; o `fsck.ext2` final passou a vir depois do
 `linktest`), estresse 5x
 verde; nada precisou de correcao. Commit "v2.1: 2.7 (parte 1) - links
-simbolicos" (`921c465`).
+simbolicos" (`31aa078`).
 
 Parte 2 (sessao 2, 22:07 a 22:40): `getattr`/`setattr` na VFS; `chmod`,
 `fchmod`, `fchmodat`, `fchmodat2`, `chown`, `fchown`, `lchown`, `fchownat`,
@@ -1772,7 +1772,7 @@ segundo pendrive passou a usar `-blockdev`, que sobrevive, para o
 `device_add` ter o que ligar.
 
 #### Fecho da 5.7 - regressao completa - 17:44 a 18:16 - VERDE
-Regressao completa sobre o `05ee35e` (parte 3): 565 verificacoes, 0 falhas
+Regressao completa sobre o `196e3c2` (parte 3): 565 verificacoes, 0 falhas
 (eram 526 na 5.6; a U foi de 23 para 54 nas partes 1 a 3, e o resto e o que
 as partes anteriores ja tinham). RAM livre antes: 6,4 GB. Tempo por
 sequencia, pela hora de gravacao dos logs (inclui o build do comeco e o da
@@ -2032,7 +2032,7 @@ verificacoes, verde, 4,5 min. `check.ps1` limpo. Versao 3.0.0-a3. RAM livre
 antes: 3,3 GB e 2,9 GB.
 
 #### Fim da Fase 7 - regressao completa - VERDE
-Regressao completa depois da 7.5 (`4b06377`): 675 verificacoes, verde, 28,3
+Regressao completa depois da 7.5 (`c1aa38f`): 675 verificacoes, verde, 28,3
 min (eram 646 em ~20 min no fim da Fase 5; a mais: as sequencias I e F
 cresceram com o instalador em NVMe e os pacotes). RAM livre antes: 2,9 GB.
 Tag `v3.0-rc1`, nao `v3.0`: a 7.4 continua `[!]` aguardando o teste do dono
@@ -2088,7 +2088,7 @@ baixa e limite por filho, exec so de caminho inexistente ou lixo, filhos
 como uid 1000 em `/tmp/fuzz`. Sequencia nova Z (60 s; 600 s com `-Noturna`;
 `regress.py --noturna`; o `regress.py` tambem ganhou a P, que faltava na
 lista padrao). Detalhes: `docs/DECISOES.md`, v3.0.0-a6.
-Defeito achado e corrigido em commit proprio (`1718e32`): usuario comum
+Defeito achado e corrigido em commit proprio (`c4cfbe2`): usuario comum
 inundava o log do kernel (syscall desconhecida, morte por sinal, falha de
 pagina, ELF invalido), e o fuzz de 60 s levava 216 s por causa da serial;
 agora no maximo 10 linhas por segundo por ponto de chamada, com a contagem
@@ -2096,7 +2096,7 @@ das suprimidas; teste `logflood` na sequencia A (que tambem teve a
 verificacao do `history` corrigida: o historico guarda 50 comandos e o
 primeiro mudou). Com isso o fuzz passou de ~16 mil para ~100 mil chamadas
 em 60 s.
-Problema no teste do `logflood` (`fb1aa69`): a contagem por
+Problema no teste do `logflood` (`304dd8e`): a contagem por
 `(?s)(X.*?){31}` faz o regex do .NET voltar atras de forma explosiva quando
 nao casa (no Python sai rapido); a primeira regressao completa da 8.3 ficou
 uma hora parada nessa linha, com o PowerShell queimando CPU e a RAM livre
