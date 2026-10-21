@@ -12,3 +12,4 @@ void serial_putc(char c);
 void serial_write(const char *s);
 int serial_getc(void);
 uint64_t serial_rx_irqs(void);
+int serial_storm_test(uint64_t *fires, uint64_t *ms);

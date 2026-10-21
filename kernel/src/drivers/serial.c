@@ -5,6 +5,8 @@
 #include <arch/x86_64/interrupts.h>
 #include <kernel/log.h>
 #include <kernel/spinlock.h>
+#include <kernel/syscall.h>
+#include <kernel/time.h>
 
 #define REG_DATA        0
 #define REG_IER         1
@@ -17,6 +19,7 @@
 #define LSR_DATA_READY  (1 << 0)
 #define LSR_THR_EMPTY   (1 << 5)
 #define IER_RX          (1 << 0)
+#define IER_THRE        (1 << 1)
 #define RX_SIZE         1024
 
 static bool present = false;
@@ -54,7 +57,10 @@ bool serial_available(void)
 
 static void drain_uart(void)
 {
-    while (inb(SERIAL_COM1 + REG_LSR) & LSR_DATA_READY) {
+    for (uint32_t n = 0; n < RX_SIZE; n++) {
+        uint8_t lsr = inb(SERIAL_COM1 + REG_LSR);
+        if (lsr == 0xFF || !(lsr & LSR_DATA_READY))
+            break;
         uint8_t c = inb(SERIAL_COM1 + REG_DATA);
         uint32_t next = (rx_head + 1) % RX_SIZE;
         if (next != rx_tail) {
@@ -83,6 +89,47 @@ void serial_enable_irq(void)
     irq_enable(IRQ_COM1);
     outb(SERIAL_COM1 + REG_IER, IER_RX);
     log_info("serial", "COM1 com IRQ%u de recepcao (anel de %u bytes)", IRQ_COM1, RX_SIZE);
+}
+
+static volatile uint64_t storm_fires;
+
+static void storm_irq(struct interrupt_frame *f, void *ctx)
+{
+    (void)f;
+    (void)ctx;
+    storm_fires++;
+}
+
+int serial_storm_test(uint64_t *fires, uint64_t *ms)
+{
+    *fires = 0;
+    *ms = 0;
+    if (!present || irq_get_mode() != IRQ_MODE_IOAPIC)
+        return -ENODEV;
+    uint8_t vec = VECTOR_IRQ_BASE + IRQ_COM1;
+    uint32_t gsi;
+    bool low, level;
+    storm_fires = 0;
+    interrupts_register(vec, storm_irq, NULL);
+    if (!irq_enable_isa_as(IRQ_COM1, false, true, &gsi, &low, &level) || !level) {
+        interrupts_register(vec, serial_irq, NULL);
+        irq_enable(IRQ_COM1);
+        return -ENODEV;
+    }
+    uint64_t t0 = time_now_us();
+    outb(SERIAL_COM1 + REG_IER, IER_RX | IER_THRE);
+    while (!interrupts_storm_masked(vec) && time_now_us() < t0 + 3000000)
+        pause();
+    *ms = (time_now_us() - t0) / 1000;
+    bool masked = interrupts_storm_masked(vec);
+    outb(SERIAL_COM1 + REG_IER, IER_RX);
+    uint64_t seen = storm_fires;
+    time_sleep_ms(20);
+    bool quiet = storm_fires == seen;
+    *fires = storm_fires;
+    interrupts_register(vec, serial_irq, NULL);
+    irq_enable(IRQ_COM1);
+    return masked && quiet && !interrupts_storm_masked(vec) ? 0 : -EIO;
 }
 
 uint64_t serial_rx_irqs(void)

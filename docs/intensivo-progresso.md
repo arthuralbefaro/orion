@@ -2236,3 +2236,40 @@ verificacoes novas (listagem, nome do disco, disco com a raiz do Orion
 marcado e `--sim` recusado, `apagar nvme0n1` exigido, lista sem destino
 depois da instalacao); sequencias C (disco, `/mnt` no sistema instalado
 continua igual) e F (ISO live) verdes. RAM livre antes: 5,8 GB e 7,0 GB.
+
+#### 7.4 parte 2 - o #DF do hardware real: relatorio que acha a causa, conferencia da pilha na entrada, tempestade de IRQ, SCI - 19:50 a 20:30 - FEITO
+Simbolo conferido no `orion.elf` do HEAD (a ISO testada era do mesmo
+codigo): `RIP = isr_common+3`. Leitura do relatorio do dono, com o layout
+do bloco grande do `kmalloc` (pilha 0x40 bytes depois da pagina): uma
+interrupcao chegou com so 16 bytes de pilha, o `isr_common` empurrou tres
+registros e o quarto caiu na guarda. Os registros sao de um `mmap(0,
+0x5000)` do `init` recem-feito (R8 a R11 intactos, R11 = flags do
+`syscall`), e RDI = RBX = base+0x70 poe o comeco de uma entrada vinda do
+anel 3 em base+0x120, e nao no topo. Duas hipoteses fecham (topo de
+entrada errado ou cadeia de 16 KiB), e o relatorio antigo nao seguia a
+cadeia. Nao e interrupcao aninhada nem a COM1: no notebook a UART le 0xFF e
+a IRQ4 nem e ligada; o SCI do uACPI ja deixa a GPE desligada ate o trabalho
+na `acpi-work` terminar (conferido no `event.c`).
+O que entrou: conferencia do topo da pilha em toda entrada do anel 3
+(panico com `rsp0` do TSS e `kernel_rsp`); relatorio do `#DF`/panico com a
+cadeia pelo `RBP` (recursao compactada), o quadro da interrupcao que nao
+coube e uma linha por CPU com profundidade, ultimos 16 vetores e o vetor
+mais disparado; limite de 8 interrupcoes aninhadas; detector de tempestade
+(32768/s: mascara a IRQ ou poe o vetor MSI em quarentena, com aviso); SCI
+roteada como nivel/baixo sem override da MADT, com log; leitura da COM1
+na IRQ limitada; pilha do kernel de 32 KiB; `-fno-omit-frame-pointer`
+explicito. Comandos de teste no modo estrito: `irqstorm` (sequencia A:
+auto-IPI sem fim e a COM1 em nivel com THRE sem tratamento, os dois viram
+aviso e mascara em ~150 ms) e `estouro` (sequencia K, nova: o cenario do
+notebook no QEMU, relatorio com o mesmo padrao de RSP e CR2). Detalhes:
+`docs/DECISOES.md`, v3.0.0-a11 parte 2.
+Problemas no caminho: (1) o heredoc do Bash estragou de novo as barras de
+um script de remendo (as quebras viraram linhas de verdade dentro das
+strings do C); consertado antes do build. (2) A primeira versao do
+`estouro` mergulhava na thread `main`, que usa a pilha de boot sem guarda:
+desceu sem limite e travou em silencio; agora roda numa thread propria.
+(3) O teste de borda exigia mais de 32768 disparos do handler, mas o
+32769o ja e o calado.
+Verificacao (nucleo: interrupcoes e pilha): `check.ps1` limpo, sequencia K
+(9 verificacoes) verde; regressao completa verde, 753 verificacoes (K incluida), 28,4 min; maior uso de pilha 6680 de 32768 bytes (20%). RAM livre
+antes: 7,0 GB. Versao 3.0.0-a11.

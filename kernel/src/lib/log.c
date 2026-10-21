@@ -84,6 +84,7 @@ NORETURN void panic(const char *fmt, ...)
     va_end(ap);
     kprintf("\n");
     interrupts_backtrace_here();
+    interrupts_dump_cpus();
 
     kprintf("\nSistema travado. Reinicie a maquina.\n");
     halt_forever();

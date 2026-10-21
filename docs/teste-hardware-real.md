@@ -134,9 +134,13 @@ e do `out\orion.elf` tem de ser a mesma compilacao) e **so o modo live**:
    `poweroff`. O teclado do notebook e PS/2 e deve funcionar; o touchpad
    (I2C) nao.
 3. Se cair de novo em `#DF` ou em panico, mande o relatorio inteiro como
-   descrito na secao 5. Agora ele traz a cadeia de chamadas mesmo com o RSP
-   fora da pilha, o vetor em que a pilha acabou e o estado de interrupcao de
-   cada CPU, o que basta para achar a causa.
+   descrito na secao 5. Agora ele traz a cadeia de chamadas pelo `RBP`
+   (`cadeia pelo RBP`, com as repeticoes resumidas), o vetor em que a pilha
+   acabou e o estado de interrupcao de cada CPU, o que basta para achar a
+   causa. Um panico novo e esperado se a primeira hipotese estiver certa:
+   `entrada do anel 3 (...) com a pilha errada na CPU N: quadro termina em
+   ..., topo da pilha da thread ... e ...; rsp0 do TSS ..., kernel_rsp da CPU
+   ...`. Anote todos os numeros dessa linha.
 4. Se o sistema travar sem mensagem, anote o ultimo texto e, se der, se o
    `Caps Lock` ainda acende (diz se o teclado ainda e atendido).
 

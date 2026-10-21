@@ -4086,3 +4086,136 @@ dono (`/mnt montado: FAT32 em nvme0n1p1`). Nao gravou nada, mas podia.
   errado cancelando, o `--sim` recusado quando o disco ja tem a raiz do
   Orion instalada (que conta como outro sistema), o `apagar <nome>` exigido
   e a lista sem destino depois da instalacao.
+
+## v3.0.0-a11 (7.4, parte 2: o #DF do hardware real, diagnostico e protecoes)
+
+### O que o relatorio do dono diz
+
+`#DF` na CPU 1, thread `init` (pid 1), `RIP = isr_common+3` (conferido no
+`orion.elf` do HEAD `67195c3`; a ISO testada foi gerada do mesmo codigo
+durante a regressao da 8.8). `isr_common+3` e o `pushq %rdx`, a quarta
+instrucao da entrada comum. A pilha da thread comeca 0x40 bytes depois do
+inicio da pagina (o cabecalho do bloco grande do `kmalloc`), e o
+`RSP = base - 0x40` e o `CR2 = base - 0x48` dizem: a CPU empurrou o quadro
+de uma interrupcao a partir de `base + 0x10`, o stub empurrou o vetor e o
+`isr_common` conseguiu empurrar `rax`, `rbx` e `rcx`; o `rdx` caiu na pagina
+de guarda, o `#PF` disso nao coube e virou `#DF`. Ou seja: uma interrupcao
+chegou (o `RFLAGS` com IF=0 e o de dentro do portao de interrupcao) quando
+o codigo interrompido so tinha 16 bytes de pilha.
+
+O kernel ja tinha ponteiro de quadro (o clang deste alvo mantem o `RBP`
+mesmo em `-O2`; conferido no disassembly), e o `RBP = base + 0x10` igual ao
+`RSP` interrompido diz que a funcao interrompida tinha acabado de fazer
+`push %rbp; mov %rsp, %rbp` (ou e uma folha sem variaveis locais). A cadeia
+inteira estava na pilha, mas o relatorio antigo nao seguia o `RBP` e
+desistia da varredura quando o `RSP` estava fora da pilha.
+
+Os registros guardam uma pista forte. `R10 = 0x22` (MAP_PRIVATE |
+MAP_ANONYMOUS), `R8 = -1`, `R9 = 0`, `RSI = 0x5000`, `RDX = 3`
+(PROT_READ | PROT_WRITE) e `R11 = 0x206` (os flags de usuario que a
+instrucao `syscall` guarda em R11) sao exatamente um `mmap(0, 0x5000, ...)`
+feito pelo `init` na partida da musl, e os registros que o C usa como
+rascunho (R8 a R11) ainda estavam intactos: o kernel tinha executado muito
+pouco codigo desde a entrada. E `RDI = RBX = base + 0x70`: o
+`syscall_dispatch` e o `isr_dispatch` recebem o quadro em RDI e o guardam
+em RBX, e o quadro de uma entrada vinda do anel 3 tem 0xB0 bytes. Se esse e
+o quadro, a entrada comecou em `base + 0x120`, e nao no topo da pilha
+(`base + 16 KiB`): o `kernel_rsp` da CPU (syscall) ou o `rsp0` do TSS
+(interrupcao vinda do usuario) estaria apontando 288 bytes acima do fundo.
+Conferido no codigo: os dois so sao escritos no `switch_to`, com o
+`kernel_stack_top` da thread, que so e escrito na criacao. Nao achei como
+isso aconteceria, e a outra leitura (uma cadeia de chamadas legitima ou
+recursiva de 16 KiB) tambem fecha com o `RIP` e o `RSP`. Por isso a parte
+2 nao "corrige" uma causa que nao esta provada: ela faz o proximo teste
+responder qual das duas e, nas duas, transforma o travamento em relatorio
+completo.
+
+Nao e interrupcao se aninhando: dentro de um handler as interrupcoes ficam
+desligadas, e os unicos pontos que religam interrupcoes no caminho de uma
+interrupcao (a falha de pagina de usuario e a entrega de sinal) so religam
+quando o codigo interrompido estava com IF=1, o que limita o aninhamento a
+dois niveis. Nenhuma funcao do kernel tem quadro maior que 4 KiB
+(`hda_tone`, fora desse caminho).
+
+### O que mudou
+
+- **Conferencia da pilha em toda entrada vinda do anel 3** (syscall e
+  interrupcao, menos NMI e `#DF`, que usam pilha IST): o quadro tem de
+  terminar exatamente no `kernel_stack_top` da thread. Se nao, panico com o
+  fim do quadro, o topo e a faixa da pilha da thread, o `rsp0` do TSS da CPU
+  (`gdt_kernel_stack`, novo), o `kernel_rsp` da CPU e o RIP do usuario. Custa
+  uma comparacao por entrada. Se a hipotese do topo errado for a certa, o
+  proximo teste para aqui, com os numeros.
+- **Relatorio do `#DF` e do panico.** (1) Cadeia pelo `RBP` (do mais recente
+  para o mais antigo), quatro enderecos por linha, com enderecos repetidos
+  em sequencia compactados em "(o endereco acima se repete mais N vezes)" e
+  o total de quadros: uma recursao aparece em duas linhas. (2) Quadro da
+  interrupcao que estourou: procura entre o `RSP` e o fundo da pilha um
+  quadro coerente (vetor, erro, RIP, CS, RFLAGS e RSP; com CS de kernel, o
+  RIP no texto e o RSP alinhado a 16 logo depois do quadro) e imprime
+  `>>> a pilha acabou ao entrar no vetor N (nome) vindo de ring 0/3: RIP=...
+  <<<`. (3) Varredura da pilha a partir do fundo quando o `RSP` esta abaixo
+  dela (antes desistia). (4) Estado de interrupcao de cada CPU, uma linha
+  por CPU para caber numa foto: profundidade atual e maxima, os ultimos 16
+  vetores e o vetor mais disparado neste segundo e no anterior. O `panic()`
+  tambem imprime a cadeia pelo `RBP` e o estado das CPUs. O `#DF` ja rodava
+  na pilha IST propria, pela entrada paranoica (conferido).
+- **`-fno-omit-frame-pointer` explicito no `build.ps1`.** O clang ja
+  mantinha o `RBP`; a opcao garante que continue assim se o padrao mudar.
+- **Anel de vetores e taxa por CPU** em `struct percpu`: os ultimos 16
+  vetores, a contagem por vetor no segundo corrente (zerada quando o
+  segundo medido pelo TSC muda) e o vetor mais frequente neste segundo e no
+  anterior. Anotado no comeco do `isr_dispatch` para IRQs, IPIs, timer e
+  excecoes (a NMI nao mexe nos campos da CPU que interrompeu). O `irq` do
+  shell do kernel mostra isso e marca os vetores mascarados.
+- **Limite de aninhamento**: `irqctx_enter` entra em panico acima de
+  `IRQ_NEST_LIMIT` (8), dizendo qual vetor chegou dentro de qual.
+- **Detector de tempestade**: um vetor acima de `IRQ_STORM_LIMIT` (32768)
+  disparos no mesmo segundo numa CPU e mascarado de dentro da propria
+  interrupcao: IRQ ISA no controlador (I/O APIC ou PIC), GSI no I/O APIC, e
+  MSI/MSI-X em quarentena (o handler deixa de rodar, o EOI continua). Timer,
+  IPIs, excecoes e o vetor espurio nunca sao mascarados. Linha
+  `[ERR ] tempestade de interrupcao: vetor N (nome) disparou M vezes em
+  menos de 1 s na CPU C; ...`. Religar a IRQ tira a mascara. 32768 fica bem
+  acima do que o NVMe, o xHCI e a rede do Orion geram na regressao e bem
+  abaixo de uma IRQ presa (no QEMU, ~190 mil por segundo).
+- **SCI e GPE.** Conferido no `third_party/uacpi/source/event.c`: no SCI o
+  proprio uACPI desliga a GPE (`set_gpe_state(DISABLED)`), limpa o status
+  (borda logo, nivel so depois do trabalho) e so religa no fim do
+  `async_run_gpe_handler`, que roda na thread `acpi-work`; GPE sem handler
+  fica desligada. O handler do SCI do Orion (`irq_trampoline`) nao religa
+  interrupcoes nem dorme; o botao de energia so agenda trabalho. O que
+  mudou: sem override na MADT, a SCI passa a ser roteada como nivel e ativa
+  em baixo, como a especificacao ACPI define (antes ia como as outras ISA:
+  borda, ativa em alto, o que num firmware sem override pode perder ou
+  repetir eventos), e o log diz IRQ, GSI, polaridade, gatilho e se veio do
+  override (`irq_enable_isa_as`, novo). No QEMU a MADT tem override para a
+  IRQ 9 (nivel, alto): nada muda la.
+- **COM1**: a 8.8 ja so ligava a IRQ4 quando o teste de loopback da UART
+  passa (no notebook a porta le 0xFF: ausente, IRQ desligada). A leitura na
+  IRQ ganhou limite (um anel por interrupcao) e para se o LSR ler 0xFF, para
+  uma UART que suma depois do boot nao prender a CPU.
+- **Pilha do kernel de 32 KiB** (`THREAD_STACK_SIZE`). O criterio da 8.6 e
+  "32 KiB se alguma passar de 75%", e o hardware real passou de 100%. Se a
+  causa for uma cadeia longa, o boot passa e o `/proc/stacks` mostra o
+  tamanho dela; se for recursao ou topo errado, a conferencia e o relatorio
+  novos mostram. Custo: 16 KiB a mais por thread. A pilha de boot da thread
+  `main` continua com 16 KiB e sem pagina de guarda (anotado: ela nao e
+  alocada pelo `kmalloc`).
+- **Reproducao no QEMU**, so no modo estrito:
+  - `irqstorm` (sequencia A): (1) borda: um vetor de MSI cujo handler manda
+    uma IPI para a propria CPU, que volta logo depois do EOI, sem fim; (2)
+    nivel sem nada que cale a origem: a IRQ4 da COM1 roteada no I/O APIC
+    como nivel, ativa em alto, com o THRE ligado no IER e um handler que nao
+    toca na UART, entao a linha fica ativa e volta a cada EOI. E o mesmo
+    mecanismo de uma GPE de nivel nunca limpa, que nao da para prender no
+    QEMU. Os dois viram aviso e mascara (~32 mil disparos em ~150 ms); o
+    teste confere que o handler calou, religa a serial como era e segue.
+  - `estouro` (sequencia K, nova): uma thread desce a pilha ate sobrarem
+    ~100 bytes e espera o timer, o mesmo cenario do notebook. O relatorio
+    sai com o mesmo padrao (`RSP = base - 0x40`, `CR2` em `...ff8`, RIP no
+    `isr_common`), acha o vetor 64 (timer) como a interrupcao que nao coube
+    e mostra a recursao em duas linhas pela cadeia do `RBP`. A primeira
+    versao rodava o mergulho na thread `main`, que usa a pilha de boot sem
+    guarda: desceu sem limite e corrompeu memoria em silencio.
+  - Na F (fora do modo estrito) os dois respondem EPERM.

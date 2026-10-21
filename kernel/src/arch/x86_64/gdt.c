@@ -124,3 +124,8 @@ void gdt_set_kernel_stack(uint64_t rsp0)
 {
     cpu_gdts[percpu_cpu_id()].tss.rsp0 = rsp0;
 }
+
+uint64_t gdt_kernel_stack(void)
+{
+    return cpu_gdts[percpu_cpu_id()].tss.rsp0;
+}

@@ -18,6 +18,7 @@ param(
     [switch]$OnlyP,
     [switch]$OnlyZ,
     [switch]$OnlyM,
+    [switch]$OnlyK,
     [switch]$Noturna,
     [switch]$SlowWaits,
     [int]$StressRuns = 1,
@@ -30,7 +31,7 @@ $failures = @()
 $checks = 0
 if ($SlowWaits) { $env:ORION_SLOW_WAITS = "1" } else { Remove-Item Env:ORION_SLOW_WAITS -ErrorAction SilentlyContinue }
 $regStart = Get-Date
-$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG -or $OnlyW -or $OnlyH -or $OnlyI -or $OnlyP -or $OnlyZ -or $OnlyM)
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG -or $OnlyW -or $OnlyH -or $OnlyI -or $OnlyP -or $OnlyZ -or $OnlyM -or $OnlyK)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -253,7 +254,7 @@ if ($runAll -or $OnlyA) {
         "key:0B", "cmd:tcploss 10", "key:0B",
         "cmd:httpget -u /tmp/up.bin 10.0.2.2 8088 /up", "until:240:corpo de",
         "cmd:httpget -q 10.0.2.2 8088 /big.bin", "until:240:corpo de",
-        "key:0B", "cmd:tcploss 0", "cmd:net", "cmd:irqtest", "until:10:anotado e impresso depois", "wait:1", "key:0B", "cmd:rm /tmp/up.bin", "wait:1", "cmd:cat /proc/interrupts", "wait:1",
+        "key:0B", "cmd:tcploss 0", "cmd:net", "cmd:irqtest", "until:10:anotado e impresso depois", "wait:1", "cmd:irqstorm", "until:30:irqstorm: tempest", "wait:1", "key:0B", "cmd:rm /tmp/up.bin", "wait:1", "cmd:cat /proc/interrupts", "wait:1",
         "cmd:httpd -n 3 -r / &", "wait:2", "hostget:8081:/etc/passwd", "hostget:8081:/nao-existe", "hostget:8081:/etc",
         "wait:2", "cmd:httpd -n 1 &", "wait:2", "hostget:8081:/etc/group", "wait:2",
         "cmd:unixtest /run", "until:60:falha(s))", "cmd:unixtest /", "until:60:falha(s))",
@@ -421,7 +422,7 @@ if ($runAll -or $OnlyA) {
     Expect $a "dash-executavel" "dash: test -x (faccessat2)"
     Expect $a "saiu com 7" "dash: exit 7 volta para o sh com o codigo"
     Expect $a "futex: 0 thread\(s\) esperando" "nenhuma thread esquecida na fila do futex"
-    Expect $a "pilha do kernel: 16384 bytes por thread[^\n]*\nmaior uso: \d+ bytes \(([0-6]?\d|7[0-4])%\) em " "pilhas do kernel abaixo de 75% depois dos testes da sequencia A (8.6)"
+    Expect $a "pilha do kernel: 32768 bytes por thread[^\n]*\nmaior uso: \d+ bytes \(([0-6]?\d|7[0-4])%\) em " "pilhas do kernel abaixo de 75% depois dos testes da sequencia A (8.6)"
     ExpectNot $a "syscall (?!777 )\d+ desconhecida" "nenhuma syscall desconhecida na sequencia A (fora a 777 do logflood)"
     Expect $a "logflood: 1000 de 1000 syscalls desconhecidas deram ENOSYS, 60 de 60 filhos mortos por SIGSEGV juntos, fim" "logflood: usuario provoca 1000 mensagens de syscall desconhecida e 60 mortes por sinal de uma vez"
     Expect $a "\(\d+ mensagem\(ns\) parecida\(s\) suprimida\(s\): limite de 10 por segundo\)" "o log do kernel corta a inundacao provocada pelo usuario"
@@ -561,6 +562,11 @@ if ($runAll -or $OnlyA) {
     Expect $a "irqtest: contexto de interrupcao ok" "irqtest termina bem"
     Expect $a "irqtest: trava de spin com interrupcoes ligadas: [1-9]\d* troca\(s\) adiada\(s\), 0 troca\(s\) de thread na CPU enquanto a trava estava presa, mesma thread e CPU: sim" "thread segurando trava de spin nao e preemptada (contador por thread, comeco da 8.2)"
     Expect $a "irqtest: spin_unlock com troca adiada: a thread da mesma CPU rodou antes: nao, rodou antes do\s+spin_unlock voltar: sim \([1-9]\d* troca\(s\) na liberacao\)" "spin_unlock com a troca adiada chama o escalonador na hora (8.2)"
+    Expect $a "tempestade de interrupcao: vetor \d+ \(irqstorm\) disparou \d{5,} vezes em menos de 1 s na CPU \d+; vetor em quarentena" "tempestade de borda (auto-IPI sem fim) vira aviso e quarentena do vetor"
+    Expect $a "irqstorm: borda: vetor \d+ em laco de auto-IPI: \d{5,} disparos ate a quarentena em \d+ ms; handler calado depois: sim" "depois da quarentena o handler da tempestade nao roda mais"
+    Expect $a "tempestade de interrupcao: vetor 36 \(irq-isa\) disparou \d{5,} vezes em menos de 1 s na CPU \d+; IRQ mascarada no controlador" "IRQ de nivel que ninguem cala (COM1 com THRE) vira aviso e mascara no I/O APIC"
+    Expect $a "irqstorm: nivel: COM1 com THRE sem tratamento: \d{5,} disparos ate a mascara em \d+ ms; IRQ religada e serial de volta: sim" "depois da mascara a IRQ da serial e religada e volta a funcionar"
+    Expect $a "irqstorm: tempestades viram aviso e mascara, sem #DF" "irqstorm termina bem"
     ExpectNot $a "BUG: (?!kmalloc dentro de interrupcao, chamado|teste no NMI)[^\n]*dentro de interrupcao" "nenhum outro aviso de contexto de interrupcao na sequencia A"
     Expect $a "\nalfa Xbeta" "seta para a esquerda insere no meio da linha"
     Expect $a "\nalfa X\n" "Home, End e backspace cortaram o fim da linha"
@@ -970,7 +976,7 @@ if ($runAll -or $OnlyF) {
         "cmd:mount", "cmd:id", "cmd:ls /bin | wc", "cmd:ls -l /etc/shadow /bin/su", "cmd:ls -l /home",
         "cmd:echo vivo-na-ram > /home/orion/nota.txt", "cmd:cat /home/orion/nota.txt", "cmd:hello",
         "cmd:lua -e print(6*7)", "cmd:su orion -c id", "cmd:free", "wait:1",
-        "key:0B", "cmd:irqtest", "cmd:usbstall sdb", "cmd:usbtimeout sdb", "cmd:kmfail 5", "key:0B",
+        "key:0B", "cmd:irqtest", "cmd:irqstorm", "cmd:estouro", "cmd:usbstall sdb", "cmd:usbtimeout sdb", "cmd:kmfail 5", "key:0B",
         "reboot:uefi,cd", "cmd:mount", "cmd:cat /home/orion/nota.txt", "wait:1",
         "reboot:bios,isodisk", "cmd:mount", "cmd:poweroff", "wait:4", "monlog:info status",
         "reboot:uefi,isodisk", "cmd:mount", "cmd:ls /doom", "cmd:reboot", "wait:4", "monlog:info status"
@@ -990,6 +996,8 @@ if ($runAll -or $OnlyF) {
     Expect $f "kmfail: EPERM, so no modo de teste" "fora do modo estrito o kmfail responde EPERM"
     Expect $f "usbstall: EPERM, so no modo de teste" "fora do modo estrito o usbstall responde EPERM"
     Expect $f "usbtimeout: EPERM, so no modo de teste" "fora do modo estrito o usbtimeout responde EPERM"
+    Expect $f "irqstorm: EPERM, so no modo de teste" "fora do modo estrito o irqstorm responde EPERM"
+    Expect $f "estouro: EPERM, so no modo de teste" "fora do modo estrito o estouro responde EPERM"
     ExpectNot $f "BUG: [^\n]*dentro de interrupcao" "nenhum aviso de contexto de interrupcao nos boots da ISO"
     Expect $f "-rw-------\s+1\s+root\s+root[^\n]*/etc/shadow" "live: /etc/shadow 0600 de root"
     Expect $f "-rwsr-xr-x\s+1\s+root\s+root[^\n]*/bin/su" "live: su setuid root"
@@ -1432,7 +1440,7 @@ if ($runAll -or $OnlyZ) {
     Expect $zl "fuzz: fim \(semente \d+\)" "fuzz terminou"
     Expect $zl "kmfail: taxa 1/1000 nos kmalloc de processos de usuario comum, [1-9]\d* falha\(s\) injetada\(s\)" "fuzz com 1 em 1000 kmalloc falhando nos filhos (modo estrito)"
     Expect $zl "kmfail: desligado" "a falha injetada desliga no fim"
-    Expect $zl "pilha do kernel: 16384 bytes por thread[^\n]*\nmaior uso: \d+ bytes \(([0-6]?\d|7[0-4])%\) em " "pilhas do kernel abaixo de 75% depois do fuzz (8.6)"
+    Expect $zl "pilha do kernel: 32768 bytes por thread[^\n]*\nmaior uso: \d+ bytes \(([0-6]?\d|7[0-4])%\) em " "pilhas do kernel abaixo de 75% depois do fuzz (8.6)"
     Expect $zl "echo depois-do-fuzz\s*\ndepois-do-fuzz" "o shell continua respondendo depois do fuzz"
     ExpectNot $zl "ls /tmp\s*\n[^\n]*fuzz" "o fuzz apaga o diretorio dele em /tmp"
     ExpectNot $zl "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|BUG: " "nenhum panico nem BUG na sequencia Z"
@@ -1461,8 +1469,28 @@ if ($runAll -or $OnlyM) {
     ExpectNot $ml "matando pid 1 |'init'|'sh' \(" "o OOM nunca escolhe o init nem o shell"
     Expect $ml "echo depois-do-oom\s*\ndepois-do-oom" "o shell continua respondendo depois do OOM"
     Expect $ml "OomKills:\s+5\s*\n" "/proc/meminfo conta as 5 mortes por OOM"
-    Expect $ml "pilha do kernel: 16384 bytes por thread[^\n]*\nmaior uso: \d+ bytes \(([0-6]?\d|7[0-4])%\) em " "pilhas do kernel abaixo de 75% depois do OOM (8.6)"
+    Expect $ml "pilha do kernel: 32768 bytes por thread[^\n]*\nmaior uso: \d+ bytes \(([0-6]?\d|7[0-4])%\) em " "pilhas do kernel abaixo de 75% depois do OOM (8.6)"
     ExpectNot $ml "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|BUG: " "nenhum panico nem BUG na sequencia M"
+}
+
+# ---------------- Sequencia K: relatorio de estouro da pilha do kernel ----------------
+if ($runAll -or $OnlyK) {
+    Write-Host "== Sequencia K (estouro da pilha do kernel com o timer, como no hardware real) ==" -ForegroundColor Cyan
+    $stepsK = @("key:0B", "cmd:estouro", "wait:5")
+    & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -LogPath "out\reg-k.log" `
+        -Script $stepsK -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
+    $kl = Get-Log "out\reg-k.log"
+    if ($Verbose) { Write-Output $kl }
+
+    Expect $kl "estouro: uma thread nova desce a pilha ate sobrarem ~100 bytes e espera o timer" "a thread de teste desce a pilha do kernel"
+    Expect $kl "\*\*\* EXCECAO NAO TRATADA: #DF Double Fault \(vetor 8\) na CPU \d+ \*\*\*" "o estouro vira #DF tratado na pilha IST"
+    Expect $kl "thread tid=\d+ 'estouro' cpu=\d+, pilha [0-9a-f]+-[0-9a-f]+ \(RSP FORA DA PILHA\)" "o relatorio aponta a thread e o RSP fora da pilha"
+    Expect $kl ">>> ESTOURO DA PILHA DO KERNEL: o acesso caiu na pagina de guarda abaixo da pilha <<<" "o relatorio reconhece a pagina de guarda"
+    Expect $kl ">>> a pilha acabou ao entrar no vetor \d+ \([^)]+\) vindo de ring 0: RIP=ffffffff8[0-9a-f]+ RSP=[0-9a-f]+ ERR=[0-9a-f]+ <<<" "o relatorio acha o quadro da interrupcao que nao coube na pilha"
+    Expect $kl "interrupcoes por CPU: profundidade atual/maxima, ultimos 16 vetores[^\n]*\n\s+CPU0 prof \d+/\d+ vetores:( \d+){16} \| mais: \d+\([^)]+\)x\d+" "o relatorio mostra o anel de vetores, a profundidade e a IRQ mais frequente de cada CPU"
+    Expect $kl "cadeia pelo RBP \(do mais recente para o mais antigo\):\s*\n\s+ffffffff8[0-9a-f]+\s*\n\s+\(o endereco acima se repete mais \d{3,} vez\(es\)\)" "a cadeia pelo RBP mostra a recursao compactada"
+    Expect $kl "\d{3,} quadro\(s\) na cadeia" "a cadeia pelo RBP conta os quadros"
+    Expect $kl "Sistema travado\." "o relatorio termina"
 }
 
 # ---------------- Sequencia E: estresse de processos ----------------

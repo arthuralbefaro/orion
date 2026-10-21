@@ -4,6 +4,7 @@
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/interrupts.h>
 #include <boot/bootinfo.h>
+#include <drivers/acpi.h>
 #include <drivers/pci.h>
 #include <kernel/log.h>
 #include <kernel/mutex.h>
@@ -454,7 +455,17 @@ uacpi_status uacpi_kernel_install_interrupt_handler(uacpi_u32 irq, uacpi_interru
         s->irq = (uint8_t)irq;
         s->used = true;
         interrupts_register((uint8_t)(VECTOR_IRQ_BASE + irq), irq_trampoline, s);
-        irq_enable((uint8_t)irq);
+        uint32_t gsi = irq;
+        bool low = true, level = true;
+        if (!irq_enable_isa_as((uint8_t)irq, true, true, &gsi, &low, &level)) {
+            interrupts_unregister((uint8_t)(VECTOR_IRQ_BASE + irq));
+            s->used = false;
+            return UACPI_STATUS_INTERNAL_ERROR;
+        }
+        const struct acpi_madt_info *madt = acpi_madt();
+        bool override = madt && irq < 16 && madt->isa_overrides[irq].present;
+        log_info("acpi", "SCI na IRQ %u: GSI %u, %s, %s (%s)", irq, gsi, low ? "ativa em baixo" : "ativa em alto",
+                 level ? "nivel" : "borda", override ? "override da MADT" : "padrao da ACPI, sem override");
         *out_irq_handle = s;
         return UACPI_STATUS_OK;
     }

@@ -48,7 +48,7 @@ $Lld   = Find-Tool "ld.lld.exe" @("$env:ProgramFiles\LLVM\bin\ld.lld.exe")
 
 $CFlags = @(
     "--target=x86_64-unknown-none-elf", "-std=gnu11", "-O2", "-g", "-Wall", "-Wextra",
-    "-ffreestanding", "-nostdlibinc", "-fno-stack-protector", "-fno-stack-check", "-fno-lto",
+    "-ffreestanding", "-nostdlibinc", "-fno-stack-protector", "-fno-stack-check", "-fno-lto", "-fno-omit-frame-pointer",
     "-fno-pic", "-fno-pie", "-ffunction-sections", "-fdata-sections",
     "-m64", "-march=x86-64", "-mabi=sysv", "-mno-80387", "-mno-mmx", "-mno-sse", "-mno-sse2",
     "-mno-red-zone", "-mcmodel=kernel",

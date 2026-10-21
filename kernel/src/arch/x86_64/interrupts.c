@@ -3,6 +3,8 @@
 #include <arch/x86_64/cpu.h>
 #include <drivers/pic.h>
 #include <drivers/ioapic.h>
+#include <drivers/acpi.h>
+#include <drivers/serial.h>
 #include <arch/x86_64/lapic.h>
 #include <drivers/console.h>
 #include <lib/string.h>
@@ -10,6 +12,8 @@
 #include <kernel/sched.h>
 #include <kernel/process.h>
 #include <kernel/signal.h>
+#include <kernel/time.h>
+#include <mm/memory.h>
 #include <mm/vmm.h>
 #include <mm/heap.h>
 #include <mm/uaccess.h>
@@ -68,6 +72,8 @@ static struct handler_slot handlers[256];
 static uint64_t counters[256];
 static uint64_t cpu_counters[MAX_CPUS][256];
 static const char *names[256];
+static volatile bool storm_masked[256];
+static uint32_t storm_events;
 
 void interrupts_register(uint8_t vector, interrupt_handler_t handler, void *ctx)
 {
@@ -112,14 +118,18 @@ const char *interrupts_name(uint8_t vector)
 {
     if (names[vector])
         return names[vector];
+    if (vector < VECTOR_EXCEPTIONS_END)
+        return exception_name(vector);
     if (vector == VECTOR_LAPIC_TIMER)
         return "lapic-timer";
     if (vector >= VECTOR_IRQ_BASE && vector < VECTOR_IRQ_BASE + VECTOR_IRQ_COUNT)
         return "irq-isa";
     if (vector >= VECTOR_GSI_BASE && vector < VECTOR_GSI_BASE + VECTOR_GSI_COUNT)
         return "irq-gsi";
-    if (vector >= VECTOR_IPI_HALT && vector <= VECTOR_IPI_TLB_SYNC)
+    if (vector >= VECTOR_IPI_HALT && vector <= VECTOR_IPI_RESCHED)
         return "ipi";
+    if (vector == VECTOR_SPURIOUS)
+        return "espuria";
     return "-";
 }
 
@@ -153,12 +163,35 @@ enum irq_mode irq_get_mode(void)
 
 void irq_enable(uint8_t irq)
 {
+    storm_masked[VECTOR_IRQ_BASE + irq] = false;
     if (irq_mode == IRQ_MODE_IOAPIC) {
         ioapic_route_isa(irq, VECTOR_IRQ_BASE + irq, lapic_id());
         ioapic_set_mask_isa(irq, false);
     } else {
         pic_unmask(irq);
     }
+}
+
+bool irq_enable_isa_as(uint8_t irq, bool default_low, bool default_level, uint32_t *gsi, bool *low, bool *level)
+{
+    const struct acpi_madt_info *madt = acpi_madt();
+    *low = default_low;
+    *level = default_level;
+    *gsi = irq;
+    storm_masked[VECTOR_IRQ_BASE + irq] = false;
+    if (irq_mode != IRQ_MODE_IOAPIC) {
+        pic_unmask(irq);
+        return true;
+    }
+    if (madt && irq < 16 && madt->isa_overrides[irq].present) {
+        *low = madt->isa_overrides[irq].active_low;
+        *level = madt->isa_overrides[irq].level_triggered;
+    }
+    *gsi = ioapic_isa_to_gsi(irq);
+    if (!ioapic_route_gsi(*gsi, VECTOR_IRQ_BASE + irq, lapic_id(), *low, *level))
+        return false;
+    ioapic_set_mask_gsi(*gsi, false);
+    return true;
 }
 
 bool irq_attach_gsi(uint32_t gsi, bool active_low, bool level, interrupt_handler_t handler, void *ctx)
@@ -171,6 +204,7 @@ bool irq_attach_gsi(uint32_t gsi, bool active_low, bool level, interrupt_handler
         interrupts_unregister(vector);
         return false;
     }
+    storm_masked[vector] = false;
     ioapic_set_mask_gsi(gsi, false);
     return true;
 }
@@ -226,20 +260,133 @@ static bool is_text(uint64_t a)
     return a >= (uint64_t)__text_start && a < (uint64_t)__text_end;
 }
 
+static bool readable(uint64_t a)
+{
+    return vmm_virt_to_phys(a & ~(uint64_t)(PAGE_SIZE - 1)) != 0;
+}
+
+static void print_addr(uint64_t a, int *col)
+{
+    kprintf(*col == 0 ? "    %016lx" : " %016lx", a);
+    if (++*col == 4) {
+        kprintf("\n");
+        *col = 0;
+    }
+}
+
+static void end_row(int *col)
+{
+    if (*col)
+        kprintf("\n");
+    *col = 0;
+}
+
 static void backtrace(uint64_t rip, uint64_t rsp, uint64_t lo, uint64_t hi)
 {
-    kprintf("  pilha de chamadas (llvm-addr2line -f -e out\\orion.elf <endereco>):\n");
+    kprintf("  pilha de chamadas por varredura (llvm-addr2line -f -e out\\orion.elf <endereco>):\n");
+    int col = 0;
     if (is_text(rip))
-        kprintf("    %016lx\n", rip);
-    if (rsp < lo || rsp >= hi || (rsp & 7))
-        return;
-    int shown = 0;
-    for (uint64_t *p = (uint64_t *)rsp; (uint64_t)p < hi && shown < 16; p++) {
-        if (is_text(*p)) {
-            kprintf("    %016lx\n", *p);
-            shown++;
+        print_addr(rip, &col);
+    if (rsp < lo) {
+        end_row(&col);
+        kprintf("    (RSP abaixo da pilha: varrendo a partir do fundo %016lx)\n", lo);
+        rsp = lo;
+    }
+    if (rsp < hi && !(rsp & 7)) {
+        int shown = 0;
+        for (uint64_t *p = (uint64_t *)rsp; (uint64_t)p < hi && shown < 32; p++) {
+            if (is_text(*p)) {
+                print_addr(*p, &col);
+                shown++;
+            }
         }
     }
+    end_row(&col);
+}
+
+static void frame_walk(uint64_t rbp, uint64_t lo, uint64_t hi)
+{
+    kprintf("  cadeia pelo RBP (do mais recente para o mais antigo):\n");
+    int col = 0;
+    uint32_t frames = 0, shown = 0;
+    uint64_t last = 0;
+    uint32_t repeats = 0;
+    while (frames < 4096 && rbp >= lo && rbp + 16 <= hi && !(rbp & 7) && readable(rbp)) {
+        const uint64_t *w = (const uint64_t *)rbp;
+        uint64_t ret = w[1];
+        if (!is_text(ret))
+            break;
+        frames++;
+        if (ret == last) {
+            repeats++;
+        } else {
+            if (repeats) {
+                end_row(&col);
+                kprintf("      (o endereco acima se repete mais %u vez(es))\n", repeats);
+            }
+            repeats = 0;
+            if (shown < 40)
+                print_addr(ret, &col);
+            shown++;
+            last = ret;
+        }
+        if (w[0] <= rbp)
+            break;
+        rbp = w[0];
+    }
+    end_row(&col);
+    if (repeats)
+        kprintf("      (o endereco acima se repete mais %u vez(es))\n", repeats);
+    kprintf("    %u quadro(s) na cadeia%s\n", frames, shown > 40 ? " (so os 40 primeiros enderecos distintos)" : "");
+}
+
+static void overflow_frame(uint64_t rsp, uint64_t base)
+{
+    uint64_t lo = rsp & ~7ull;
+    uint64_t hi = base + 0x100;
+    for (uint64_t a = lo; a + 0x38 <= hi; a += 8) {
+        if (!readable(a) || !readable(a + 0x30))
+            continue;
+        const uint64_t *w = (const uint64_t *)a;
+        uint64_t vec = w[0], err = w[1], rip = w[2], cs = w[3], rflags = w[4], frame_rsp = w[5];
+        if (vec >= 256 || !(rflags & 2) || (rflags >> 22))
+            continue;
+        if (cs == GDT_KERNEL_CODE) {
+            if (!is_text(rip) || (frame_rsp & ~0xFull) != a + 0x38)
+                continue;
+        } else if ((cs & 3) == 3) {
+            if (rip >= USER_ADDR_MAX || frame_rsp >= USER_ADDR_MAX)
+                continue;
+        } else {
+            continue;
+        }
+        kprintf("  >>> a pilha acabou ao entrar no vetor %lu (%s) vindo de %s: RIP=%016lx RSP=%016lx ERR=%016lx <<<\n",
+                vec, interrupts_name((uint8_t)vec), cs == GDT_KERNEL_CODE ? "ring 0" : "ring 3", rip,
+                frame_rsp, err);
+        if (cs == GDT_KERNEL_CODE && vec == EXC_PAGE_FAULT)
+            kprintf("      (um #PF em ring 0 com o RSP no fim da pilha: a cadeia de chamadas abaixo e a causa)\n");
+        return;
+    }
+}
+
+void interrupts_dump_cpu_state(uint32_t cpu)
+{
+    struct percpu *c = percpu_by_index(cpu);
+    if (!c || !c->online)
+        return;
+    kprintf("  CPU%u prof %u/%u%s vetores:", c->cpu_id, c->irq_depth, c->irq_depth_max, c->in_nmi ? " NMI" : "");
+    for (uint32_t i = 0; i < IRQ_RING; i++)
+        kprintf(" %u", c->irq_ring[(c->irq_ring_pos + i) % IRQ_RING]);
+    kprintf(" | mais: %u(%s)x%u, antes %u(%s)x%u\n", c->irq_top_vector, interrupts_name(c->irq_top_vector),
+            c->irq_top_count, c->irq_last_top_vector, interrupts_name(c->irq_last_top_vector), c->irq_last_top_count);
+}
+
+void interrupts_dump_cpus(void)
+{
+    kprintf("  interrupcoes por CPU: profundidade atual/maxima, ultimos 16 vetores, o mais disparado neste segundo "
+            "e no anterior; tempestades mascaradas: %u\n", storm_events);
+    for (uint32_t i = 0; i < percpu_count(); i++)
+        interrupts_dump_cpu_state(i);
 }
 
 void interrupts_backtrace_here(void)
@@ -247,8 +394,8 @@ void interrupts_backtrace_here(void)
     struct thread *t = percpu_ready() ? thread_current() : NULL;
     if (!t || !t->stack)
         return;
-    uint64_t rsp;
-    __asm__ volatile("movq %%rsp, %0" : "=r"(rsp));
+    uint64_t rsp = (uint64_t)__builtin_frame_address(0);
+    frame_walk(rsp, (uint64_t)t->stack, (uint64_t)t->stack + t->stack_size);
     backtrace(0, rsp & ~7ull, (uint64_t)t->stack, (uint64_t)t->stack + t->stack_size);
 }
 
@@ -276,10 +423,17 @@ void interrupts_dump(const struct interrupt_frame *f)
             : (f->rsp >= base && f->rsp < top) ? "rsp dentro" : "RSP FORA DA PILHA");
     if (t->process)
         kprintf("  processo pid=%u '%s'\n", t->process->pid, t->process->name);
-    if (t->stack && (heap_in_guard(t->stack, read_cr2()) || heap_in_guard(t->stack, f->rsp)))
+    bool overflow = t->stack && (heap_in_guard(t->stack, read_cr2()) || heap_in_guard(t->stack, f->rsp));
+    if (overflow) {
         kprintf("  >>> ESTOURO DA PILHA DO KERNEL: o acesso caiu na pagina de guarda abaixo da pilha <<<\n");
-    if ((f->cs & 3) == 0 && t->stack)
+        if (f->rsp < base)
+            overflow_frame(f->rsp, base);
+    }
+    interrupts_dump_cpus();
+    if ((f->cs & 3) == 0 && t->stack) {
+        frame_walk(f->rbp, base - 0x100, top);
         backtrace(f->rip, f->rsp, base, top);
+    }
 }
 
 static void handle_exception(struct interrupt_frame *f)
@@ -387,6 +541,89 @@ static void after_interrupt(struct percpu *pc)
     sched_check_preempt();
 }
 
+static bool maskable(uint8_t vec)
+{
+    if (vec < VECTOR_EXCEPTIONS_END || vec == VECTOR_LAPIC_TIMER || vec == VECTOR_SPURIOUS)
+        return false;
+    if (vec >= VECTOR_IPI_HALT && vec <= VECTOR_IPI_RESCHED)
+        return false;
+    return true;
+}
+
+static void storm_mask(uint8_t vec, struct percpu *pc, uint32_t count)
+{
+    storm_masked[vec] = true;
+    storm_events++;
+    const char *how;
+    if (vec >= VECTOR_IRQ_BASE && vec < VECTOR_IRQ_BASE + VECTOR_IRQ_COUNT) {
+        irq_disable((uint8_t)(vec - VECTOR_IRQ_BASE));
+        how = "IRQ mascarada no controlador";
+    } else if (vec >= VECTOR_GSI_BASE && vec < VECTOR_GSI_BASE + VECTOR_GSI_COUNT) {
+        ioapic_set_mask_gsi(VECTOR_IRQ_COUNT + (uint32_t)(vec - VECTOR_GSI_BASE), true);
+        how = "GSI mascarada no I/O APIC";
+    } else {
+        how = "vetor em quarentena (o handler nao roda mais, so o EOI)";
+    }
+    log_error("irq", "tempestade de interrupcao: vetor %u (%s) disparou %u vezes em menos de 1 s na CPU %u; %s",
+              vec, interrupts_name(vec), count, pc->cpu_id, how);
+}
+
+static bool note_vector(struct percpu *pc, uint8_t vec)
+{
+    pc->irq_ring[pc->irq_ring_pos] = vec;
+    pc->irq_ring_pos = (uint8_t)((pc->irq_ring_pos + 1) % IRQ_RING);
+    uint64_t epoch = time_ticks() / TIME_TICK_HZ;
+    if (epoch != pc->irq_rate_epoch) {
+        pc->irq_last_top_vector = pc->irq_top_vector;
+        pc->irq_last_top_count = pc->irq_top_count;
+        pc->irq_top_vector = 0;
+        pc->irq_top_count = 0;
+        memset(pc->irq_rate, 0, sizeof(pc->irq_rate));
+        pc->irq_rate_epoch = epoch;
+    }
+    uint32_t n = ++pc->irq_rate[vec];
+    if (n > pc->irq_top_count) {
+        pc->irq_top_count = n;
+        pc->irq_top_vector = vec;
+    }
+    if (storm_masked[vec])
+        return true;
+    if (n > IRQ_STORM_LIMIT && maskable(vec)) {
+        storm_mask(vec, pc, n);
+        return true;
+    }
+    return false;
+}
+
+void interrupts_check_entry(const struct interrupt_frame *f, const char *how)
+{
+    struct thread *t = thread_current();
+    uint64_t end = (uint64_t)(f + 1);
+    if (!t || !t->stack || end == t->kernel_stack_top)
+        return;
+    struct percpu *pc = percpu_get();
+    panic("entrada do anel 3 (%s, vetor %lu) com a pilha errada na CPU %u: quadro termina em %016lx, topo da pilha da "
+          "thread '%s' (tid %u) e %016lx (pilha %016lx-%016lx); rsp0 do TSS %016lx, kernel_rsp da CPU %016lx; RIP do "
+          "usuario %016lx",
+          how, f->int_no, pc->cpu_id, end, t->name, t->tid, t->kernel_stack_top, (uint64_t)t->stack,
+          (uint64_t)t->stack + t->stack_size, gdt_kernel_stack(), pc->kernel_rsp, f->rip);
+}
+
+bool interrupts_storm_masked(uint8_t vector)
+{
+    return storm_masked[vector];
+}
+
+void interrupts_storm_clear(uint8_t vector)
+{
+    storm_masked[vector] = false;
+}
+
+uint32_t interrupts_storm_events(void)
+{
+    return storm_events;
+}
+
 void isr_dispatch(struct interrupt_frame *frame)
 {
     uint8_t vec = (uint8_t)frame->int_no;
@@ -396,6 +633,9 @@ void isr_dispatch(struct interrupt_frame *frame)
         cpu_counters[pc->cpu_id % MAX_CPUS][vec]++;
     uint8_t saved_vec = 0;
     bool saved_nmi = false;
+    bool quiet = false;
+    if (pc && (frame->cs & 3) == 3 && vec != EXC_NMI && vec != EXC_DOUBLE_FAULT)
+        interrupts_check_entry(frame, "interrupcao");
 
     if (vec < VECTOR_EXCEPTIONS_END) {
         if (vec == EXC_NMI) {
@@ -407,10 +647,15 @@ void isr_dispatch(struct interrupt_frame *frame)
                 irqctx_leave(pc, saved_vec, saved_nmi);
             return;
         }
+        if (pc)
+            note_vector(pc, vec);
         handle_exception(frame);
         signal_check(frame);
         return;
     }
+
+    if (pc)
+        quiet = note_vector(pc, vec);
 
     if (vec >= VECTOR_IRQ_BASE && vec < VECTOR_IRQ_BASE + VECTOR_IRQ_COUNT) {
         uint8_t irq = vec - VECTOR_IRQ_BASE;
@@ -420,10 +665,12 @@ void isr_dispatch(struct interrupt_frame *frame)
 
         if (pc)
             irqctx_enter(pc, vec, false, &saved_vec, &saved_nmi);
-        if (handlers[vec].fn)
+        if (quiet)
+            ;
+        else if (handlers[vec].fn)
             handlers[vec].fn(frame, handlers[vec].ctx);
         else
-            log_warn("irq", "IRQ %u sem handler (vetor %u)", irq, vec);
+            log_warn_limited("irq", "IRQ %u sem handler (vetor %u)", irq, vec);
 
         if (irq_mode == IRQ_MODE_IOAPIC)
             lapic_eoi();
@@ -441,16 +688,68 @@ void isr_dispatch(struct interrupt_frame *frame)
 
     if (pc)
         irqctx_enter(pc, vec, false, &saved_vec, &saved_nmi);
-    if (handlers[vec].fn)
+    if (quiet)
+        ;
+    else if (handlers[vec].fn)
         handlers[vec].fn(frame, handlers[vec].ctx);
     else
-        log_warn("int", "vetor %u sem handler", vec);
+        log_warn_limited("int", "vetor %u sem handler", vec);
 
     lapic_eoi();
     if (pc)
         irqctx_leave(pc, saved_vec, saved_nmi);
     after_interrupt(pc);
     signal_check(frame);
+}
+
+static volatile uint64_t storm_test_fires;
+static int storm_test_vector = -1;
+
+static void storm_test_handler(struct interrupt_frame *f, void *ctx)
+{
+    (void)f;
+    (void)ctx;
+    storm_test_fires++;
+    lapic_send_ipi(lapic_id(), (uint8_t)storm_test_vector);
+}
+
+int interrupts_storm_selftest(void)
+{
+    if (!irqctx_strict())
+        return -EPERM;
+    int vector = interrupts_alloc_vector(storm_test_handler, NULL, "irqstorm");
+    if (vector < 0)
+        return -1;
+    storm_test_vector = vector;
+    storm_test_fires = 0;
+    uint32_t before = storm_events;
+    uint64_t t0 = time_now_us();
+    lapic_send_ipi(lapic_id(), (uint8_t)vector);
+    uint64_t end = t0 + 3000000;
+    while (!storm_masked[vector] && time_now_us() < end)
+        pause();
+    uint64_t edge_ms = (time_now_us() - t0) / 1000;
+    bool edge_masked = storm_masked[vector];
+    uint64_t edge_fires = storm_test_fires;
+    time_sleep_ms(20);
+    bool edge_quiet = storm_test_fires == edge_fires;
+    interrupts_unregister((uint8_t)vector);
+    names[vector] = NULL;
+    storm_masked[vector] = false;
+    storm_test_vector = -1;
+    bool edge_ok = edge_masked && edge_fires >= IRQ_STORM_LIMIT && edge_quiet && storm_events == before + 1;
+    log_info("irq", "irqstorm: borda: vetor %d em laco de auto-IPI: %lu disparos ate a quarentena em %lu ms; "
+             "handler calado depois: %s", vector, edge_fires, edge_ms, edge_quiet ? "sim" : "nao");
+
+    uint64_t level_fires = 0, level_ms = 0;
+    int level = serial_storm_test(&level_fires, &level_ms);
+    if (level == -ENODEV) {
+        log_info("irq", "irqstorm: nivel: sem COM1 no I/O APIC, caso de nivel pulado");
+    } else {
+        log_info("irq", "irqstorm: nivel: COM1 com THRE sem tratamento: %lu disparos ate a mascara em %lu ms; "
+                 "IRQ religada e serial de volta: %s", level_fires, level_ms, level == 0 ? "sim" : "nao");
+    }
+    return edge_ok && level <= 0 ? 0 : -EIO;
 }
 
 void idt_init(void)
@@ -469,8 +768,9 @@ void idt_init(void)
     idt_set_gate(EXC_NMI, ISR_STUB(EXC_NMI), 0, GDT_IST_NMI);
 
     idt_load();
-    log_info("idt", "IDT carregada: 256 vetores em %p; #DF e NMI em pilhas de emergencia",
-             (void *)idt);
+    log_info("idt", "IDT carregada: 256 vetores em %p; #DF e NMI em pilhas de emergencia; limite de %u "
+             "interrupcoes aninhadas e tempestade a partir de %u disparos/s",
+             (void *)idt, IRQ_NEST_LIMIT, IRQ_STORM_LIMIT);
 }
 
 void idt_load(void)

@@ -2098,6 +2098,7 @@ static long sys_sigaltstack(const struct user_stack_t *uss, struct user_stack_t 
 
 bool syscall_dispatch(struct interrupt_frame *f)
 {
+    interrupts_check_entry(f, "syscall");
     sti();
     long ret;
     bool full_restore = false;

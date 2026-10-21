@@ -3,6 +3,7 @@
 #include <kernel/compiler.h>
 
 #define MAX_CPUS 64
+#define IRQ_RING 16
 
 struct thread;
 struct tss;
@@ -44,6 +45,14 @@ struct percpu {
     uint64_t balance_moves;
     uint64_t resched_ipis;
     uint64_t preempt_unlock;
+    uint8_t irq_ring[IRQ_RING];
+    uint8_t irq_ring_pos;
+    uint8_t irq_top_vector;
+    uint8_t irq_last_top_vector;
+    uint32_t irq_top_count;
+    uint32_t irq_last_top_count;
+    uint64_t irq_rate_epoch;
+    uint32_t irq_rate[256];
 };
 
 void percpu_init_bsp(uint32_t lapic_id);

@@ -60,5 +60,17 @@ uint32_t irq_next_cpu(void);
 
 const char *exception_name(uint8_t vector);
 
+#define IRQ_NEST_LIMIT  8
+#define IRQ_STORM_LIMIT 32768
+
+bool irq_enable_isa_as(uint8_t irq, bool default_low, bool default_level, uint32_t *gsi, bool *low, bool *level);
+bool interrupts_storm_masked(uint8_t vector);
+void interrupts_storm_clear(uint8_t vector);
+uint32_t interrupts_storm_events(void);
+int interrupts_storm_selftest(void);
+
+void interrupts_check_entry(const struct interrupt_frame *f, const char *how);
 void interrupts_dump(const struct interrupt_frame *f);
+void interrupts_dump_cpu_state(uint32_t cpu);
+void interrupts_dump_cpus(void);
 void interrupts_backtrace_here(void);

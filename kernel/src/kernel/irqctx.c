@@ -33,6 +33,10 @@ void irqctx_enter(struct percpu *p, uint8_t vector, bool nmi, uint8_t *saved_vec
     *saved_vector = p->irq_vector;
     *saved_nmi = p->in_nmi;
     p->irq_depth++;
+    if (p->irq_depth > IRQ_NEST_LIMIT)
+        panic("interrupcao aninhada %u vezes na CPU %u (limite %u): vetor %u (%s) chegou dentro do vetor %u (%s)",
+              p->irq_depth, p->cpu_id, IRQ_NEST_LIMIT, vector, interrupts_name(vector), *saved_vector,
+              interrupts_name(*saved_vector));
     if (p->irq_depth > p->irq_depth_max)
         p->irq_depth_max = p->irq_depth;
     p->irq_vector = vector;

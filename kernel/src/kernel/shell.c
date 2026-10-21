@@ -173,8 +173,9 @@ static void cmd_irq(const char *args)
         kprintf("  %5d ", v);
         for (uint32_t c = 0; c < cpus; c++)
             kprintf(" %8lu", interrupts_count_cpu((uint8_t)v, c));
-        kprintf("  %s\n", interrupts_name((uint8_t)v));
+        kprintf("  %s%s\n", interrupts_name((uint8_t)v), interrupts_storm_masked((uint8_t)v) ? " [mascarado]" : "");
     }
+    interrupts_dump_cpus();
 }
 
 static void cmd_fb(const char *args)
@@ -593,6 +594,54 @@ static void cmd_irqtest(const char *args)
         kprintf("irqtest: falhou (codigo %d)\n", r);
 }
 
+static volatile uint32_t dive_limit = 1u << 20;
+
+static __attribute__((noinline)) uint32_t stack_dive(uint32_t n, uint64_t floor)
+{
+    volatile uint8_t pad[48];
+    uint64_t rsp;
+    __asm__ volatile("movq %%rsp, %0" : "=r"(rsp));
+    pad[0] = (uint8_t)n;
+    if (rsp < floor || n >= dive_limit) {
+        while (dive_limit)
+            pause();
+        return n;
+    }
+    return stack_dive(n + 1, floor) + pad[0];
+}
+
+static void dive_thread(void *arg)
+{
+    (void)arg;
+    struct thread *t = thread_current();
+    stack_dive(0, (uint64_t)t->stack + 128);
+}
+
+static void cmd_estouro(const char *args)
+{
+    (void)args;
+    if (!irqctx_strict()) {
+        kprintf("estouro: EPERM, so no modo de teste (QEMU com fw_cfg opt/orion/strict)\n");
+        return;
+    }
+    kprintf("estouro: uma thread nova desce a pilha ate sobrarem ~100 bytes e espera o timer\n");
+    time_sleep_ms(200);
+    if (!thread_create("estouro", dive_thread, NULL))
+        kprintf("estouro: thread nao criada\n");
+}
+
+static void cmd_irqstorm(const char *args)
+{
+    (void)args;
+    int r = interrupts_storm_selftest();
+    if (r == 0)
+        kprintf("irqstorm: tempestades viram aviso e mascara, sem #DF\n");
+    else if (r == -EPERM)
+        kprintf("irqstorm: EPERM, so no modo de teste (QEMU com fw_cfg opt/orion/strict)\n");
+    else
+        kprintf("irqstorm: falhou (codigo %d)\n", r);
+}
+
 static void cmd_kmfail(const char *args)
 {
     while (*args == ' ')
@@ -731,6 +780,8 @@ static const struct command commands[] = {
     { "hdatone", "toca um tom no canal esquerdo: hdatone [ms] [Hz]", cmd_hdatone },
     { "usbtimeout", "cala a campainha de uma transferencia do pendrive (teste)", cmd_usbtimeout },
     { "irqtest", "testa o aviso de kmalloc e espera dentro de interrupcao", cmd_irqtest },
+    { "irqstorm", "provoca tempestades de IRQ (borda e nivel) e confere a mascara (teste)", cmd_irqstorm },
+    { "estouro", "estoura a pilha do kernel com o timer, como no hardware real (teste)", cmd_estouro },
     { "kmfail", "faz 1 em N kmalloc de usuario comum falhar (modo de teste)", cmd_kmfail },
     { "arp",    "cache ARP",                            cmd_arp },
     { "ifconfig", "configura a rede a mao",             cmd_ifconfig },
