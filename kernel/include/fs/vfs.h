@@ -192,3 +192,5 @@ bool vfs_mount_extra(void);
 const char *vfs_mnt_device(void);
 void vfs_mounts_foreach(void (*cb)(const struct mount *m, void *ctx), void *ctx);
 int vfs_mount_kernel(const char *type, struct blockdev *dev, const char *source, const char *point);
+int vfs_mount_kernel_flags(const char *type, struct blockdev *dev, const char *source, const char *point,
+                           uint32_t flags);

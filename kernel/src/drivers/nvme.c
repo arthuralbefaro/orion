@@ -382,6 +382,7 @@ bool nvme_init(void)
     struct blockdev *dev = blockdev_register("nvme0n1", 512, sectors, nvme_read, nvme_write, NULL);
     if (!dev)
         return false;
+    strlcpy(dev->model, model, sizeof(dev->model));
     log_info("nvme", "nvme0n1: %04x:%04x em %02x:%02x.%u, '%s', versao %u.%u, fila de %u, %lu setores (%lu MiB), %s",
              pci->vendor, pci->device, pci->bus, pci->slot, pci->func, model, rd32(0x08) >> 16,
              (rd32(0x08) >> 8) & 0xFF, io_size, sectors, sectors * 512 / MiB(1), how);

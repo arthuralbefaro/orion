@@ -195,6 +195,8 @@ void usb_disk_add(uint32_t index, uint64_t blocks, const uint8_t *name, size_t l
     if (!dev)
         return;
     dev->release = msc_release;
+    dev->removable = true;
+    ksnprintf(dev->model, sizeof(dev->model), "%.*s", (int)len, (const char *)name);
     d->dev = dev;
     d->used = true;
     ksnprintf(d->name, sizeof(d->name), "%s", dev_name);

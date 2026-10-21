@@ -2205,3 +2205,34 @@ fase. Tag `v3.0-rc2` (a `v3.0` espera a 7.4).
 Ponto de partida (21:40): a arvore batia com o "Como retomar" (8.7 e 2.7
 parte 1 sem commit, mais nada). `.\check.ps1` limpo. Primeiro trabalho:
 validar no QEMU e commitar a 8.7 e a 2.7 parte 1 (entradas acima).
+
+### Sessao 4 - 2026-10-21 - resultado do primeiro teste em hardware real (7.4)
+
+Ponto de partida (19:05): HEAD `67195c3`, tag `v3.0-rc2`, arvore limpa,
+`check.ps1` limpo. O dono testou a ISO de 20/10 22:47 (mesmo codigo do
+HEAD, gerada durante a regressao da 8.8) no notebook ASUS Vivobook (AMD
+Ryzen, Windows no NVMe): tudo subiu ate `init iniciado` e caiu em `#DF` na
+CPU 1 com estouro da pilha do kernel da thread `init`. Resultado completo
+em `docs/hardware.md`. Antes de qualquer diagnostico, o dono pediu a
+seguranca do disco interno (a ESP do Windows tinha sido montada com
+escrita).
+
+#### 7.4 parte 1 - seguranca: modo live nao toca no disco interno; instalador lista, avisa e exige o nome do disco - 19:10 a 19:50 - FEITO
+`vfs_mount_extra` no modo live (raiz em memoria) so monta dispositivo
+removivel e somente leitura, e diz no log qual disco interno pulou;
+`struct blockdev` com `removable` e `model` (USB, NVMe, AHCI, virtio-blk);
+`/proc/blockdevs` (novo) com nome, setores, pai, tipo, removivel, GUID do
+tipo e modelo. `instalar` sem argumento lista os discos com modelo, tamanho
+e particoes, reconhece NTFS, exFAT, ESP com `\EFI\Microsoft` (monta somente
+leitura e olha), reservada e recuperacao do Windows, raiz e dados Linux e
+os tipos MBR comuns; disco com qualquer uma delas e marcado `*** TEM OUTRO
+SISTEMA: nao use ***`, nunca entra em "Destinos sem outro sistema", o
+`--sim` e recusado nele e so `apagar <nome>` segue; disco limpo exige o
+nome dele em vez de `SIM`. `docs/teste-hardware-real.md` ganhou o aviso em
+destaque: maquina com outro sistema, so o modo live. Detalhes:
+`docs/DECISOES.md`, v3.0.0-a11 parte 1.
+Verificacao: sequencia I (33 verificacoes, 7,3 min) verde, com 5
+verificacoes novas (listagem, nome do disco, disco com a raiz do Orion
+marcado e `--sim` recusado, `apagar nvme0n1` exigido, lista sem destino
+depois da instalacao); sequencias C (disco, `/mnt` no sistema instalado
+continua igual) e F (ISO live) verdes. RAM livre antes: 5,8 GB e 7,0 GB.

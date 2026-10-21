@@ -186,6 +186,7 @@ static bool open_disk(struct vblk *d, const struct pci_device *pci)
     struct blockdev *dev = blockdev_register(name, 512, d->sectors, vblk_read, vblk_write, d);
     if (!dev)
         return false;
+    strlcpy(dev->model, "virtio-blk", sizeof(dev->model));
     log_info("virtio", "%s: virtio-blk %04x:%04x em %02x:%02x.%u, fila de %u, %lu setores (%lu MiB), %s", name,
              pci->vendor, pci->device, pci->bus, pci->slot, pci->func, d->q.size, d->sectors,
              d->sectors * 512 / MiB(1), how);

@@ -1498,7 +1498,8 @@ void vfs_flush_init(void)
     log_info("vfs", "bdflush: descarrega o cache a cada 2 s");
 }
 
-int vfs_mount_kernel(const char *type, struct blockdev *dev, const char *source, const char *point)
+int vfs_mount_kernel_flags(const char *type, struct blockdev *dev, const char *source, const char *point,
+                           uint32_t flags)
 {
     const struct fs_type *t = vfs_find_type(type);
     if (!t)
@@ -1509,9 +1510,14 @@ int vfs_mount_kernel(const char *type, struct blockdev *dev, const char *source,
         r = vfs_walk(NULL, point, &target);
     if (r < 0)
         return r;
-    r = vfs_mount(t, dev, source, target, point, 0, NULL);
+    r = vfs_mount(t, dev, source, target, point, flags, NULL);
     vnode_put(target);
     return r;
+}
+
+int vfs_mount_kernel(const char *type, struct blockdev *dev, const char *source, const char *point)
+{
+    return vfs_mount_kernel_flags(type, dev, source, point, 0);
 }
 
 void vfs_mounts_foreach(void (*cb)(const struct mount *m, void *ctx), void *ctx)
@@ -1538,22 +1544,33 @@ bool vfs_mount_extra(void)
     if (vfs_mnt_device())
         return true;
     struct blockdev *root_dev = root_mount ? root_mount->dev : NULL;
+    bool live = root_dev == NULL;
+    const struct blockdev *skipped = NULL;
     for (uint32_t i = 0; i < blockdev_count(); i++) {
         struct blockdev *dev = blockdev_at(i);
         if (!dev || dev == root_dev || (root_dev && dev == root_dev->parent))
             continue;
         if (root_dev && dev->parent && dev->parent == root_dev->parent)
             continue;
+        const struct blockdev *base = dev;
+        while (base->parent)
+            base = base->parent;
+        if (live && !base->removable) {
+            if (base != skipped)
+                log_info("vfs", "modo live: disco interno %s nao e montado sozinho (use mount -r)", base->name);
+            skipped = base;
+            continue;
+        }
         char src[VFS_SOURCE_MAX];
         ksnprintf(src, sizeof(src), "/dev/%s", dev->name);
-        if (vfs_mount_kernel("vfat", dev, src, "/mnt") == 0) {
+        if (vfs_mount_kernel_flags("vfat", dev, src, "/mnt", live ? MNT_RDONLY : 0) == 0) {
             const char *sub = "-";
             mutex_lock(&mount_lock);
             for (struct mount *m = mounts; m; m = m->next)
                 if (m->dev == dev)
                     sub = m->subtype;
             mutex_unlock(&mount_lock);
-            log_info("vfs", "/mnt montado: %s em %s", sub, dev->name);
+            log_info("vfs", "/mnt montado: %s em %s%s", sub, dev->name, live ? " (somente leitura, modo live)" : "");
             return true;
         }
     }

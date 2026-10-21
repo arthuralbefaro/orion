@@ -38,6 +38,7 @@ enum pkind {
     P_USB,
     P_SCHED,
     P_STACKS,
+    P_BLOCKDEVS,
     P_PIDDIR = 16,
     P_STATUS,
     P_CMDLINE,
@@ -59,6 +60,7 @@ static const struct pent root_ents[] = {
     { "interrupts", P_INTERRUPTS }, { "usb", P_USB },
     { "sched", P_SCHED },
     { "stacks", P_STACKS },
+    { "blockdevs", P_BLOCKDEVS },
 };
 
 static const struct pent pid_ents[] = {
@@ -418,6 +420,41 @@ static void gen_diskstats(struct pbuf *b)
     }
 }
 
+static const char *blockdev_kind(const struct blockdev *d)
+{
+    if (!d->parent)
+        return "disco";
+    switch (d->part_kind) {
+    case PART_ESP: return "esp";
+    case PART_ROOT: return "raiz";
+    case PART_DATA: return "dados";
+    default: return "outra";
+    }
+}
+
+static void gen_blockdevs(struct pbuf *b)
+{
+    for (uint32_t i = 0; i < blockdev_count(); i++) {
+        struct blockdev *d = blockdev_at(i);
+        if (!d || blockdev_is_gone(d))
+            continue;
+        const struct blockdev *base = d;
+        while (base->parent)
+            base = base->parent;
+        pb_printf(b, "%s %lu %s %s %u ", d->name, d->sector_count * d->sector_size / 512, d->parent ? d->parent->name : "-",
+                  blockdev_kind(d), base->removable ? 1 : 0);
+        if (d->parent && d->part_type == PART_GPT) {
+            for (int k = 0; k < 16; k++)
+                pb_printf(b, "%02x", d->type_guid[k]);
+        } else if (d->parent) {
+            pb_printf(b, "mbr%02x", d->part_type);
+        } else {
+            pb_printf(b, "-");
+        }
+        pb_printf(b, " %s\n", base->model[0] ? base->model : "-");
+    }
+}
+
 static void stat_line(struct pbuf *b, const char *name, uint64_t user, uint64_t sys, uint64_t idle)
 {
     uint64_t div = TIME_TICK_HZ / 100;
@@ -688,6 +725,7 @@ static int proc_open(struct vnode *v, int flags, struct file **out)
     case P_USB: gen_usb(&b); break;
     case P_SCHED: gen_sched(&b); break;
     case P_STACKS: gen_stacks(&b); break;
+    case P_BLOCKDEVS: gen_blockdevs(&b); break;
     case P_STATUS:  gen_status(&b, p); break;
     case P_STAT:    gen_stat(&b, p); break;
     case P_CMDLINE: gen_cmdline(&b, p); break;

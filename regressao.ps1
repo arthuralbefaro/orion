@@ -1013,8 +1013,12 @@ if ($runAll -or $OnlyI) {
     }
     New-BlankImage "out\inst.img" 512
     $stepsI = @(
-        "cmd:instalar /dev/nvme0n1", "until:10:Digite SIM", "raw:nao", "key:0D", "until:10:cancelado",
+        "cmd:instalar", "wait:2",
+        "cmd:instalar /dev/nvme0n1", "until:10:Digite o nome do disco", "raw:nao", "key:0D", "until:10:cancelado",
         "cmd:instalar /dev/nvme0n1p1 --sim", "cmd:instalar /dev/nvme0n1 --sim", "until:600:instalar: tire a ISO", "wait:2",
+        "cmd:instalar /dev/nvme0n1 --sim", "wait:3",
+        "cmd:instalar /dev/nvme0n1", "until:10:digite exatamente: apagar nvme0n1", "raw:nvme0n1", "key:0D", "until:10:cancelado",
+        "cmd:instalar", "wait:2",
         "reboot:uefi,nenhuma",
         "cmd:mount", "cmd:ls /boot/efi/boot", "cmd:hello instalado", "cmd:ls -l /etc/shadow /bin/su /home",
         "cmd:echo persiste-no-disco > /root/nota.txt", "cmd:sync", "wait:2",
@@ -1032,7 +1036,11 @@ if ($runAll -or $OnlyI) {
     $ins = Get-Log "out\reg-i.log"
     if ($Verbose) { Write-Output $ins }
 
-    Expect $ins "instalar /dev/nvme0n1\s*\nIsto apaga TODO o disco /dev/nvme0n1 \(512 MiB\)\. Digite SIM para continuar: [^\n]*\n[^\n]*instalar: cancelado" "sem SIM o instalador nao mexe no disco"
+    Expect $ins "Discos encontrados:\s*\n\s*nvme0n1\s+512 MiB\s+QEMU NVMe Ctrl\s+interno\s*\n\s*\(sem particao reconhecida\)\s*\n\s*Destinos sem outro sistema: /dev/nvme0n1" "instalar sem argumento lista o disco com modelo, tamanho e particoes"
+    Expect $ins "(?s)instalar /dev/nvme0n1\s*\nDisco escolhido:.{0,200}?Isto apaga TODO o disco nvme0n1 \(512 MiB\)\. Digite o nome do disco \(nvme0n1\) para continuar: [^\n]*\n[^\n]*instalar: cancelado" "sem o nome do disco o instalador nao mexe nele"
+    Expect $ins "(?s)instalar: tire a ISO.*?nvme0n1\s+512 MiB\s+QEMU NVMe Ctrl\s+interno\s+\*\*\* TEM OUTRO SISTEMA: nao use \*\*\*\s*\n\s*nvme0n1p1\s+64 MiB\s+ESP sem outro carregador\s*\n\s*nvme0n1p2\s+\d+ MiB\s+raiz Linux x86-64 \(Orion ou outro Linux instalado\)\s+<<<\s*\n.{0,200}?instalar: nvme0n1 tem outro sistema; --sim nao vale aqui" "disco com outro sistema: marcado na lista e --sim recusado"
+    Expect $ins "(?s)digite exatamente: apagar nvme0n1\s*\n> [^\n]*\n[^\n]*instalar: cancelado" "disco com outro sistema: so o nome nao basta, exige 'apagar nvme0n1'"
+    Expect $ins "(?s)apagar nvme0n1.*?Destinos sem outro sistema: nenhum\." "depois da instalacao a lista nao oferece o disco por padrao"
     Expect $ins "instalar: /dev/nvme0n1p1 parece uma particao; use o disco inteiro" "o instalador recusa uma particao"
     Expect $ins "instalar: /dev/nvme0n1, 512 MiB: GPT com particao EFI de 64 MiB e raiz ext2 no resto" "instalador escreve a GPT"
     Expect $ins "block\s+nvme0n1: relendo a tabela de particoes" "BLKRRPART: o kernel rele as particoes sem reboot"

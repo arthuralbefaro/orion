@@ -330,6 +330,7 @@ static void port_init(uint32_t index)
     struct blockdev *dev = blockdev_register(name, 512, p->sectors, ahci_read, ahci_write, p);
     if (!dev)
         return;
+    strlcpy(dev->model, p->model, sizeof(dev->model));
     log_info("ahci", "%s: porta %u, '%s', %lu setores (%lu MiB)", name, index, p->model,
              p->sectors, p->sectors * 512 / MiB(1));
     port_count++;

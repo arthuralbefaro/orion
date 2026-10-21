@@ -4041,3 +4041,48 @@ O que mudou na 5.7 e por que:
 - Medido parado por ~8 s: trocas de contexto caem de ~6000 para ~1900; a
   `main` acorda uma vez por comando digitado. `/proc/sched` ganhou a linha
   "entrada do console" (despertares por entrada, por prazo e IRQs da serial).
+
+## v3.0.0-a11 (7.4, parte 1: seguranca do disco interno no modo live e no instalador)
+
+Contexto: no primeiro teste em hardware real (`docs/hardware.md`), a ISO
+live montou sozinha, com escrita, a particao EFI do Windows do notebook do
+dono (`/mnt montado: FAT32 em nvme0n1p1`). Nao gravou nada, mas podia.
+
+- **Modo live nao monta disco interno.** `vfs_mount_extra()` passa a saber
+  se a raiz veio de disco (`root_mount->dev`) ou da memoria (initramfs,
+  modo live). No modo live so entra no `/mnt` um dispositivo removivel
+  (pendrive USB, marcado pelo driver com `removable`), e sempre somente
+  leitura (`MNT_RDONLY`, por `vfs_mount_kernel_flags`, novo); cada disco
+  interno pulado gera uma linha `modo live: disco interno X nao e montado
+  sozinho (use mount -r)`. No sistema instalado o comportamento e o de
+  antes (um segundo disco FAT em `/mnt`, com escrita), porque a sequencia C
+  da regressao depende disso e ali nao ha outro sistema em risco.
+- **`struct blockdev` ganha `removable` e `model`.** O USB marca o pendrive
+  como removivel e guarda o nome do INQUIRY; NVMe, AHCI e virtio-blk guardam
+  o modelo. Particoes herdam os dois do disco pai na hora de mostrar.
+- **`/proc/blockdevs` (novo):** uma linha por dispositivo: nome, setores de
+  512 bytes, pai (`-` para disco), tipo (`disco`, `esp`, `raiz`, `dados`,
+  `outra`), removivel (0/1), GUID do tipo GPT em hexadecimal (ou `mbrNN`
+  com o tipo MBR) e o modelo. E o que o instalador le; antes ele so tinha o
+  tamanho pelo `lseek`.
+- **Instalador:** `instalar` sem argumento lista cada disco com modelo,
+  tamanho, se e removivel e as particoes com o que ha nelas. O que ele
+  reconhece: ESP com `\EFI\Microsoft` (monta somente leitura num diretorio
+  proprio e olha; tambem lista outros carregadores em `\EFI` que nao sejam
+  `BOOT` nem `orion`), NTFS e exFAT (assinatura do setor de boot numa
+  particao "dados basicos da Microsoft"), reservada da Microsoft,
+  recuperacao do Windows, raiz Linux x86-64 (um Orion ou Linux instalado),
+  dados Linux e os tipos MBR 07, 27, 83. Qualquer particao reconhecida como
+  de outro sistema (ou de tipo desconhecido) marca o disco inteiro com
+  `*** TEM OUTRO SISTEMA: nao use ***`, e a linha `Destinos sem outro
+  sistema:` so lista os discos limpos: um disco com outro sistema nunca e
+  oferecido por padrao.
+- **Confirmacao pelo nome do disco:** em disco limpo, o instalador exige
+  digitar o nome dele (`nvme0n1`, `sdb`); `SIM` nao vale mais. Em disco com
+  outro sistema, mostra o aviso, exige `apagar <nome>` e recusa o `--sim`
+  (o modo sem pergunta da regressao), para que nenhum script apague um
+  Windows sem alguem ler o aviso. So o root instala.
+- A sequencia I da regressao cobre: a listagem antes de instalar, o nome
+  errado cancelando, o `--sim` recusado quando o disco ja tem a raiz do
+  Orion instalada (que conta como outro sistema), o `apagar <nome>` exigido
+  e a lista sem destino depois da instalacao.

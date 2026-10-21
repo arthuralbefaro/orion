@@ -31,6 +31,8 @@ struct blockdev {
     uint32_t refs;
     bool gone;
     bool released;
+    bool removable;
+    char model[41];
     void (*release)(struct blockdev *dev);
 };
 

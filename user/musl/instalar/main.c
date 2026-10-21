@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
@@ -321,6 +322,230 @@ static int ensure_dir(const char *path)
     return 0;
 }
 
+#define MAX_DEVS 32
+#define MNT_LOOK "/mnt/inst-olhar"
+
+struct bdev {
+    char name[16];
+    char parent[16];
+    char kind[8];
+    char type[40];
+    char model[41];
+    unsigned long long sectors;
+    int removable;
+    char desc[96];
+    bool foreign;
+};
+
+static struct bdev devs[MAX_DEVS];
+static int ndevs;
+
+static const char guid_ms_data[] = "a2a0d0ebe5b9334487c068b6b72699c7";
+static const char guid_ms_reserved[] = "16e3c9e35c0bb84d817df92df00215ae";
+static const char guid_ms_recovery[] = "a4bb94ded106404da16abfd50179d6ac";
+static const char guid_linux_fs[] = "af3dc60f838472478e793d69d8477de4";
+
+static int read_blockdevs(void)
+{
+    FILE *f = fopen("/proc/blockdevs", "r");
+    if (!f) {
+        fprintf(stderr, "instalar: /proc/blockdevs: %s\n", strerror(errno));
+        return -1;
+    }
+    char line[256];
+    ndevs = 0;
+    while (fgets(line, sizeof(line), f) && ndevs < MAX_DEVS) {
+        struct bdev *d = &devs[ndevs];
+        memset(d, 0, sizeof(*d));
+        char rest[128] = "";
+        if (sscanf(line, "%15s %llu %15s %7s %d %39s %127[^\n]", d->name, &d->sectors, d->parent, d->kind,
+                   &d->removable, d->type, rest) < 6)
+            continue;
+        snprintf(d->model, sizeof(d->model), "%s", rest);
+        size_t n = strlen(d->model);
+        while (n && (d->model[n - 1] == '\n' || d->model[n - 1] == '\r' || d->model[n - 1] == ' '))
+            d->model[--n] = 0;
+        ndevs++;
+    }
+    fclose(f);
+    return 0;
+}
+
+static void look_esp(struct bdev *p)
+{
+    char dev[32];
+    snprintf(dev, sizeof(dev), "/dev/%s", p->name);
+    if (ensure_dir(MNT_LOOK) < 0 || mount(dev, MNT_LOOK, "vfat", MS_RDONLY, NULL) < 0) {
+        snprintf(p->desc, sizeof(p->desc), "ESP (nao deu para olhar dentro)");
+        p->foreign = true;
+        return;
+    }
+    if (access(MNT_LOOK "/EFI/Microsoft", F_OK) == 0 || access(MNT_LOOK "/efi/Microsoft", F_OK) == 0) {
+        snprintf(p->desc, sizeof(p->desc), "ESP com \\EFI\\Microsoft (carregador do Windows)");
+        p->foreign = true;
+    } else {
+        char others[48] = "";
+        const char *dirs[] = { MNT_LOOK "/EFI", MNT_LOOK "/efi" };
+        for (int i = 0; i < 2; i++) {
+            DIR *d = opendir(dirs[i]);
+            if (!d)
+                continue;
+            struct dirent *de;
+            while ((de = readdir(d))) {
+                if (de->d_name[0] == '.' || !strcasecmp(de->d_name, "BOOT") || !strcasecmp(de->d_name, "orion"))
+                    continue;
+                size_t len = strlen(others);
+                snprintf(others + len, sizeof(others) - len, "%s%s", len ? "," : "", de->d_name);
+            }
+            closedir(d);
+        }
+        if (others[0]) {
+            snprintf(p->desc, sizeof(p->desc), "ESP com outro carregador (\\EFI\\%s)", others);
+            p->foreign = true;
+        } else {
+            snprintf(p->desc, sizeof(p->desc), "ESP sem outro carregador");
+        }
+    }
+    umount(MNT_LOOK);
+}
+
+static void look_data(struct bdev *p)
+{
+    char dev[32];
+    snprintf(dev, sizeof(dev), "/dev/%s", p->name);
+    unsigned char sec[SECTOR * 4];
+    int fd = open(dev, O_RDONLY);
+    ssize_t n = fd >= 0 ? read(fd, sec, sizeof(sec)) : -1;
+    if (fd >= 0)
+        close(fd);
+    p->foreign = true;
+    if (n >= SECTOR && !memcmp(sec + 3, "NTFS    ", 8))
+        snprintf(p->desc, sizeof(p->desc), "NTFS (Windows)");
+    else if (n >= SECTOR && !memcmp(sec + 3, "EXFAT   ", 8))
+        snprintf(p->desc, sizeof(p->desc), "exFAT (dados)");
+    else if (n >= SECTOR && (!memcmp(sec + 82, "FAT32   ", 8) || !memcmp(sec + 54, "FAT1", 4)))
+        snprintf(p->desc, sizeof(p->desc), "FAT (dados)");
+    else if (n >= 1082 && sec[1080] == 0x53 && sec[1081] == 0xEF)
+        snprintf(p->desc, sizeof(p->desc), "ext2 (Linux)");
+    else
+        snprintf(p->desc, sizeof(p->desc), "dados Microsoft (formato nao identificado)");
+}
+
+static void describe(struct bdev *p)
+{
+    if (!strcmp(p->kind, "esp")) {
+        look_esp(p);
+    } else if (!strcmp(p->kind, "raiz")) {
+        snprintf(p->desc, sizeof(p->desc), "raiz Linux x86-64 (Orion ou outro Linux instalado)");
+        p->foreign = true;
+    } else if (!strcmp(p->kind, "dados")) {
+        snprintf(p->desc, sizeof(p->desc), "dados Linux");
+        p->foreign = true;
+    } else if (!strcmp(p->type, guid_ms_data)) {
+        look_data(p);
+    } else if (!strcmp(p->type, guid_ms_reserved)) {
+        snprintf(p->desc, sizeof(p->desc), "reservada da Microsoft (Windows)");
+        p->foreign = true;
+    } else if (!strcmp(p->type, guid_ms_recovery)) {
+        snprintf(p->desc, sizeof(p->desc), "recuperacao do Windows");
+        p->foreign = true;
+    } else if (!strcmp(p->type, guid_linux_fs)) {
+        snprintf(p->desc, sizeof(p->desc), "sistema de arquivos Linux");
+        p->foreign = true;
+    } else if (!strncmp(p->type, "mbr", 3)) {
+        unsigned t = (unsigned)strtoul(p->type + 3, NULL, 16);
+        const char *what = t == 0x07 ? "NTFS ou exFAT (Windows)" : t == 0x27 ? "recuperacao do Windows"
+                         : t == 0x83 ? "Linux" : t == 0x0B || t == 0x0C || t == 0x0E ? "FAT (dados)"
+                         : t == 0xEF ? "ESP (MBR)" : "tipo MBR desconhecido";
+        snprintf(p->desc, sizeof(p->desc), "%s [MBR %02x]", what, t);
+        p->foreign = true;
+    } else {
+        snprintf(p->desc, sizeof(p->desc), "tipo desconhecido (pode ser de outro sistema)");
+        p->foreign = true;
+    }
+}
+
+static struct bdev *find_disk(const char *base)
+{
+    for (int i = 0; i < ndevs; i++)
+        if (!strcmp(devs[i].parent, "-") && !strcmp(devs[i].name, base))
+            return &devs[i];
+    return NULL;
+}
+
+static bool disk_foreign(const struct bdev *disk)
+{
+    for (int i = 0; i < ndevs; i++)
+        if (!strcmp(devs[i].parent, disk->name) && devs[i].foreign)
+            return true;
+    return false;
+}
+
+static void print_disk(const struct bdev *disk)
+{
+    bool foreign = disk_foreign(disk);
+    printf("  %-10s %8llu MiB  %-24s %s%s\n", disk->name, disk->sectors / 2048, disk->model,
+           disk->removable ? "removivel" : "interno", foreign ? "   *** TEM OUTRO SISTEMA: nao use ***" : "");
+    int parts = 0;
+    for (int i = 0; i < ndevs; i++) {
+        const struct bdev *p = &devs[i];
+        if (strcmp(p->parent, disk->name))
+            continue;
+        printf("    %-12s %8llu MiB  %s%s\n", p->name, p->sectors / 2048, p->desc, p->foreign ? "  <<<" : "");
+        parts++;
+    }
+    if (!parts)
+        printf("    (sem particao reconhecida)\n");
+}
+
+static int scan_disks(void)
+{
+    if (read_blockdevs() < 0)
+        return -1;
+    for (int i = 0; i < ndevs; i++)
+        if (strcmp(devs[i].parent, "-"))
+            describe(&devs[i]);
+    return 0;
+}
+
+static void list_disks(void)
+{
+    printf("Discos encontrados:\n");
+    int shown = 0, clean = 0;
+    for (int i = 0; i < ndevs; i++) {
+        if (strcmp(devs[i].parent, "-"))
+            continue;
+        print_disk(&devs[i]);
+        shown++;
+        if (!disk_foreign(&devs[i]))
+            clean++;
+    }
+    if (!shown)
+        printf("  (nenhum)\n");
+    printf("Destinos sem outro sistema: ");
+    if (!clean) {
+        printf("nenhum. Num disco marcado com *** o instalador so segue com confirmacao reforcada.\n");
+        return;
+    }
+    for (int i = 0; i < ndevs; i++)
+        if (!strcmp(devs[i].parent, "-") && !disk_foreign(&devs[i]))
+            printf("/dev/%s ", devs[i].name);
+    printf("\n");
+}
+
+static bool confirm(const char *prompt, const char *expected)
+{
+    printf("%s", prompt);
+    fflush(stdout);
+    char answer[64] = { 0 };
+    if (!fgets(answer, sizeof(answer), stdin))
+        return false;
+    size_t n = strlen(answer);
+    while (n && (answer[n - 1] == '\n' || answer[n - 1] == '\r' || answer[n - 1] == ' '))
+        answer[--n] = 0;
+    return strcmp(answer, expected) == 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *dev = NULL;
@@ -331,8 +556,15 @@ int main(int argc, char **argv)
         else if (!dev)
             dev = argv[i];
     }
+    if (getuid() != 0) {
+        fprintf(stderr, "instalar: so o root instala\n");
+        return 1;
+    }
     if (!dev) {
-        fprintf(stderr, "uso: instalar /dev/sdX [--sim]\n");
+        if (scan_disks() < 0)
+            return 1;
+        list_disks();
+        printf("uso: instalar /dev/DISCO [--sim]   (--sim so em disco sem outro sistema)\n");
         return 2;
     }
     if (is_partition(dev)) {
@@ -348,6 +580,15 @@ int main(int argc, char **argv)
         fprintf(stderr, "instalar: sem %s; rode o instalador pelo sistema live da ISO\n", PAYLOAD);
         return 1;
     }
+    const char *base = strrchr(dev, '/');
+    base = base ? base + 1 : dev;
+    if (scan_disks() < 0)
+        return 1;
+    struct bdev *disk = find_disk(base);
+    if (!disk) {
+        fprintf(stderr, "instalar: %s nao aparece em /proc/blockdevs\n", base);
+        return 1;
+    }
     int fd = open(dev, O_RDONLY);
     off_t size = fd >= 0 ? lseek(fd, 0, SEEK_END) : -1;
     if (fd >= 0)
@@ -358,12 +599,29 @@ int main(int argc, char **argv)
         return 1;
     }
     uint64_t sectors = (uint64_t)size / SECTOR;
-    if (!yes) {
-        printf("Isto apaga TODO o disco %s (%llu MiB). Digite SIM para continuar: ", dev,
-               (unsigned long long)(size >> 20));
-        fflush(stdout);
-        char answer[16] = { 0 };
-        if (!fgets(answer, sizeof(answer), stdin) || strncmp(answer, "SIM", 3) != 0) {
+    bool foreign = disk_foreign(disk);
+    printf("Disco escolhido:\n");
+    print_disk(disk);
+    if (foreign) {
+        if (yes) {
+            fprintf(stderr, "instalar: %s tem outro sistema; --sim nao vale aqui, confirme interativamente\n",
+                    base);
+            return 1;
+        }
+        printf("ATENCAO: %s tem particoes de outro sistema (marcadas com <<<). Instalar aqui APAGA TUDO,\n"
+               "inclusive o outro sistema e os arquivos dele. Faca backup antes.\n", base);
+        char prompt[128], expected[64];
+        snprintf(expected, sizeof(expected), "apagar %s", base);
+        snprintf(prompt, sizeof(prompt), "Para continuar mesmo assim, digite exatamente: %s\n> ", expected);
+        if (!confirm(prompt, expected)) {
+            printf("instalar: cancelado\n");
+            return 1;
+        }
+    } else if (!yes) {
+        char prompt[160];
+        snprintf(prompt, sizeof(prompt), "Isto apaga TODO o disco %s (%llu MiB). Digite o nome do disco (%s) para continuar: ",
+                 base, (unsigned long long)(size >> 20), base);
+        if (!confirm(prompt, base)) {
             printf("instalar: cancelado\n");
             return 1;
         }
