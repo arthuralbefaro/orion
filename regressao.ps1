@@ -422,7 +422,7 @@ if ($runAll -or $OnlyA) {
     Expect $a "saiu com 7" "dash: exit 7 volta para o sh com o codigo"
     Expect $a "futex: 0 thread\(s\) esperando" "nenhuma thread esquecida na fila do futex"
     ExpectNot $a "syscall (?!777 )\d+ desconhecida" "nenhuma syscall desconhecida na sequencia A (fora a 777 do logflood)"
-    Expect $a "logflood: 1000 de 1000 syscalls desconhecidas deram ENOSYS, 60 de 60 filhos mortos por SIGSEGV, fim" "logflood: usuario provoca 1000 mensagens de syscall desconhecida e 60 mortes por sinal"
+    Expect $a "logflood: 1000 de 1000 syscalls desconhecidas deram ENOSYS, 60 de 60 filhos mortos por SIGSEGV juntos, fim" "logflood: usuario provoca 1000 mensagens de syscall desconhecida e 60 mortes por sinal de uma vez"
     Expect $a "\(\d+ mensagem\(ns\) parecida\(s\) suprimida\(s\): limite de 10 por segundo\)" "o log do kernel corta a inundacao provocada pelo usuario"
     ExpectNot $a "\A(?s)(?>.*?syscall 777 desconhecida){31}" "no maximo 10 avisos de syscall desconhecida por segundo"
     ExpectNot $a "\A(?s)(?>.*?'logflood' morto por sinal 11){41}" "no maximo 10 avisos de morte por sinal por segundo"
