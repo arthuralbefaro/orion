@@ -1423,6 +1423,8 @@ int process_kill(int pid, int sig)
 int process_setpgid(int pid, int pgid)
 {
     struct process *me = process_current();
+    if (pid < 0 || pgid < 0)
+        return -EINVAL;
     uint64_t flags = spin_lock_irqsave(&proc_lock);
     struct process *target = me;
     if (pid > 0) {
@@ -1432,10 +1434,19 @@ int process_setpgid(int pid, int pgid)
                 target = c;
     }
     int ret = 0;
-    if (!target)
+    if (!target || (target != me && target->parent != me)) {
         ret = -ESRCH;
-    else
-        target->pgid = pgid > 0 ? (uint32_t)pgid : target->pid;
+    } else {
+        uint32_t want = pgid > 0 ? (uint32_t)pgid : target->pid;
+        bool exists = want == target->pid;
+        for (struct process *c = processes; c && !exists; c = c->next)
+            if (c->pgid == want)
+                exists = true;
+        if (!exists)
+            ret = -EPERM;
+        else
+            target->pgid = want;
+    }
     spin_unlock_irqrestore(&proc_lock, flags);
     return ret;
 }

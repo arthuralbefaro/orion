@@ -2438,3 +2438,17 @@ falhas eram do `permtest` novo da correcao abaixo, num kernel em que o
 `process.c` nao tinha sido recompilado) e regressao completa do PowerShell
 verde em 790 de 793 (24,3 min), so o `nicetest` oscilando (abaixo). O multiplicador de prazos foi conferido com `CI=true` (K verde
 com prazos x3); o Linux do runner e o KVM nao deu para testar daqui.
+
+#### Defeito achado pelo fuzzer: `setpgid` sem permissao - 2026-10-22 - FEITO
+Numa regressao completa o fuzz da Z nao terminou: o pai (root) morreu com
+SIGKILL depois de um filho (usuario 1000) mover o pai para o grupo dele
+com `setpgid` e o pai matar aquele grupo no fim da rodada. O kernel
+aceitava `setpgid` de qualquer processo para qualquer outro. Agora so o
+proprio processo ou um filho, com `EINVAL`, `ESRCH` e `EPERM` como no
+Linux. `permtest` com quatro verificacoes novas (falham com o kernel
+antigo, passam com o novo); o fuzz com a mesma semente vai ate o fim.
+Detalhes: `docs/DECISOES.md`, logo depois da v3.0.0-a15 parte 10.
+No caminho: o `nicetest` misto oscilou muito hoje; o commit da a14
+compilado num worktree a parte falhou do mesmo jeito (4 de 5) nesta
+maquina e hora, entao nao e regressao; registrado no `DECISOES.md`.
+Verificacao: a mesma regressao completa da parte 8 (A com o `permtest`, Z e E verdes).

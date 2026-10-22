@@ -97,6 +97,21 @@ static void as_user(void)
     check("getuid/geteuid 1000, getgid/getegid 100", getuid() == 1000 && geteuid() == 1000 && getgid() == 100 &&
                                                         getegid() == 100);
     check("usuario comum nao le o /etc/shadow", fails_with(open("/etc/shadow", O_RDONLY), EACCES));
+    pid_t parent = getppid();
+    check("setpgid nao muda o grupo do pai (root)", fails_with(setpgid(parent, getpid()), ESRCH) &&
+                                                       getpgid(parent) != getpid());
+    check("setpgid nao muda o grupo do init", fails_with(setpgid(1, getpid()), ESRCH) && getpgid(1) != getpid());
+    check("setpgid nao entra num grupo que nao existe", fails_with(setpgid(0, 99999), EPERM));
+    pid_t kid = fork();
+    if (kid == 0) {
+        pause();
+        _exit(0);
+    }
+    check("setpgid muda o proprio grupo e o de um filho",
+          setpgid(0, 0) == 0 && getpgid(0) == getpid() && setpgid(kid, kid) == 0 && getpgid(kid) == kid &&
+              setpgid(kid, getpid()) == 0 && getpgid(kid) == getpid());
+    kill(kid, SIGKILL);
+    waitpid(kid, NULL, 0);
     check("nao le arquivo 0600 de root", fails_with(open(P("segredo"), O_RDONLY), EACCES));
     int fd = open(P("publico"), O_RDONLY);
     check("le arquivo 0644 de root", fd >= 0 && read(fd, buf, sizeof(buf)) == 6);

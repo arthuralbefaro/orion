@@ -4577,3 +4577,45 @@ antes; 2651 KiB/s com blocos de 1 KiB e 8305 KiB/s com blocos de 4 KiB
 depois. A investigacao passou primeiro pela memoria (sobrava), pelo
 tamanho do buffer do instalador (nao muda nada) e pelo perfilador (o
 sistema estava ocioso, esperando o disco).
+
+## v3.0.0-a15, defeito achado pelo fuzzer: `setpgid` sem conferencia de permissao
+
+Numa regressao completa da a15 o fuzzer (sequencia Z) nao terminou: o pai
+(root) morreu com SIGKILL uns 12 s depois de comecar. O `process_setpgid`
+aceitava mudar o grupo de **qualquer** processo, de qualquer usuario. Um
+filho do fuzzer (usuario 1000) sorteou `setpgid(<pid do pai>, <seu pid>)`,
+levou o pai root para o grupo dele, e no fim da rodada o pai matou o grupo
+daquele filho com `kill(-pid, SIGKILL)`, matando a si mesmo. Fora do
+fuzzer, isso deixava um usuario comum mexer no controle de tarefas de
+processos de outros usuarios (grupos de sinal e do terminal).
+
+Agora, como no Linux: so o proprio processo ou um filho dele (`ESRCH` para
+os outros); `pid` ou `pgid` negativos dao `EINVAL`; o grupo de destino tem
+de ser o pid do proprio alvo ou um grupo que ja existe (`EPERM` se nao), e
+um zumbi ainda nao recolhido mantem o grupo existindo (o caso do primeiro
+comando de um pipeline que termina antes do segundo entrar no grupo).
+Sessoes nao existem no Orion, entao a regra de "mesma sessao" fica de fora.
+
+Teste: o `permtest` (sequencia A, como usuario 1000) confere que o
+`setpgid` recusa o pai root e o init, recusa um grupo que nao existe e
+aceita o proprio grupo e o de um filho. Com o `process.c` antigo as tres
+recusas falham; com o novo, passam. O fuzz com a mesma semente
+(`--seed 1792692733820702`) agora vai ate o fim.
+
+## v3.0.0-a15, o `nicetest` misto oscilando no hospedeiro de hoje (registro)
+
+Nas ultimas rodadas a verificacao "mistura de nice 0 e 10 sem afinidade"
+do `nicetest` falhou quase sempre: cada thread de nice 0 recebe ~50% da
+CPU e a razao fica perto de 2:1 (aceito de 5:1 a 15:1); a "fixa na CPU 1"
+caiu para 5,8 a 8,3:1 (era 8,7 a 9,3:1 na 8.1). Para saber se era efeito
+das mudancas da a15, o commit da a14 (`ff838ce`) foi compilado num
+worktree a parte e rodou o mesmo `nicetest` cinco vezes nesta maquina e
+nesta hora: falhou 4 de 5 vezes do mesmo jeito. A a14 tinha passado na
+sequencia P em todas as regressoes completas mais cedo no mesmo dia.
+Conclusao: nao e regressao da a15; e uma sensibilidade do escalonador (a
+contabilidade de tempo virtual medida pelo TSC num QEMU sem aceleracao)
+ao estado do hospedeiro. Os contadores do `/proc/sched` na rodada que
+falha mostram poucas migracoes (~100 em 4 s) e quase nenhum
+balanceamento, entao nao e pingue-pongue entre CPUs. A verificacao nao foi
+afrouxada; fica anotada para investigar o calculo do tempo virtual (o
+candidato e cobrar da thread o tempo em que a vCPU nao rodou).
