@@ -422,12 +422,12 @@ if ($runAll -or $OnlyA) {
     Expect $a "dash-executavel" "dash: test -x (faccessat2)"
     Expect $a "saiu com 7" "dash: exit 7 volta para o sh com o codigo"
     Expect $a "futex: 0 thread\(s\) esperando" "nenhuma thread esquecida na fila do futex"
-    Expect $a "pilha do kernel: 32768 bytes por thread[^\n]*\nmaior uso: \d+ bytes \(([0-6]?\d|7[0-4])%\) em " "pilhas do kernel abaixo de 75% depois dos testes da sequencia A (8.6)"
+    Expect $a "pilha do kernel: 16384 bytes por thread[^\n]*\nmaior uso: \d+ bytes \(([0-6]?\d|7[0-4])%\) em " "pilhas do kernel abaixo de 75% depois dos testes da sequencia A (8.6)"
     ExpectNot $a "syscall (?!777 )\d+ desconhecida" "nenhuma syscall desconhecida na sequencia A (fora a 777 do logflood)"
     Expect $a "logflood: 1000 de 1000 syscalls desconhecidas deram ENOSYS, 60 de 60 filhos mortos por SIGSEGV juntos, fim" "logflood: usuario provoca 1000 mensagens de syscall desconhecida e 60 mortes por sinal de uma vez"
     Expect $a "\(\d+ mensagem\(ns\) parecida\(s\) suprimida\(s\): limite de 10 por segundo\)" "o log do kernel corta a inundacao provocada pelo usuario"
-    ExpectNot $a "\A(?s)(?>.*?syscall 777 desconhecida){31}" "no maximo 10 avisos de syscall desconhecida por segundo"
-    ExpectNot $a "\A(?s)(?>.*?'logflood' morto por sinal 11){41}" "no maximo 10 avisos de morte por sinal por segundo"
+    ExpectNot $a "(?s)\A(?>.*?syscall 777 desconhecida){31}" "no maximo 10 avisos de syscall desconhecida por segundo"
+    ExpectNot $a "(?s)\A(?>.*?'logflood' morto por sinal 11){41}" "no maximo 10 avisos de morte por sinal por segundo"
     Expect $a "flag NT ligada dentro do handler\s+ok" "flag NT do usuario nao derruba o iretq do rt_sigreturn"
     Expect $a "Copias de usuario: [1-9]\d* falta\(s\) recuperada\(s\)" "tabela de excecoes recuperou as faltas"
     Expect $a "morto por sinal 2" "Ctrl\+C matou o sleep com SIGINT"
@@ -562,8 +562,8 @@ if ($runAll -or $OnlyA) {
     Expect $a "irqtest: contexto de interrupcao ok" "irqtest termina bem"
     Expect $a "irqtest: trava de spin com interrupcoes ligadas: [1-9]\d* troca\(s\) adiada\(s\), 0 troca\(s\) de thread na CPU enquanto a trava estava presa, mesma thread e CPU: sim" "thread segurando trava de spin nao e preemptada (contador por thread, comeco da 8.2)"
     Expect $a "irqtest: spin_unlock com troca adiada: a thread da mesma CPU rodou antes: nao, rodou antes do\s+spin_unlock voltar: sim \([1-9]\d* troca\(s\) na liberacao\)" "spin_unlock com a troca adiada chama o escalonador na hora (8.2)"
-    Expect $a "tempestade de interrupcao: vetor \d+ \(irqstorm\) disparou \d{5,} vezes em menos de 1 s na CPU \d+; vetor em quarentena" "tempestade de borda (auto-IPI sem fim) vira aviso e quarentena do vetor"
-    Expect $a "irqstorm: borda: vetor \d+ em laco de auto-IPI: \d{5,} disparos ate a quarentena em \d+ ms; handler calado depois: sim" "depois da quarentena o handler da tempestade nao roda mais"
+    Expect $a "irqstorm: MSI: vetor \d+ em laco de auto-IPI: 80000 disparos em \d+ ms, pico de \d{5,} por segundo; mascarado: nao" "MSI acima do limite de tempestade nao e mascarado (o limite vale so para linhas do I/O APIC)"
+    ExpectNot $a "tempestade de interrupcao: vetor (?!36 )" "so a linha de nivel do teste (IRQ 36) e mascarada na sequencia A"
     Expect $a "tempestade de interrupcao: vetor 36 \(irq-isa\) disparou \d{5,} vezes em menos de 1 s na CPU \d+; IRQ mascarada no controlador" "IRQ de nivel que ninguem cala (COM1 com THRE) vira aviso e mascara no I/O APIC"
     Expect $a "irqstorm: nivel: COM1 com THRE sem tratamento: \d{5,} disparos ate a mascara em \d+ ms; IRQ religada e serial de volta: sim" "depois da mascara a IRQ da serial e religada e volta a funcionar"
     Expect $a "irqstorm: tempestades viram aviso e mascara, sem #DF" "irqstorm termina bem"
@@ -809,6 +809,7 @@ if ($runAll -or $OnlyC) {
         -Script $stepsC -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $c = Get-Log "out\reg-c.log"
     if ($Verbose) { Write-Output $c }
+    ExpectNot $c "tempestade de interrupcao" "nenhuma IRQ mascarada como tempestade sob carga na sequencia C"
 
     Expect $c "mkfs: /dev/sdb" "mkfs formatou o disco cru"
     Expect $c "/mnt montado: FAT16 em sdb" "segundo disco montado em /mnt"
@@ -1097,6 +1098,7 @@ if ($runAll -or $OnlyV) {
     Stop-Process -Id $web.Id -Force -ErrorAction SilentlyContinue
     $v = Get-Log "out\reg-v.log"
     if ($Verbose) { Write-Output $v }
+    ExpectNot $v "tempestade de interrupcao" "nenhuma IRQ mascarada como tempestade sob carga na sequencia V"
 
     Expect $v "virtio\s+vda: virtio-blk 1af4:(1001|1042) [^\n]*MSI-X no vetor \d+, CPU [1-9]" "virtio-blk liga a MSI-X fora da CPU 0"
     Expect $v "vda2: GPT, LBA \d+, \d+ setores \(256 MiB\), raiz Linux x86-64" "particoes GPT do disco virtio"
@@ -1123,13 +1125,15 @@ if ($runAll -or $OnlyN) {
         "cmd:cat /proc/mounts", "wait:1",
         "cmd:mkdir /root/nt", "cmd:fstest -a /root/nt", 'cmd:echo FIM$X-NFSTEST', "until:600:FIM-NFSTEST",
         "cmd:rmdir /root/nt", "cmd:echo persiste-no-nvme > /root/persiste.txt", "cmd:sync", "wait:2",
-        "cmd:cat /proc/interrupts", "wait:1",
+        "cmd:cat /proc/interrupts", "wait:1", "key:0B", "cmd:irq", "wait:1", "key:0B",
         "reboot:", "cmd:cat /root/persiste.txt", "cmd:rm /root/persiste.txt", "cmd:sync", "wait:1"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Bus nvme -LogPath "out\reg-n.log" `
         -Script $stepsN -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $n = Get-Log "out\reg-n.log"
     if ($Verbose) { Write-Output $n }
+    ExpectNot $n "tempestade de interrupcao" "nenhuma IRQ mascarada como tempestade sob carga na sequencia N"
+    Expect $n "\d+\s+nvme, pico [1-9]\d*/s" "o irq mostra o pico por segundo do NVMe depois do fstest"
 
     Expect $n "nvme\s+nvme0n1: 1b36:0010 [^\n]*versao 1\.\d[^\n]*MSI-X no vetor \d+, CPU [1-9]" "NVMe: controlador, Identify e MSI-X fora da CPU 0"
     Expect $n "nvme0n1p2: GPT, LBA \d+, \d+ setores \(256 MiB\), raiz Linux x86-64" "particoes GPT do NVMe com nomes nvme0n1pN"
@@ -1177,6 +1181,7 @@ if ($runAll -or $OnlyU) {
     $novo = & $py[0] @pyArgs (Join-Path $Root "tools\mkfat.py") le out/stick2.img NOVO.TXT
     $u += "`n----- hospedeiro: NOVO.TXT -----`n" + ($novo -join "`n")
     if ($Verbose) { Write-Output $u }
+    ExpectNot $u "tempestade de interrupcao" "nenhuma IRQ mascarada como tempestade sob carga na sequencia U"
 
     Expect $u "usb\s+controlador xHCI 1b36:000d em " "xHCI achado no PCI"
     Expect $u "usb\s+xHCI 1\.\d\d, 16 porta\(s\), eventos por interrupcao" "xHCI reiniciado e ligado, com a versao, as portas e eventos por interrupcao"
@@ -1441,7 +1446,7 @@ if ($runAll -or $OnlyZ) {
     Expect $zl "fuzz: fim \(semente \d+\)" "fuzz terminou"
     Expect $zl "kmfail: taxa 1/1000 nos kmalloc de processos de usuario comum, [1-9]\d* falha\(s\) injetada\(s\)" "fuzz com 1 em 1000 kmalloc falhando nos filhos (modo estrito)"
     Expect $zl "kmfail: desligado" "a falha injetada desliga no fim"
-    Expect $zl "pilha do kernel: 32768 bytes por thread[^\n]*\nmaior uso: \d+ bytes \(([0-6]?\d|7[0-4])%\) em " "pilhas do kernel abaixo de 75% depois do fuzz (8.6)"
+    Expect $zl "pilha do kernel: 16384 bytes por thread[^\n]*\nmaior uso: \d+ bytes \(([0-6]?\d|7[0-4])%\) em " "pilhas do kernel abaixo de 75% depois do fuzz (8.6)"
     Expect $zl "echo depois-do-fuzz\s*\ndepois-do-fuzz" "o shell continua respondendo depois do fuzz"
     ExpectNot $zl "ls /tmp\s*\n[^\n]*fuzz" "o fuzz apaga o diretorio dele em /tmp"
     ExpectNot $zl "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|BUG: " "nenhum panico nem BUG na sequencia Z"
@@ -1470,7 +1475,7 @@ if ($runAll -or $OnlyM) {
     ExpectNot $ml "matando pid 1 |'init'|'sh' \(" "o OOM nunca escolhe o init nem o shell"
     Expect $ml "echo depois-do-oom\s*\ndepois-do-oom" "o shell continua respondendo depois do OOM"
     Expect $ml "OomKills:\s+5\s*\n" "/proc/meminfo conta as 5 mortes por OOM"
-    Expect $ml "pilha do kernel: 32768 bytes por thread[^\n]*\nmaior uso: \d+ bytes \(([0-6]?\d|7[0-4])%\) em " "pilhas do kernel abaixo de 75% depois do OOM (8.6)"
+    Expect $ml "pilha do kernel: 16384 bytes por thread[^\n]*\nmaior uso: \d+ bytes \(([0-6]?\d|7[0-4])%\) em " "pilhas do kernel abaixo de 75% depois do OOM (8.6)"
     ExpectNot $ml "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|BUG: " "nenhum panico nem BUG na sequencia M"
 }
 
@@ -1511,6 +1516,7 @@ if ($runAll -or $OnlyE) {
         Expect $e "\nFIM-ESTRESSE" "estresse $i`: o pipeline terminou"
         Expect $e "stress: \d+ processos, 0 falha\(s\) ok" "estresse $i`: 0 falhas"
         ExpectNot $e "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|deadlock|watchdog|stress \d+: |fork devolveu 0" "estresse $i`: sem panico, deadlock ou erro do stress"
+        ExpectNot $e "tempestade de interrupcao" "estresse $i`: nenhuma IRQ mascarada como tempestade"
     }
 }
 

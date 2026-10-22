@@ -40,8 +40,9 @@ nada de `instalar`.
   `MSR_GS_BASE` em toda entrada, entao o laco nao acontece mais, e para com
   uma mensagem que diz qual dos casos foi e com os numeros. Tambem confere
   o topo da pilha em toda entrada vinda do usuario, segue a cadeia pelo
-  `RBP` no relatorio, dobra a pilha para 32 KiB e acrescenta o limite de
-  aninhamento, o anel de vetores por CPU e o detector de tempestade de IRQ.
+  `RBP` no relatorio e acrescenta o limite de aninhamento, o anel de
+  vetores por CPU e o detector de tempestade de IRQ (so para linhas do I/O
+  APIC). A pilha continua com 16 KiB: o laco esgotaria qualquer tamanho.
   Detalhes: `docs/DECISOES.md`, v3.0.0-a11 parte 2 e v3.0.0-a12.
 - **Montagem automatica da ESP do Windows com escrita** (`/mnt montado:
   FAT32 em nvme0n1p1`). Nao chegou a gravar nada, mas era um risco; o modo

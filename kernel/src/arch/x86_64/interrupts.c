@@ -73,6 +73,7 @@ static uint64_t counters[256];
 static uint64_t cpu_counters[MAX_CPUS][256];
 static const char *names[256];
 static volatile bool storm_masked[256];
+static uint32_t peak_rate[256];
 static uint32_t storm_events;
 
 void interrupts_register(uint8_t vector, interrupt_handler_t handler, void *ctx)
@@ -543,11 +544,9 @@ static void after_interrupt(struct percpu *pc)
 
 static bool maskable(uint8_t vec)
 {
-    if (vec < VECTOR_EXCEPTIONS_END || vec == VECTOR_LAPIC_TIMER || vec == VECTOR_SPURIOUS)
-        return false;
-    if (vec >= VECTOR_IPI_HALT && vec <= VECTOR_IPI_RESCHED)
-        return false;
-    return true;
+    if (vec >= VECTOR_IRQ_BASE && vec < VECTOR_IRQ_BASE + VECTOR_IRQ_COUNT)
+        return vec != VECTOR_IRQ_BASE + IRQ_TIMER;
+    return vec >= VECTOR_GSI_BASE && vec < VECTOR_GSI_BASE + VECTOR_GSI_COUNT;
 }
 
 static void storm_mask(uint8_t vec, struct percpu *pc, uint32_t count)
@@ -558,11 +557,9 @@ static void storm_mask(uint8_t vec, struct percpu *pc, uint32_t count)
     if (vec >= VECTOR_IRQ_BASE && vec < VECTOR_IRQ_BASE + VECTOR_IRQ_COUNT) {
         irq_disable((uint8_t)(vec - VECTOR_IRQ_BASE));
         how = "IRQ mascarada no controlador";
-    } else if (vec >= VECTOR_GSI_BASE && vec < VECTOR_GSI_BASE + VECTOR_GSI_COUNT) {
+    } else {
         ioapic_set_mask_gsi(VECTOR_IRQ_COUNT + (uint32_t)(vec - VECTOR_GSI_BASE), true);
         how = "GSI mascarada no I/O APIC";
-    } else {
-        how = "vetor em quarentena (o handler nao roda mais, so o EOI)";
     }
     log_error("irq", "tempestade de interrupcao: vetor %u (%s) disparou %u vezes em menos de 1 s na CPU %u; %s",
               vec, interrupts_name(vec), count, pc->cpu_id, how);
@@ -582,6 +579,8 @@ static bool note_vector(struct percpu *pc, uint8_t vec)
         pc->irq_rate_epoch = epoch;
     }
     uint32_t n = ++pc->irq_rate[vec];
+    if (n > peak_rate[vec])
+        peak_rate[vec] = n;
     if (n > pc->irq_top_count) {
         pc->irq_top_count = n;
         pc->irq_top_vector = vec;
@@ -607,6 +606,11 @@ void interrupts_check_entry(const struct interrupt_frame *f, const char *how)
           "usuario %016lx",
           how, f->int_no, pc->cpu_id, end, t->name, t->tid, t->kernel_stack_top, (uint64_t)t->stack,
           (uint64_t)t->stack + t->stack_size, gdt_kernel_stack(), pc->kernel_rsp, f->rip);
+}
+
+uint32_t interrupts_peak_rate(uint8_t vector)
+{
+    return peak_rate[vector];
 }
 
 bool interrupts_storm_masked(uint8_t vector)
@@ -729,6 +733,8 @@ void isr_dispatch(struct interrupt_frame *frame, uint64_t swapped)
     signal_check(frame);
 }
 
+#define STORM_TEST_MSI_FIRES 80000
+
 static volatile uint64_t storm_test_fires;
 static int storm_test_vector = -1;
 
@@ -736,8 +742,8 @@ static void storm_test_handler(struct interrupt_frame *f, void *ctx)
 {
     (void)f;
     (void)ctx;
-    storm_test_fires++;
-    lapic_send_ipi(lapic_id(), (uint8_t)storm_test_vector);
+    if (++storm_test_fires < STORM_TEST_MSI_FIRES)
+        lapic_send_ipi(lapic_id(), (uint8_t)storm_test_vector);
 }
 
 int interrupts_storm_selftest(void)
@@ -752,21 +758,21 @@ int interrupts_storm_selftest(void)
     uint32_t before = storm_events;
     uint64_t t0 = time_now_us();
     lapic_send_ipi(lapic_id(), (uint8_t)vector);
-    uint64_t end = t0 + 3000000;
-    while (!storm_masked[vector] && time_now_us() < end)
+    uint64_t end = t0 + 5000000;
+    while (storm_test_fires < STORM_TEST_MSI_FIRES && time_now_us() < end)
         pause();
-    uint64_t edge_ms = (time_now_us() - t0) / 1000;
-    bool edge_masked = storm_masked[vector];
-    uint64_t edge_fires = storm_test_fires;
-    time_sleep_ms(20);
-    bool edge_quiet = storm_test_fires == edge_fires;
+    uint64_t msi_ms = (time_now_us() - t0) / 1000;
+    uint64_t msi_fires = storm_test_fires;
+    uint32_t msi_peak = peak_rate[vector];
+    bool msi_masked = storm_masked[vector] || storm_events != before;
     interrupts_unregister((uint8_t)vector);
     names[vector] = NULL;
-    storm_masked[vector] = false;
+    peak_rate[vector] = 0;
     storm_test_vector = -1;
-    bool edge_ok = edge_masked && edge_fires >= IRQ_STORM_LIMIT && edge_quiet && storm_events == before + 1;
-    log_info("irq", "irqstorm: borda: vetor %d em laco de auto-IPI: %lu disparos ate a quarentena em %lu ms; "
-             "handler calado depois: %s", vector, edge_fires, edge_ms, edge_quiet ? "sim" : "nao");
+    bool msi_ok = msi_fires == STORM_TEST_MSI_FIRES && msi_peak > IRQ_STORM_LIMIT && !msi_masked;
+    log_info("irq", "irqstorm: MSI: vetor %d em laco de auto-IPI: %lu disparos em %lu ms, pico de %u por segundo; "
+             "mascarado: %s (MSI e MSI-X nunca sao mascarados)", vector, msi_fires, msi_ms, msi_peak,
+             msi_masked ? "sim" : "nao");
 
     uint64_t level_fires = 0, level_ms = 0;
     int level = serial_storm_test(&level_fires, &level_ms);
@@ -776,7 +782,7 @@ int interrupts_storm_selftest(void)
         log_info("irq", "irqstorm: nivel: COM1 com THRE sem tratamento: %lu disparos ate a mascara em %lu ms; "
                  "IRQ religada e serial de volta: %s", level_fires, level_ms, level == 0 ? "sim" : "nao");
     }
-    return edge_ok && level <= 0 ? 0 : -EIO;
+    return msi_ok && level <= 0 ? 0 : -EIO;
 }
 
 void idt_init(void)

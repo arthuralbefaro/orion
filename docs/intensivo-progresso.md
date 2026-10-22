@@ -51,13 +51,13 @@ no hospedeiro e usa `hostfwd` (5555 e 8081).
 Proxima etapa: nenhuma no plano; todas as etapas estao feitas, menos a 7.4
 (`[!]`). Primeiro teste do dono (2026-10-21, notebook ASUS Vivobook AMD
 com Windows): `#DF` logo depois de `init iniciado`; resultado em
-`docs/hardware.md`, correcoes nas partes 1 a 3 da sessao 4 (v3.0.0-a11 e
-a12). Agora aguardando a segunda rodada, so no modo live, com a ISO nova
+`docs/hardware.md`, correcoes nas partes 1 a 5 da sessao 4 (v3.0.0-a11 a
+a13). Agora aguardando a segunda rodada, so no modo live, com a ISO nova
 (roteiro em docs/teste-hardware-real.md, secao 5a). As etapas 9.1 a 9.3
 (instalar em USB, dual boot, rede USB) estao anotadas no `docs/PLANO.md` e
 nao comecam antes disso. Fase 7 fechada com a tag `v3.0-rc1` e a Fase 8
 com a `v3.0-rc2`; a tag `v3.0` (marco M5) so depois que a 7.4 fechar
-(decisao do dono, 2026-10-20). Versao 3.0.0-a12.
+(decisao do dono, 2026-10-20). Versao 3.0.0-a13.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -2315,3 +2315,23 @@ resultado do primeiro teste. `docs/PLANO.md` ganhou, so como anotacao, as
 etapas 9.1 (instalar em disco USB), 9.2 (dual boot no NVMe em espaco livre,
 sem tocar em `\EFI\Microsoft`, com backup) e 9.3 (rede por adaptador USB
 CDC-ECM ou RTL8153). A 7.4 continua `[!]` ate a segunda rodada passar.
+
+#### 7.4 parte 5 - revisao do dono: tempestade so em linhas, pilha de volta a 16 KiB, CI - 2026-10-22 - FEITO
+Tres pontos do dono sobre a parte 2. (1) O detector de tempestade valia
+para MSI/MSI-X, e NVMe e xHCI sob carga passam de 32768 por segundo em
+hardware real: agora so IRQs de linha (ISA, menos o timer, e GSI do I/O
+APIC) sao mascaradas; MSI e MSI-X nunca. O `irqstorm` passou a exigir que
+um MSI com pico acima do limite (80 mil disparos) nao seja mascarado, e as
+sequencias C, V, N, U e E exigem nenhuma tempestade; o `irq` mostra o pico
+por segundo de cada vetor (NVMe no `fstest -a`: ~2 mil/s no QEMU). (2) A
+pilha volta a 16 KiB: o estouro era o laco de `#PF` da parte 3, e o maior
+uso medido segue em 52% (8576 bytes, `netrx`). (3) O CI do GitHub (`gh run view --log-failed`)
+caia no fim da sequencia A com `re.error: global flags not at the start`:
+dois padroes do `logflood` com `\A(?s)`, que o .NET aceita e o Python 3.11+
+nao. Viraram `(?s)\A`; os 729 padroes compilam no Python, conferidos pelo
+proprio `regress.py`, que ganhou a sequencia K na lista padrao. Detalhes:
+`docs/DECISOES.md`, v3.0.0-a13.
+Verificacao (nucleo: interrupcoes e pilha): `check.ps1` limpo; rodada
+manual com `fstest -a` no NVMe e `irqstorm`; regressao completa verde, 763 verificacoes, 34,2 min (a primeira, com a suspensao do Windows no meio, deu vermelho so na M e a segunda so no perf; correcoes nas entradas abaixo). RAM
+livre antes: 6,5 GB na primeira, 2,8 GB na final. Versao 3.0.0-a13. O push continua com o dono; o CI so
+roda de novo no proximo push dele.

@@ -68,6 +68,7 @@ bool irq_enable_isa_as(uint8_t irq, bool default_low, bool default_level, uint32
 bool interrupts_storm_masked(uint8_t vector);
 void interrupts_storm_clear(uint8_t vector);
 uint32_t interrupts_storm_events(void);
+uint32_t interrupts_peak_rate(uint8_t vector);
 int interrupts_storm_selftest(void);
 
 void interrupts_check_entry(const struct interrupt_frame *f, const char *how);

@@ -233,7 +233,7 @@ def run_stress(seq, rep, runs, smp, image=False):
 
 def main():
     ap = argparse.ArgumentParser(description="Regressao do Orion (le os passos do regressao.ps1)")
-    ap.add_argument("which", nargs="?", default="ABCDFIVNUSGWHPZME", help="sequencias, ex.: ABCDFIVNUSGWHPZME ou AC")
+    ap.add_argument("which", nargs="?", default="ABCDFIVNUSGWHPZMKE", help="sequencias, ex.: ABCDFIVNUSGWHPZMKE ou AC")
     ap.add_argument("--smp", type=int, default=4)
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--stress-runs", type=int, default=1)

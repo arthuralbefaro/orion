@@ -4291,3 +4291,40 @@ um `iretq` com CS invalido depois do `swapgs` da o mesmo `#DF` do notebook
   abaixo do fundo e a cadeia pelo `RBP` repetindo o `percpu_get`. Com a
   entrada nova: o panico "a volta ao anel 3 falhou no iretq", com o CS
   invalido no quadro.
+
+## v3.0.0-a13 (7.4, parte 5: revisao do dono sobre a parte 2, e o CI)
+
+- **Detector de tempestade so para linhas.** O limite de 32768 disparos
+  por segundo da a11 valia para qualquer vetor, e MSI/MSI-X de NVMe e xHCI
+  sob carga passam disso em hardware real (no QEMU, o `fstest -a` na raiz
+  NVMe chega a ~2 mil por segundo, mas um NVMe de verdade com fila funda
+  passa de 100 mil). Agora o limite so vale para IRQs de linha: as ISA
+  (menos a IRQ 0 do timer) e as GSI do I/O APIC, que sao as que prendem
+  quando um dispositivo ou uma GPE nao e limpa. MSI, MSI-X, IPIs, o timer
+  do LAPIC e as excecoes nunca sao mascarados; a quarentena de vetor MSI
+  saiu. A alternativa pedida, contar so interrupcoes que nenhum driver
+  reconhece, exige que todo handler diga "era meu ou nao", o que a
+  interface de handler do Orion (`void`) nao tem; fica para quando houver
+  IRQ compartilhada. A taxa continua medida para todo vetor: o `irq` do
+  shell do kernel mostra o pico por segundo de cada um.
+- O `irqstorm` (sequencia A) troca o caso de borda: um vetor de MSI em
+  laco de auto-IPI ate 80 mil disparos, com pico acima do limite, e o teste
+  exige que ele **nao** seja mascarado. O caso de nivel (a COM1 com THRE no
+  I/O APIC, o mesmo mecanismo de uma GPE nunca limpa) continua virando
+  aviso e mascara. As sequencias de carga (C, V, N, U e E) exigem que
+  nenhuma tempestade seja acusada, e a N mostra o pico do NVMe depois do
+  `fstest`.
+- **Pilha do kernel de volta a 16 KiB.** A a11 dobrou para 32 KiB porque o
+  notebook passou de 100%, mas a parte 3 mostrou que o estouro era o laco
+  de `#PF` com o GS do usuario, que esgota qualquer tamanho. O criterio da
+  8.6 (trocar so acima de 75%) continua valendo: na regressao completa da
+  a13 o maior uso foi 8576 bytes (52% de 16 KiB, na `netrx`), o mesmo da 8.6. O relatorio do
+  `#DF` roda na pilha IST de 8 KiB e nao depende da pilha da thread.
+- **CI (GitHub Actions) vermelho no primeiro push.** O `tools/regress.py`
+  le os padroes do `regressao.ps1`, e dois deles (os do `logflood`, da 8.3)
+  tinham `\A(?s)`: o .NET aceita a opcao no meio da expressao, o Python
+  3.11 ou mais novo recusa ("global flags not at the start"), e o job
+  parava com excecao no fim da sequencia A, depois de 7 minutos. Os dois
+  viraram `(?s)\A`, que os dois aceitam. Todos os 729 padroes da regressao
+  agora compilam no Python (conferido extraindo-os pelo proprio
+  `regress.py`). A sequencia K entrou na lista padrao do `regress.py`.

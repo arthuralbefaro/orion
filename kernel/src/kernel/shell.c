@@ -174,7 +174,8 @@ static void cmd_irq(const char *args)
         kprintf("  %5d ", v);
         for (uint32_t c = 0; c < cpus; c++)
             kprintf(" %8lu", interrupts_count_cpu((uint8_t)v, c));
-        kprintf("  %s%s\n", interrupts_name((uint8_t)v), interrupts_storm_masked((uint8_t)v) ? " [mascarado]" : "");
+        kprintf("  %s, pico %u/s%s\n", interrupts_name((uint8_t)v), interrupts_peak_rate((uint8_t)v),
+                interrupts_storm_masked((uint8_t)v) ? " [mascarado]" : "");
     }
     interrupts_dump_cpus();
 }
