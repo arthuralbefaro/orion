@@ -281,6 +281,19 @@ bool blockdev_write(struct blockdev *dev, uint64_t lba, uint32_t count, const vo
         return raw_write(base, abs, count, buf);
 
     mutex_lock(&cache_lock);
+    if (count >= BLOCK_DIRECT_MIN) {
+        for (uint32_t i = 0; i < count; i++) {
+            struct cache_entry *e = cache_lookup(base, abs + i);
+            if (e) {
+                memcpy(e->data, (const uint8_t *)buf + i * BLOCK_SECTOR, BLOCK_SECTOR);
+                e->dirty = false;
+                e->stamp = ++cache_clock;
+            }
+        }
+        bool ok = raw_write(base, abs, count, buf);
+        mutex_unlock(&cache_lock);
+        return ok;
+    }
     for (uint32_t i = 0; i < count; i++) {
         struct cache_entry *e = cache_lookup(base, abs + i);
         if (!e) {
@@ -314,6 +327,14 @@ bool blockdev_sync(void)
         }
     }
     mutex_unlock(&cache_lock);
+    uint32_t n = __atomic_load_n(&device_count, __ATOMIC_ACQUIRE);
+    for (uint32_t i = 0; i < n; i++) {
+        struct blockdev *d = &devices[i];
+        if (d->parent || d->released || d->gone || !d->flush)
+            continue;
+        if (!d->flush(d))
+            ok = false;
+    }
     return ok;
 }
 

@@ -268,10 +268,29 @@ int ksnprintf(char *buf, size_t size, const char *fmt, ...)
     return n;
 }
 
+#define KMSG_SIZE (64 * 1024)
+
+static char kmsg_ring[KMSG_SIZE];
+static uint64_t kmsg_written;
+
 void kputc(char c)
 {
     serial_putc(c);
     console_putc(c);
+}
+
+size_t kmsg_snapshot(char *out, size_t cap, uint64_t *total)
+{
+    uint64_t end = __atomic_load_n(&kmsg_written, __ATOMIC_ACQUIRE);
+    uint64_t n = end < KMSG_SIZE ? end : KMSG_SIZE;
+    if (n > cap)
+        n = cap;
+    uint64_t start = end - n;
+    for (uint64_t i = 0; i < n; i++)
+        out[i] = kmsg_ring[(start + i) % KMSG_SIZE];
+    if (total)
+        *total = end;
+    return (size_t)n;
 }
 
 void kputs(const char *s)
@@ -283,6 +302,8 @@ void kputs(const char *s)
 static void kputc_cb(char c, void *ctx)
 {
     (void)ctx;
+    uint64_t at = __atomic_fetch_add(&kmsg_written, 1, __ATOMIC_RELAXED);
+    kmsg_ring[at % KMSG_SIZE] = c;
     kputc(c);
 }
 

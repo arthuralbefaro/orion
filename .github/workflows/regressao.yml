@@ -8,14 +8,25 @@ on:
 jobs:
   regressao:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Ferramentas
         run: |
           sudo apt-get update
           sudo apt-get install -y clang lld llvm make qemu-system-x86 ovmf python3-pil
+
+      - name: KVM, se o runner tiver
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+            ls -l /dev/kvm
+          else
+            echo "sem /dev/kvm: o QEMU roda em TCG e os prazos da regressao sobem"
+          fi
 
       - name: Zig 0.16.0 (musl)
         run: |
@@ -30,12 +41,12 @@ jobs:
       - name: Build
         run: make -j"$(nproc)"
 
-      - name: Regressao A a E
-        run: python3 tools/regress.py ABCDE
+      - name: Regressao completa
+        run: python3 tools/regress.py ABCDFIVNUSGWHPZMKRE
 
       - name: Logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: logs
           path: |

@@ -6,6 +6,7 @@
 #define BLOCK_MAX_DEVICES 32
 #define BLOCK_CACHE_ENTRIES 256
 #define BLOCK_SECTOR 512
+#define BLOCK_DIRECT_MIN 8
 
 struct blockdev;
 
@@ -34,6 +35,7 @@ struct blockdev {
     bool removable;
     char model[41];
     void (*release)(struct blockdev *dev);
+    bool (*flush)(struct blockdev *dev);
 };
 
 #define PART_OTHER 0

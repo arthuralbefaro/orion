@@ -178,7 +178,7 @@ bool pci_enable_msix(const struct pci_device *dev, uint16_t entry, uint8_t vecto
     return true;
 }
 
-static const char *class_name(uint8_t c, uint8_t s)
+const char *pci_class_name(uint8_t c, uint8_t s)
 {
     switch (c) {
     case 0x01: return s == 0x06 ? "SATA (AHCI)" : s == 0x01 ? "IDE" : s == 0x08 ? "NVMe" : "storage";
@@ -190,13 +190,30 @@ static const char *class_name(uint8_t c, uint8_t s)
     }
 }
 
+void pci_set_driver(const struct pci_device *dev, const char *name)
+{
+    for (uint32_t i = 0; i < device_count; i++)
+        if (&devices[i] == dev)
+            devices[i].driver = name;
+}
+
+uint32_t pci_count(void)
+{
+    return device_count;
+}
+
+const struct pci_device *pci_at(uint32_t index)
+{
+    return index < device_count ? &devices[index] : NULL;
+}
+
 void pci_dump(void)
 {
-    kprintf("  bus:slot.f  vendor:dev   classe\n");
+    kprintf("  bus:slot.f  vendor:dev   classe                driver\n");
     for (uint32_t i = 0; i < device_count; i++) {
         struct pci_device *d = &devices[i];
-        kprintf("  %02x:%02x.%u     %04x:%04x    %02x.%02x %s\n", d->bus, d->slot, d->func,
+        kprintf("  %02x:%02x.%u     %04x:%04x    %02x.%02x %-14s %s\n", d->bus, d->slot, d->func,
                 d->vendor, d->device, d->class_code, d->subclass,
-                class_name(d->class_code, d->subclass));
+                pci_class_name(d->class_code, d->subclass), d->driver ? d->driver : "nenhum");
     }
 }

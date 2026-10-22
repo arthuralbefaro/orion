@@ -62,6 +62,7 @@ bool bga_init(void)
     vram = blocks ? (uint64_t)blocks * 65536 : 16ull << 20;
     lfb = vmm_map_mmio_flags(lfb_phys, vram, PTE_PRESENT | PTE_WRITABLE | PTE_WRITETHRU | PTE_NX);
     present = true;
+    pci_set_driver(dev, "bga");
     log_info("bga", "Bochs/BGA %04x:%04x, DISPI 0x%04x, framebuffer em 0x%lx, %lu MiB de video", dev->vendor,
              dev->device, version, lfb_phys, vram >> 20);
     return true;

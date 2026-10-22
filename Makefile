@@ -68,7 +68,7 @@ $(BUILD_DIR)/%.S.o: $(SRC_DIR)/%.S
 	$(CC) $(CFLAGS) -c $< -o $@
 
 esp: $(ELF) limine.conf
-	@mkdir -p $(ESP)/EFI/BOOT $(ESP)/boot/limine $(ESP)/bin $(ESP)/dev $(ESP)/mnt $(ESP)/tmp $(ESP)/run $(ESP)/proc
+	@mkdir -p $(ESP)/EFI/BOOT $(ESP)/boot/limine $(ESP)/bin $(ESP)/dev $(ESP)/mnt $(ESP)/tmp $(ESP)/run $(ESP)/proc $(ESP)/home/orion
 	cp $(LIMINE)/BOOTX64.EFI $(ESP)/EFI/BOOT/
 	cp $(ELF) $(ESP)/boot/$(KERNEL).elf
 	rm -f $(ESP)/boot/*.elf.bak

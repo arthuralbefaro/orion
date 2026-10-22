@@ -286,8 +286,10 @@ bool usb_init(void)
         log_warn("usb", "xHCI sem MSI nem MSI-X; os eventos vem por consulta");
     int32_t n = xhci_start(mmio, irq_on);
     present = n >= 0;
-    if (present)
+    if (present) {
+        pci_set_driver(dev, "xhci");
         log_info("usb", "%d dispositivo(s) USB", n);
+    }
     if (present)
         thread_create("usbd", poll_thread, NULL);
     return present;

@@ -34,7 +34,7 @@ void kvlog(enum log_level level, const char *subsystem, const char *fmt, va_list
 
     kvprintf(fmt, ap);
 
-    kputc('\n');
+    kprintf("\n");
     kprint_unlock(locked, flags);
 }
 

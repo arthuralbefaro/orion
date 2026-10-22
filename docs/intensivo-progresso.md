@@ -2406,3 +2406,35 @@ nova mudou a posicao de `imagens` no app `arquivos` e a linha do cursor no
 terminal); uma rodada com a imagem reaproveitada (`-NoBuild`) falhou no
 `config` porque a rodada anterior tinha gravado o `/etc/wm.conf` na
 imagem, o que nao acontece na regressao completa, que refaz a imagem.
+
+#### 7.4 parte 8 - `/proc/pci`, `dmesg`, CI do GitHub e escrita em disco rapida - 2026-10-22 - FEITO
+Tres frentes juntas, porque mexem nos mesmos arquivos (`regressao.ps1`,
+`nvme.c`, `regress.py`):
+(1) `/proc/pci` com o driver de cada dispositivo (`pci_set_driver`, so
+quando o init deu certo) e `lspci`; anel de 64 KiB do log do kernel em
+`/proc/kmsg` e `dmesg [-g texto]`.
+(2) CI: o run 39795608775 falhou em 2 de 490 porque o `Makefile` do Linux
+nao criava `home/orion` (`ls /home` dava inexistente no log baixado do
+CI). Corrigido no `Makefile`, no `musl_build.py` e no `mkimage.py`; os
+dois WADs no build do Linux; o `regress.py` lia zero passos da K e da R
+(lista numa linha so) e agora para com erro nesse caso; prazos x2 (com
+KVM) ou x3 no CI (`CI=true`, `ORION_TIME_SCALE`); `-accel kvm` quando o
+`/dev/kvm` existe; `-Smp` por sequencia; workflow com `checkout@v5`,
+`upload-artifact@v5`, KVM liberado, todas as sequencias da regressao
+local e limite de 300 min.
+(3) Os WADs deixaram a instalacao da sequencia I lenta demais (mais de
+1500 s). Medido com o `wrtest` (novo): escrita no ext2 do NVMe a ~185
+KiB/s com qualquer tamanho de escrita; causas: `FLUSH` do NVMe depois de
+cada escrita e um comando por setor no cache de blocos. Agora o `FLUSH`
+vai so no `sync` (`blockdev->flush`), escritas de 4 KiB ou mais vao
+direto ao disco e o instalador formata a raiz com blocos de 4 KiB:
+2651 KiB/s (blocos de 1 KiB) e 8305 KiB/s (4 KiB).
+Ajustes de teste no caminho: o fim de linha do log ia por `kputc` e o
+`dmesg` saia numa linha so; V e N aceitam qualquer tamanho de raiz (279
+MiB com os WADs). Detalhes: `docs/DECISOES.md`, v3.0.0-a15 partes 8, 9 e
+10.
+Verificacao: `regress.py` completo pelo caminho do CI (790 de 792; as duas
+falhas eram do `permtest` novo da correcao abaixo, num kernel em que o
+`process.c` nao tinha sido recompilado) e regressao completa do PowerShell
+verde em 790 de 793 (24,3 min), so o `nicetest` oscilando (abaixo). O multiplicador de prazos foi conferido com `CI=true` (K verde
+com prazos x3); o Linux do runner e o KVM nao deu para testar daqui.

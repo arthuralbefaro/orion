@@ -741,6 +741,7 @@ bool hda_init(void)
     present = true;
     if (!irq_on)
         thread_create("hdapoll", poll_thread, NULL);
+    pci_set_driver(dev, "hda");
 
     log_info("hda", "codec %u (%04x:%04x): AFG %u, DAC %u, stream de saida %u, %s", codec, vendor_id >> 16,
              vendor_id & 0xFFFF, afg, dac, sd_index, irq_on ? "MSI" : "sem MSI, por consulta");

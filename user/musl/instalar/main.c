@@ -641,7 +641,7 @@ int main(int argc, char **argv)
     }
     printf("instalar: particoes %s e %s criadas; formatando\n", esp, rootp);
     const char *mkfs_esp[] = { "/bin/mkfs", esp, "ORION-EFI", NULL };
-    const char *mkfs_root[] = { "/bin/mkfs.ext2", "-L", "orion-raiz", rootp, NULL };
+    const char *mkfs_root[] = { "/bin/mkfs.ext2", "-b", "4096", "-L", "orion-raiz", rootp, NULL };
     if (run(mkfs_esp) < 0 || run(mkfs_root) < 0) {
         fprintf(stderr, "instalar: a formatacao falhou\n");
         return 1;

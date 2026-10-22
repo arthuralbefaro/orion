@@ -240,6 +240,7 @@ if ($runAll -or $OnlyA) {
         "raw:eccho delok", "keys:1B5B48", "keys:1B5B43", "keys:1B5B43", "keys:1B5B337E",
         "key:0D", "wait:1.5",
         "cmd:history", "wait:3", "cmd:cat /proc/interrupts", "wait:1",
+        "cmd:lspci", "cmd:dmesg -g IDT", "cmd:dmesg | wc", "wait:1",
         "cmd:forktest", "wait:30",
         "cmd:forktest -s 6", "wait:3", "key:0B", "cmd:mem", "key:0B", "wait:12",
         "cmd:dhcp", "wait:8",
@@ -320,6 +321,13 @@ if ($runAll -or $OnlyA) {
     Stop-Process -Id $web.Id -Force -ErrorAction SilentlyContinue
     $a = Get-Log "out\reg-a.log"
     if ($Verbose) { Write-Output $a }
+    Expect $a "lspci\s*\nendereco\s+id\s+classe\s+driver\s+tipo\s*\n(?:[^\n]*\n){0,12}?00:1f\.2\s+8086:2922\s+010601\s+ahci\s+SATA \(AHCI\)" "lspci: o controlador AHCI do QEMU com o driver ahci"
+    Expect $a "lspci\s*\n(?:[^\n]*\n){0,12}?00:02\.0\s+8086:10d3\s+020000\s+e1000\s+rede" "lspci: a placa e1000e com o driver e1000"
+    Expect $a "lspci\s*\n(?:[^\n]*\n){0,12}?00:00\.0\s+8086:29c0\s+060000\s+nenhum\s+host bridge" "lspci: dispositivo sem driver aparece como nenhum"
+    Expect $a "lspci\s*\n(?:[^\n]*\n){1,14}?\d+ dispositivo\(s\)" "lspci conta os dispositivos de /proc/pci"
+    Expect $a "dmesg -g IDT\s*\n\[info\] idt\s+IDT carregada: 256 vetores" "dmesg mostra o log do kernel desde o boot (/proc/kmsg)"
+    ExpectNot $a "dmesg -g IDT\s*\n[^\n]*\n[^\n]*dmesg -g IDT" "o anel do dmesg tem so o log do kernel, nao o que o terminal escreve"
+    Expect $a "dmesg \| wc\s*\n\s*[1-9]\d{1,}\s+\d+\s+\d+" "dmesg tem as linhas do boot"
 
     Expect $a "Orion sh \(pid \d+\)" "shell de usuario subiu"
     Expect $a "\[info\] cpu\s+SMEP ligado, SMAP ligado" "SMEP e SMAP ligados em todas as copias de memoria de usuario"
@@ -1096,7 +1104,7 @@ if ($runAll -or $OnlyI) {
 if ($runAll -or $OnlyV) {
     Write-Host "== Sequencia V (virtio-blk e virtio-net) ==" -ForegroundColor Cyan
     $stepsV = @(
-        "cmd:cat /proc/mounts", "wait:1",
+        "cmd:cat /proc/mounts", "wait:1", "cmd:lspci", "wait:1",
         "cmd:mkdir /root/vt", "cmd:fstest -a /root/vt", 'cmd:echo FIM$X-VFSTEST', "until:600:FIM-VFSTEST",
         "cmd:rmdir /root/vt", "cmd:echo persiste-no-virtio > /root/persiste.txt", "cmd:sync", "wait:2",
         "cmd:ping 10.0.2.2 3", "wait:8", "cmd:httpget -q 10.0.2.2 8088 /big10.bin", "until:120:corpo de",
@@ -1109,10 +1117,12 @@ if ($runAll -or $OnlyV) {
     Stop-Process -Id $web.Id -Force -ErrorAction SilentlyContinue
     $v = Get-Log "out\reg-v.log"
     if ($Verbose) { Write-Output $v }
+    Expect $v "lspci\s*\n(?:[^\n]*\n){0,12}?[0-9a-f:.]+\s+1af4:10[04]1\s+\d{6}\s+virtio-blk\s" "lspci: o disco virtio com o driver virtio-blk"
+    Expect $v "lspci\s*\n(?:[^\n]*\n){0,12}?[0-9a-f:.]+\s+1af4:10[04]0\s+\d{6}\s+virtio-net\s" "lspci: a rede virtio com o driver virtio-net"
     ExpectNot $v "tempestade de interrupcao" "nenhuma IRQ mascarada como tempestade sob carga na sequencia V"
 
     Expect $v "virtio\s+vda: virtio-blk 1af4:(1001|1042) [^\n]*MSI-X no vetor \d+, CPU [1-9]" "virtio-blk liga a MSI-X fora da CPU 0"
-    Expect $v "vda2: GPT, LBA \d+, \d+ setores \(256 MiB\), raiz Linux x86-64" "particoes GPT do disco virtio"
+    Expect $v "vda2: GPT, LBA \d+, \d+ setores \(\d+ MiB\), raiz Linux x86-64" "particoes GPT do disco virtio"
     Expect $v "vfs\s+raiz montada: ext2 em vda2" "raiz ext2 no disco virtio"
     Expect $v "/dev/vda2 / ext2 rw 0 0" "/proc/mounts mostra a raiz em vda2"
     Expect $v "(?s)fstest -a /root/vt.*?fstest: TUDO OK.*?FIM-VFSTEST" "fstest -a na raiz pelo virtio-blk"
@@ -1133,7 +1143,7 @@ if ($runAll -or $OnlyV) {
 if ($runAll -or $OnlyN) {
     Write-Host "== Sequencia N (raiz no NVMe) ==" -ForegroundColor Cyan
     $stepsN = @(
-        "cmd:cat /proc/mounts", "wait:1",
+        "cmd:cat /proc/mounts", "wait:1", "cmd:lspci", "wait:1",
         "cmd:mkdir /root/nt", "cmd:fstest -a /root/nt", 'cmd:echo FIM$X-NFSTEST', "until:600:FIM-NFSTEST",
         "cmd:rmdir /root/nt", "cmd:echo persiste-no-nvme > /root/persiste.txt", "cmd:sync", "wait:2",
         "cmd:cat /proc/interrupts", "wait:1", "key:0B", "cmd:irq", "wait:1", "key:0B",
@@ -1143,11 +1153,12 @@ if ($runAll -or $OnlyN) {
         -Script $stepsN -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $n = Get-Log "out\reg-n.log"
     if ($Verbose) { Write-Output $n }
+    Expect $n "lspci\s*\n(?:[^\n]*\n){0,12}?[0-9a-f:.]+\s+1b36:0010\s+010802\s+nvme\s" "lspci: o NVMe do QEMU com o driver nvme"
     ExpectNot $n "tempestade de interrupcao" "nenhuma IRQ mascarada como tempestade sob carga na sequencia N"
     Expect $n "\d+\s+nvme, pico [1-9]\d*/s" "o irq mostra o pico por segundo do NVMe depois do fstest"
 
     Expect $n "nvme\s+nvme0n1: 1b36:0010 [^\n]*versao 1\.\d[^\n]*MSI-X no vetor \d+, CPU [1-9]" "NVMe: controlador, Identify e MSI-X fora da CPU 0"
-    Expect $n "nvme0n1p2: GPT, LBA \d+, \d+ setores \(256 MiB\), raiz Linux x86-64" "particoes GPT do NVMe com nomes nvme0n1pN"
+    Expect $n "nvme0n1p2: GPT, LBA \d+, \d+ setores \(\d+ MiB\), raiz Linux x86-64" "particoes GPT do NVMe com nomes nvme0n1pN"
     Expect $n "vfs\s+raiz montada: ext2 em nvme0n1p2" "boot com a raiz no NVMe"
     Expect $n "/dev/nvme0n1p2 / ext2 rw 0 0" "/proc/mounts mostra a raiz no NVMe"
     Expect $n "(?s)fstest -a /root/nt.*?fstest: TUDO OK.*?FIM-NFSTEST" "fstest -a na raiz pelo NVMe"
@@ -1163,7 +1174,7 @@ if ($runAll -or $OnlyU) {
     Remove-Item (Join-Path $Root "out\stick.img") -ErrorAction SilentlyContinue
     Remove-Item (Join-Path $Root "out\stick2.img") -ErrorAction SilentlyContinue
     $stepsU = @(
-        "cmd:lsusb", "wait:2", "cmd:cat /proc/usb", "wait:1",
+        "cmd:lsusb", "wait:2", "cmd:cat /proc/usb", "wait:1", "cmd:lspci", "wait:1",
         "cmd:ls /mnt", "cmd:cat /mnt/LEIAME.TXT", "cmd:echo gravado-no-orion > /mnt/NOVO.TXT", "wait:1",
         "cmd:umount /mnt", "wait:2",
         "key:0B", "cmd:usbstall sdc", "until:10:usbstall: sdc", "key:0B",
@@ -1192,6 +1203,7 @@ if ($runAll -or $OnlyU) {
     $novo = & $py[0] @pyArgs (Join-Path $Root "tools\mkfat.py") le out/stick2.img NOVO.TXT
     $u += "`n----- hospedeiro: NOVO.TXT -----`n" + ($novo -join "`n")
     if ($Verbose) { Write-Output $u }
+    Expect $u "lspci\s*\n(?:[^\n]*\n){0,12}?[0-9a-f:.]+\s+[0-9a-f]{4}:[0-9a-f]{4}\s+0c0330\s+xhci\s" "lspci: o controlador USB 3 com o driver xhci"
     ExpectNot $u "tempestade de interrupcao" "nenhuma IRQ mascarada como tempestade sob carga na sequencia U"
 
     Expect $u "usb\s+controlador xHCI 1b36:000d em " "xHCI achado no PCI"
@@ -1493,8 +1505,10 @@ if ($runAll -or $OnlyM) {
 # ---------------- Sequencia K: relatorio de estouro da pilha do kernel ----------------
 if ($runAll -or $OnlyK) {
     Write-Host "== Sequencia K (estouro da pilha do kernel com o timer, como no hardware real) ==" -ForegroundColor Cyan
-    $stepsK = @("key:0B", "cmd:estouro", "wait:5", "reboot:", "key:0B", "cmd:iretfalha", "wait:5",
-                "reboot:", "key:0B", "cmd:iretss", "wait:4")
+    $stepsK = @(
+        "key:0B", "cmd:estouro", "wait:5", "reboot:", "key:0B", "cmd:iretfalha", "wait:5",
+        "reboot:", "key:0B", "cmd:iretss", "wait:4"
+    )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -LogPath "out\reg-k.log" `
         -Script $stepsK -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $kl = Get-Log "out\reg-k.log"
@@ -1520,7 +1534,9 @@ if ($runAll -or $OnlyK) {
 # ---------------- Sequencia R: volta ao anel 3 por iretq em 8 CPUs ----------------
 if ($runAll -or $OnlyR) {
     Write-Host "== Sequencia R (volta ao anel 3 por iretq e sysret, 8 CPUs) ==" -ForegroundColor Cyan
-    $stepsR = @("cmd:segtest 5", "until:120:segtest: fim", "cmd:cat /proc/interrupts", "wait:1")
+    $stepsR = @(
+        "cmd:segtest 5", "until:120:segtest: fim", "cmd:cat /proc/interrupts", "wait:1"
+    )
     & (Join-Path $Root "test.ps1") -Smp 8 -Image -NoBuild -LogPath "out\reg-r.log" `
         -Script $stepsR -CommandDelay 1.5 -BootTimeout 90 -NoPrint | Out-Null
     $rl = Get-Log "out\reg-r.log"

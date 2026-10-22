@@ -43,6 +43,8 @@ def parse_sequences():
         m = re.search(r"\$steps" + name + r"\s*=\s*@\((.*?)^\s*\)\s*$", body, flags=re.S | re.M)
         if m:
             seq["steps"] = [ps_string(s) for s in STRING.finditer(m.group(1))]
+        elif re.search(r"\$steps" + name + r"\s*=", body) and name != "E":
+            raise SystemExit(f"regress.py: nao li os passos da sequencia {name} (o ')' da lista tem de ficar sozinho numa linha)")
         for var in re.finditer(r"^\s*\$(\w+)\s*=\s*if\s*\(\$Noturna\)\s*\{\s*(\S+)\s*\}\s*else\s*\{\s*(\S+)\s*\}", body,
                                flags=re.M):
             value = var.group(2) if NOTURNA else var.group(3)

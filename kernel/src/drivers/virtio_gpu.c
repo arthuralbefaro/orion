@@ -261,6 +261,7 @@ bool virtio_gpu_init(void)
     }
     present = true;
     thread_create("gpuflush", flush_thread, NULL);
+    pci_set_driver(pci, "virtio-gpu");
     log_info("virtio-gpu", "virtio-gpu 2D: tela %ux%u no recurso %u, flush a cada %u ms quando muda", w, hgt,
              resource, FLUSH_MS);
     return true;

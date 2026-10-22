@@ -15,6 +15,7 @@
 #include <arch/x86_64/percpu.h>
 #include <arch/x86_64/interrupts.h>
 #include <drivers/usb.h>
+#include <drivers/pci.h>
 #include <mm/heap.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
@@ -39,7 +40,9 @@ enum pkind {
     P_SCHED,
     P_STACKS,
     P_BLOCKDEVS,
-    P_PIDDIR = 16,
+    P_KMSG,
+    P_PCI,
+    P_PIDDIR = 32,
     P_STATUS,
     P_CMDLINE,
     P_MAPS,
@@ -61,6 +64,8 @@ static const struct pent root_ents[] = {
     { "sched", P_SCHED },
     { "stacks", P_STACKS },
     { "blockdevs", P_BLOCKDEVS },
+    { "kmsg", P_KMSG },
+    { "pci", P_PCI },
 };
 
 static const struct pent pid_ents[] = {
@@ -420,6 +425,38 @@ static void gen_diskstats(struct pbuf *b)
     }
 }
 
+static void gen_kmsg(struct pbuf *b)
+{
+    size_t cap = 64 * 1024;
+    char *tmp = kmalloc(cap);
+    if (!tmp) {
+        b->failed = true;
+        return;
+    }
+    uint64_t total = 0;
+    size_t n = kmsg_snapshot(tmp, cap, &total);
+    size_t start = 0;
+    if (total > n) {
+        while (start < n && tmp[start] != '\n')
+            start++;
+        if (start < n)
+            start++;
+    }
+    for (size_t i = start; i < n; i++)
+        pb_putc(tmp[i], b);
+    kfree(tmp);
+}
+
+static void gen_pci(struct pbuf *b)
+{
+    for (uint32_t i = 0; i < pci_count(); i++) {
+        const struct pci_device *d = pci_at(i);
+        pb_printf(b, "%02x:%02x.%u %04x:%04x %02x%02x%02x %s %s\n", d->bus, d->slot, d->func, d->vendor, d->device,
+                  d->class_code, d->subclass, d->prog_if, d->driver ? d->driver : "nenhum",
+                  pci_class_name(d->class_code, d->subclass));
+    }
+}
+
 static const char *blockdev_kind(const struct blockdev *d)
 {
     if (!d->parent)
@@ -729,6 +766,8 @@ static int proc_open(struct vnode *v, int flags, struct file **out)
     case P_SCHED: gen_sched(&b); break;
     case P_STACKS: gen_stacks(&b); break;
     case P_BLOCKDEVS: gen_blockdevs(&b); break;
+    case P_KMSG: gen_kmsg(&b); break;
+    case P_PCI: gen_pci(&b); break;
     case P_STATUS:  gen_status(&b, p); break;
     case P_STAT:    gen_stat(&b, p); break;
     case P_CMDLINE: gen_cmdline(&b, p); break;

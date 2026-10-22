@@ -281,9 +281,18 @@ static bool nvme_write(struct blockdev *dev, uint64_t lba, uint32_t count, const
         lba += n;
         count -= n;
     }
-    io_cmd(OP_FLUSH, 0, 0);
     mutex_unlock(&lock);
     return true;
+}
+
+static bool nvme_flush(struct blockdev *dev)
+{
+    mutex_lock(&lock);
+    bool ok = io_cmd(OP_FLUSH, 0, 0);
+    mutex_unlock(&lock);
+    if (!ok)
+        log_error("nvme", "%s: FLUSH falhou", dev->name);
+    return ok;
 }
 
 static void trim(char *s, size_t len)
@@ -383,6 +392,8 @@ bool nvme_init(void)
     if (!dev)
         return false;
     strlcpy(dev->model, model, sizeof(dev->model));
+    pci_set_driver(pci, "nvme");
+    dev->flush = nvme_flush;
     log_info("nvme", "nvme0n1: %04x:%04x em %02x:%02x.%u, '%s', versao %u.%u, fila de %u, %lu setores (%lu MiB), %s",
              pci->vendor, pci->device, pci->bus, pci->slot, pci->func, model, rd32(0x08) >> 16,
              (rd32(0x08) >> 8) & 0xFF, io_size, sectors, sectors * 512 / MiB(1), how);

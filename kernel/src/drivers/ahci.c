@@ -362,6 +362,7 @@ void ahci_init(void)
     }
     uint32_t cap = rd(abar, HBA_CAP);
     uint32_t pi = rd(abar, HBA_PI);
+    pci_set_driver(dev, "ahci");
     log_info("ahci", "controlador %04x:%04x em %02x:%02x.%u, ABAR %08lx, %u porta(s), %s",
              dev->vendor, dev->device, dev->bus, dev->slot, dev->func, abar_phys,
              (cap & 0x1F) + 1, (cap & (1u << 31)) ? "DMA 64 bits" : "DMA 32 bits");

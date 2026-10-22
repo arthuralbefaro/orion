@@ -255,6 +255,7 @@ bool e1000_init(void)
     }
 
     present = true;
+    pci_set_driver(dev, "e1000");
     nic_register(&e1000_ops);
     log_info("e1000", "%04x:%04x em %02x:%02x.%u, MAC %02x:%02x:%02x:%02x:%02x:%02x, %s, link %s",
              dev->vendor, dev->device, dev->bus, dev->slot, dev->func,

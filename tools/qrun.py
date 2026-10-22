@@ -13,6 +13,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "out"
 
+
+def kvm_usable():
+    if os.environ.get("ORION_KVM", "") == "0" or platform.system() != "Linux":
+        return False
+    return os.access("/dev/kvm", os.R_OK | os.W_OK)
+
+
+def time_scale():
+    forced = os.environ.get("ORION_TIME_SCALE")
+    if forced:
+        return max(1.0, float(forced))
+    if os.environ.get("CI", "").lower() != "true":
+        return 1.0
+    return 2.0 if kvm_usable() else 3.0
+
+
+KVM = kvm_usable()
+TIME_SCALE = time_scale()
+
 OVMF_CODE_CANDIDATES = [
     "/usr/share/OVMF/OVMF_CODE_4M.fd",
     "/usr/share/OVMF/OVMF_CODE.fd",
@@ -146,7 +165,7 @@ class Machine:
         self.extra_disks = list(extra_disks)
         self.serial_port = serial_port
         self.monitor_port = monitor_port
-        self.boot_timeout = boot_timeout
+        self.boot_timeout = boot_timeout * TIME_SCALE
         self.log = bytearray()
         self.proc = None
         self.serial = None
@@ -169,6 +188,8 @@ class Machine:
         while time.time() < end and not (port_free(self.serial_port) and port_free(self.monitor_port)):
             time.sleep(0.3)
         args = [qemu, "-M", "q35,i8042=off" if self.no_ps2 else "q35", "-cpu", "qemu64,+smep,+smap", "-smp", str(self.smp), "-m", f"{self.memory}M"]
+        if KVM:
+            args += ["-accel", "kvm"]
         if not self.bios:
             args += ["-drive", f"if=pflash,format=raw,unit=0,file={code},readonly=on",
                      "-drive", f"if=pflash,format=raw,unit=1,file={vars_copy}"]
@@ -389,7 +410,7 @@ class Machine:
             if os.environ.get(SLOW_WAITS_ENV):
                 self.pump(command_delay)
             else:
-                self.pump_until_prompt(command_delay, self.cmd_pos, 0.15)
+                self.pump_until_prompt(command_delay * TIME_SCALE, self.cmd_pos, 0.15)
             self.last_cmd = arg
         elif kind == "raw":
             print(f"  raw  > {arg}")
@@ -419,14 +440,15 @@ class Machine:
         elif kind == "wait":
             self.last_cmd = prev
             if not os.environ.get(SLOW_WAITS_ENV) and prev is not None and not re.search(r"(?<!&)&(?!&)", prev):
-                self.pump_until_prompt(float(arg), self.cmd_pos, 0.4)
+                self.pump_until_prompt(float(arg) * TIME_SCALE, self.cmd_pos, 0.4)
             else:
-                self.pump(float(arg))
+                self.pump(float(arg) * TIME_SCALE)
         elif kind == "until":
             secs, _, needle = arg.partition(":")
-            print(f"  until> {needle} ({secs} s)")
-            if not self.wait_for(needle, float(secs), self.cmd_pos):
-                print(f"  AVISO: '{needle}' nao apareceu em {secs} s")
+            limit = float(secs) * TIME_SCALE
+            print(f"  until> {needle} ({limit:g} s)")
+            if not self.wait_for(needle, limit, self.cmd_pos):
+                print(f"  AVISO: '{needle}' nao apareceu em {limit:g} s")
         elif kind == "shot":
             self.pump(0.4)
             self.screenshot(arg)
@@ -576,17 +598,19 @@ def run(steps, smp=4, memory=512, disk=False, extra_disks=(), gui=False, no_buil
                 usb_fat=usb_fat, no_strict=no_strict, audio=audio, audio_wav=audio_wav, vga=vga, usb_hub=usb_hub,
                 extra_nvme=extra_nvme)
     code = 0
+    if KVM or TIME_SCALE != 1.0:
+        print(f"qrun: {'KVM ligado' if KVM else 'sem KVM (TCG)'}, prazos x{TIME_SCALE:g}")
     try:
         m.start()
         all_steps = (["key:0B"] if kernel_shell else []) + list(steps)
         need_prompt = any(s.split(":", 1)[0] in ("cmd", "raw", "key", "keys") for s in all_steps)
         if need_prompt or not all_steps:
-            if m.wait_shell(boot_timeout):
+            if m.wait_shell(m.boot_timeout):
                 print("prompt do shell de usuario detectado")
             else:
-                print(f"AVISO: prompt do shell nao apareceu em {boot_timeout} s")
+                print(f"AVISO: prompt do shell nao apareceu em {m.boot_timeout:g} s")
         else:
-            m.pump(min(boot_timeout, 12))
+            m.pump(min(m.boot_timeout, 12 * TIME_SCALE))
         for s in all_steps:
             m.run_step(s, command_delay)
         m.pump(settle)

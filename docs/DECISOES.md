@@ -4466,3 +4466,114 @@ achou nada porque o `sh` do Orion nao tira as aspas: `'*.wad'` chega ao
   quadros e a captura tem a cena do jogo; `-iwad` inexistente e a pasta
   movida dao as mensagens novas; o `zenity` nunca aparece. B e S passaram a
   rodar o `doom` sem `-iwad`.
+
+## v3.0.0-a15, parte 8: `/proc/pci`, `/proc/kmsg`, `lspci` e `dmesg`
+
+No terceiro teste o dono nao tinha como ver o PCI nem o log do kernel do
+shell normal: o `pci` so existe no shell do kernel (`Ctrl+K`) e nao havia
+`dmesg`.
+
+- **`/proc/pci`**: uma linha por dispositivo, `bus:slot.func
+  vendor:device classe(3 bytes) driver tipo`. O driver e o nome que o
+  proprio driver grava (`pci_set_driver`) ao assumir o dispositivo, so
+  quando o init deu certo: `ahci`, `nvme`, `e1000`, `xhci`, `hda`,
+  `virtio-blk`, `virtio-net`, `virtio-gpu`, `bga`; os outros ficam
+  `nenhum`. O HDA do notebook (audio HDMI sem caminho ate um DAC) aparece
+  como `nenhum`, o que e verdade. O `pci` do shell do kernel ganhou a
+  mesma coluna. `lspci` (novo) formata o `/proc/pci` com cabecalho e
+  contagem.
+- **`/proc/kmsg`** e **`dmesg`**: tudo que passa pelo `kprintf` (o log
+  `[info]`/`[WARN]`/`[ERR ]`, os panicos e a saida dos comandos do shell
+  do kernel) entra num anel de 64 KiB, gravado no mesmo ponto que manda o
+  texto para a serial e a tela. O `/proc/kmsg` devolve uma copia do anel
+  (comeca na primeira linha inteira quando o anel ja deu a volta); ao
+  contrario do Linux, ler nao consome. O que o terminal do usuario e o
+  prompt do shell do kernel escrevem direto (`kputc`) fica de fora, para o
+  `dmesg` ter so o log. `dmesg [-g texto]` (novo) mostra o anel, ou so as
+  linhas com o texto. O `P_PIDDIR` do procfs subiu de 16 para 32 para
+  caberem as entradas novas.
+- Verificacoes: A (`lspci` com o AHCI, a e1000e e um dispositivo sem
+  driver; `dmesg -g IDT` com a linha da IDT e sem o eco do terminal), N
+  (`nvme`), U (`xhci`) e V (`virtio-blk` e `virtio-net`).
+
+## v3.0.0-a15, parte 9: o CI do GitHub
+
+A execucao 39795608775 (o primeiro push depois da correcao do `regress.py`)
+passou da A ate a E e falhou em 2 de 490 verificacoes, as duas da A: "login
+entra no HOME do usuario" e "/home/orion e do orion na imagem". No log do
+QEMU baixado do CI, `ls /home` dava "Arquivo ou diretorio inexistente": o
+`build.ps1` cria `home\orion` na arvore do sistema e o `Makefile` do Linux
+nao. Nao era tempo nem versao de QEMU.
+
+- **`/home/orion` na imagem nos dois builds**: o `Makefile` e o
+  `musl_build.py` criam a pasta, e o `mkimage.py` (que monta a raiz da
+  imagem e do initramfs) cria os diretorios que tem dono especial quando
+  faltam, em vez de so mudar o dono se existirem.
+- **WADs iguais nos dois builds**: o `freedoom.py` baixa e confere os dois
+  Freedoom e o `musl_build.py` os poe em `/usr/share/games/doom` (a parte 7
+  so tinha mudado o lado do Windows).
+- **`regress.py` lia zero passos das sequencias K e R**: o parser so
+  reconhece a lista `$stepsX = @(` quando o `)` final fica sozinho numa
+  linha, e as duas tinham a lista numa linha so. O Python bootava e nao
+  fazia nada, e as verificacoes falhavam sem explicacao. As listas foram
+  reformatadas e o `regress.py` agora para com erro quando nao le os passos
+  de uma sequencia.
+- **Prazos no CI**: o `qrun.py` multiplica os prazos (boot, `until`,
+  `wait` e a espera do prompt depois de cada comando) quando `CI=true`: 2
+  com KVM, 3 sem; `ORION_TIME_SCALE` fixa outro valor. So os prazos mudam;
+  as verificacoes de resultado sao as mesmas. Com `/dev/kvm` acessivel no
+  Linux, o QEMU recebe `-accel kvm` (`ORION_KVM=0` desliga), com o mesmo
+  modelo de CPU (`qemu64,+smep,+smap`). O `regress.py` passou a respeitar o
+  `-Smp` de cada sequencia (a R usa 8 CPUs; num runner de 4 vCPUs elas sao
+  emuladas em tempo dividido, o que o multiplicador cobre).
+- **Workflow**: `actions/checkout@v5` e `actions/upload-artifact@v5` (Node
+  24); passo que libera o `/dev/kvm` por regra do udev quando o runner tem
+  (os runners Linux do GitHub tem KVM); roda as mesmas sequencias da
+  regressao local (`ABCDFIVNUSGWHPZMKRE`; a E com uma rodada); limite do
+  job de 90 para 300 minutos.
+- O que nao deu para testar daqui: o Linux do runner (este PC e Windows) e
+  o KVM. O `regress.py` inteiro rodou aqui pelo mesmo caminho do CI, e o
+  multiplicador foi conferido com `CI=true`.
+
+### Ajustes que a primeira regressao completa da a15 pediu (4 de 793)
+
+- O `log.c` escrevia o texto de cada linha pelo `kprintf` e o fim de linha
+  por `kputc`, que nao passa pelo anel: o `dmesg` saia numa linha so.
+  Agora o fim de linha tambem vai pelo `kprintf`.
+- Com os dois WADs (57 MB a mais), a raiz da imagem passou de 256 para 279
+  MiB e a copia do instalador no NVMe do QEMU passou dos 600 s de prazo da
+  sequencia I (as teclas seguintes chegaram com a copia ainda rodando). As
+  verificacoes da V e da N aceitam qualquer tamanho na raiz, e o prazo da
+  instalacao foi para 1500 s.
+
+## v3.0.0-a15, parte 10: escrita em disco 14 a 45 vezes mais rapida (flush so no sync, escrita direta)
+
+Com os dois WADs a ISO live passou a instalar 89 MiB, e a instalacao na
+sequencia I deixou de caber nos 600 s (numa rodada nao terminou nem em
+1500 s). Medido no QEMU: a escrita num ext2 no NVMe andava a ~185 KiB/s
+com qualquer tamanho de escrita (4, 16 ou 64 KiB). Duas causas somadas:
+
+- **O driver NVMe mandava `FLUSH` depois de cada escrita.** Toda escrita de
+  um setor custava dois comandos (as duas interrupcoes por comando que o
+  `/proc/interrupts` mostrava), e o `FLUSH` obriga o QEMU a forcar o
+  arquivo da imagem no disco do hospedeiro, o mais lento de tudo. O
+  `FLUSH` agora fica numa funcao nova de cada dispositivo
+  (`blockdev->flush`), que o `blockdev_sync` chama depois de gravar o cache
+  sujo; o `sync`, o `fsync`, o `bdflush` (a cada 2 s) e o `poweroff` passam
+  por ali. E o mesmo contrato do Linux: o dado chega ao dispositivo na
+  escrita e fica duravel no `sync`.
+- **Toda escrita passava pelo cache de 256 setores**, e cada vitima suja
+  saia num comando de 512 bytes. Agora uma escrita de 8 setores (4 KiB) ou
+  mais vai direto ao dispositivo num comando so, depois de atualizar (e
+  marcar limpas) as copias desses setores que estiverem no cache. As
+  escritas pequenas (metadados do ext2 e do FAT) continuam no cache.
+- **O instalador formata a raiz com blocos de 4 KiB** (`mkfs.ext2 -b
+  4096`): com blocos de 1 KiB cada bloco de dados tem so 2 setores e nao
+  chega ao minimo da escrita direta.
+
+Medido com o `wrtest` (programa novo de medicao: copia com o tamanho de
+escrita pedido e mostra a vazao), 4 MiB num ext2 do NVMe do QEMU: 185 KiB/s
+antes; 2651 KiB/s com blocos de 1 KiB e 8305 KiB/s com blocos de 4 KiB
+depois. A investigacao passou primeiro pela memoria (sobrava), pelo
+tamanho do buffer do instalador (nao muda nada) e pelo perfilador (o
+sistema estava ocioso, esperando o disco).

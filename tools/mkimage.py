@@ -267,6 +267,9 @@ def root_tree(esp):
     mkext2.add_path(root, '/boot/efi', mkext2.Node('dir', 0o755))
     root.children.setdefault('lost+found', mkext2.Node('dir', 0o700))
     for path, (uid, gid) in SPECIAL_OWNERS.items():
+        parent = root
+        for part in path.split('/'):
+            parent = parent.children.setdefault(part, mkext2.Node('dir', 0o755))
         node = root
         for part in path.split('/'):
             node = node.children.get(part) if node else None

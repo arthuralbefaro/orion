@@ -117,14 +117,14 @@ def build_all(quiet=False):
                 if rel not in now:
                     (target / rel.replace("\\", "/")).unlink(missing_ok=True)
         manifest.write_text("\n".join(sorted(now)) + "\n")
-    wad = None
+    wads = []
     if "doom" in built:
         sys.path.insert(0, str(ROOT / "tools"))
         import freedoom
         try:
-            wad = freedoom.fetch()
+            wads = freedoom.fetch()
         except (OSError, SystemExit) as e:
-            print(f"aviso: sem o freedoom1.wad ({e}); o doom fica sem IWAD")
+            print(f"aviso: sem os WADs do Freedoom ({e}); o doom fica sem IWAD")
     share = ROOT / "share"
     for src in sorted(share.rglob("*")) if share.exists() else []:
         if src.is_file():
@@ -143,11 +143,15 @@ def build_all(quiet=False):
         dest = fonts / ttf.name
         if not dest.exists() or dest.stat().st_size != ttf.stat().st_size:
             shutil.copyfile(ttf, dest)
-    if wad and wad.exists():
-        (out / "esp" / "doom").mkdir(parents=True, exist_ok=True)
-        dest = out / "esp" / "doom" / "freedoom1.wad"
-        if not dest.exists() or dest.stat().st_size != wad.stat().st_size:
-            shutil.copyfile(wad, dest)
+    shutil.rmtree(out / "esp" / "doom", ignore_errors=True)
+    waddir = out / "esp" / "usr" / "share" / "games" / "doom"
+    for wad in wads:
+        if wad.exists():
+            waddir.mkdir(parents=True, exist_ok=True)
+            dest = waddir / wad.name
+            if not dest.exists() or dest.stat().st_size != wad.stat().st_size:
+                shutil.copyfile(wad, dest)
+    (out / "esp" / "home" / "orion").mkdir(parents=True, exist_ok=True)
     return built
 
 

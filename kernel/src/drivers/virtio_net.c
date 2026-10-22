@@ -187,6 +187,7 @@ bool virtio_net_init(void)
         ksnprintf(how, sizeof(how), "MSI-X no vetor %d, CPU %u", vector, cpu);
     else
         ksnprintf(how, sizeof(how), "sem MSI-X");
+    pci_set_driver(pci, "virtio-net");
     log_info("virtio", "virtio-net %04x:%04x em %02x:%02x.%u, MAC %02x:%02x:%02x:%02x:%02x:%02x, filas de %u, %s, link %s",
              pci->vendor, pci->device, pci->bus, pci->slot, pci->func, mac[0], mac[1], mac[2], mac[3], mac[4],
              mac[5], rxq.size, how, vnet_link_up() ? "up" : "down");
