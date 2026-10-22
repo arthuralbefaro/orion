@@ -51,24 +51,6 @@
 
 isr_common:
     SAVE_REGS
-    testq $3, 144(%rsp)
-    jz 1f
-    swapgs
-1:
-    KERNEL_ENTRY
-    movq %rsp, %rdi
-    call isr_dispatch
-
-    testq $3, 144(%rsp)
-    jz 2f
-    swapgs
-2:
-    RESTORE_REGS
-    addq $16, %rsp
-    iretq
-
-isr_paranoid:
-    SAVE_REGS
     xorl %r12d, %r12d
     movl $MSR_GS_BASE, %ecx
     rdmsr
@@ -79,6 +61,7 @@ isr_paranoid:
 1:
     KERNEL_ENTRY
     movq %rsp, %rdi
+    movl %r12d, %esi
     call isr_dispatch
 
     testl %r12d, %r12d
@@ -103,11 +86,7 @@ isr_stubs_begin:
         pushq $0
         pushq $vec
     .endif
-    .if (vec == 2) || (vec == 8)
-        jmp isr_paranoid
-    .else
-        jmp isr_common
-    .endif
+    jmp isr_common
     .set vec, vec + 1
 .endr
 

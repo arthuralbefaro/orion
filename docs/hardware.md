@@ -26,23 +26,23 @@ nada de `instalar`.
 ### Falhou
 
 - **`#DF` (double fault) na CPU 1 logo depois de `init iniciado`**, na
-  thread `init`, antes de o `init` imprimir a primeira linha. Estouro da
-  pilha do kernel de 16 KiB: uma interrupcao chegou quando o codigo
-  interrompido so tinha 16 bytes de pilha, o `isr_common` (`RIP =
-  isr_common+3`) empurrou tres registros e o quarto caiu na pagina de
-  guarda. Os registros mostram um `mmap(0, 0x5000, leitura e escrita,
-  privado e anonimo)` do `init` recem-feito e pouco codigo do kernel
-  executado desde a entrada; o ponteiro para o quadro da entrada, se for o
-  que esta em RDI e RBX, poe o comeco da entrada 288 bytes acima do fundo da
-  pilha, e nao no topo. Duas explicacoes fecham com os numeros: o topo da
-  pilha usado na entrada vinda do usuario estava errado, ou uma cadeia de
-  chamadas (talvez recursiva) consumiu os 16 KiB. O relatorio da versao
-  testada nao seguia a cadeia de chamadas, entao nao da para separar as
-  duas. A ISO nova confere o topo da pilha em toda entrada vinda do usuario
-  (panico com os numeros se estiver errado), segue a cadeia pelo `RBP` no
-  relatorio, dobra a pilha para 32 KiB e acrescenta o limite de
+  thread `init`, logo depois de um `mmap(0, 0x5000)` do `init`. Mecanismo
+  (reproduzido no QEMU com o mesmo padrao de registros): o kernel entrou no
+  anel 0 com o GS do usuario carregado; o `percpu_get()` leu `%gs:` com
+  base 0 e fez `#PF`; a entrada antiga decidia o `swapgs` pelo anel de onde
+  a excecao veio (anel 0: nao troca) e entrou de novo no mesmo
+  `percpu_get()`. Cada volta gasta 272 bytes, ate a pilha de 16 KiB acabar
+  (`RIP = isr_common+3`, `RAX = 1` do `percpu_ready()`, RCX, RDX, RSI e R8
+  a R11 ainda com os valores do usuario). O que deixou o GS do usuario no
+  anel 0 nesse notebook ainda nao esta provado: o mais provavel e uma volta
+  ao anel 3 (`iretq`) que falhou depois do `swapgs`, ou um caminho que
+  voltou ao usuario sem `swapgs`. A ISO nova decide o `swapgs` pelo
+  `MSR_GS_BASE` em toda entrada, entao o laco nao acontece mais, e para com
+  uma mensagem que diz qual dos casos foi e com os numeros. Tambem confere
+  o topo da pilha em toda entrada vinda do usuario, segue a cadeia pelo
+  `RBP` no relatorio, dobra a pilha para 32 KiB e acrescenta o limite de
   aninhamento, o anel de vetores por CPU e o detector de tempestade de IRQ.
-  Detalhes: `docs/DECISOES.md`, v3.0.0-a11 parte 2.
+  Detalhes: `docs/DECISOES.md`, v3.0.0-a11 parte 2 e v3.0.0-a12.
 - **Montagem automatica da ESP do Windows com escrita** (`/mnt montado:
   FAT32 em nvme0n1p1`). Nao chegou a gravar nada, mas era um risco; o modo
   live agora so monta pendrive, e somente leitura.

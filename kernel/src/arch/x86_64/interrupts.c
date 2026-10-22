@@ -624,8 +624,35 @@ uint32_t interrupts_storm_events(void)
     return storm_events;
 }
 
-void isr_dispatch(struct interrupt_frame *frame)
+static void check_gs(const struct interrupt_frame *f, uint64_t swapped)
 {
+    uint64_t vec = f->int_no;
+    if (vec == EXC_NMI || vec == EXC_DOUBLE_FAULT || vec == EXC_DEBUG || vec == EXC_MACHINE_CHECK)
+        return;
+    bool user = (f->cs & 3) == 3;
+    if (user == (swapped != 0))
+        return;
+    if (user)
+        panic("entrada do anel 3 (vetor %lu, %s) com o GS do kernel ja carregado: algum caminho voltou ao usuario "
+              "sem swapgs; RIP do usuario %016lx", vec, interrupts_name((uint8_t)vec), f->rip);
+    const uint8_t *ip = (const uint8_t *)f->rip;
+    if (is_text(f->rip) && ip[0] == 0x48 && (ip[1] == 0xCF || (ip[1] == 0x0F && ip[2] == 0x07))) {
+        const uint64_t *r = (const uint64_t *)f->rsp;
+        if (ip[1] == 0xCF && readable(f->rsp) && readable(f->rsp + 32))
+            panic("a volta ao anel 3 falhou no iretq em %016lx: %s (erro %lx) com o GS do usuario ja carregado; "
+                  "quadro devolvido: RIP=%016lx CS=%lx RFLAGS=%lx RSP=%016lx SS=%lx",
+                  f->rip, interrupts_name((uint8_t)vec), f->err_code, r[0], r[1], r[2], r[3], r[4]);
+        panic("a volta ao anel 3 falhou no %s em %016lx: %s (erro %lx) com o GS do usuario ja carregado; RCX=%016lx "
+              "R11=%016lx", ip[1] == 0xCF ? "iretq" : "sysretq", f->rip, interrupts_name((uint8_t)vec), f->err_code,
+              f->rcx, f->r11);
+    }
+    panic("o kernel rodava com o GS do usuario: vetor %lu (%s) em RIP=%016lx", vec, interrupts_name((uint8_t)vec),
+          f->rip);
+}
+
+void isr_dispatch(struct interrupt_frame *frame, uint64_t swapped)
+{
+    check_gs(frame, swapped);
     uint8_t vec = (uint8_t)frame->int_no;
     counters[vec]++;
     struct percpu *pc = percpu_ready() ? percpu_get() : NULL;

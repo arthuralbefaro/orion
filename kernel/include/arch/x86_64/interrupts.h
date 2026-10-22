@@ -24,6 +24,7 @@
 #define EXC_DOUBLE_FAULT      8
 #define EXC_GENERAL_PROTECTION 13
 #define EXC_PAGE_FAULT        14
+#define EXC_MACHINE_CHECK     18
 
 struct interrupt_frame {
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8;

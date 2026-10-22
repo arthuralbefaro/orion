@@ -49,10 +49,15 @@ hub na H, com audio na S e com troca de video na G (BGA) e na W
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
 Proxima etapa: nenhuma no plano; todas as etapas estao feitas, menos a 7.4
-(`[!]`, aguardando o teste do dono em hardware real, roteiro em
-docs/teste-hardware-real.md). Fase 7 fechada com a tag `v3.0-rc1` e a
-Fase 8 com a `v3.0-rc2`; a tag `v3.0` (marco M5) so depois que a 7.4
-fechar (decisao do dono, 2026-10-20). Versao 3.0.0-a10.
+(`[!]`). Primeiro teste do dono (2026-10-21, notebook ASUS Vivobook AMD
+com Windows): `#DF` logo depois de `init iniciado`; resultado em
+`docs/hardware.md`, correcoes nas partes 1 a 3 da sessao 4 (v3.0.0-a11 e
+a12). Agora aguardando a segunda rodada, so no modo live, com a ISO nova
+(roteiro em docs/teste-hardware-real.md, secao 5a). As etapas 9.1 a 9.3
+(instalar em USB, dual boot, rede USB) estao anotadas no `docs/PLANO.md` e
+nao comecam antes disso. Fase 7 fechada com a tag `v3.0-rc1` e a Fase 8
+com a `v3.0-rc2`; a tag `v3.0` (marco M5) so depois que a 7.4 fechar
+(decisao do dono, 2026-10-20). Versao 3.0.0-a12.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -341,7 +346,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 7.1 | ISO hibrida | [x] | 06:26 | 09:44 | ver `git log` |
 | 7.2 | Live | [x] | 09:44 | 10:13 | ver `git log` |
 | 7.3 | Instalador | [x] | 12:44 | 12:58 | `80dfc68` |
-| 7.4 | Hardware real | [!] | 13:00 | 13:08 | aguardando teste do usuario em hardware real, roteiro em docs/teste-hardware-real.md |
+| 7.4 | Hardware real | [!] | 13:00 | 13:08 | 1o teste (2026-10-21): #DF, corrigido nas partes 1 a 3 da sessao 4; aguardando a 2a rodada so no modo live, roteiro em docs/teste-hardware-real.md (5a), resultado em docs/hardware.md |
 | 7.5 | Pacotes | [x] | 13:10 | 13:30 | |
 | 8.1 | Fila por CPU e nice | [x] | 14:05 | 15:10 | |
 | 8.2 | Kernel preemptivo (contador de travas de spin por thread desde a 5.7 parte 4; troca adiada chamada na hora pelo `spin_unlock`) | [x] | 15:15 | 16:05 | |
@@ -2273,3 +2278,25 @@ desceu sem limite e travou em silencio; agora roda numa thread propria.
 Verificacao (nucleo: interrupcoes e pilha): `check.ps1` limpo, sequencia K
 (9 verificacoes) verde; regressao completa verde, 753 verificacoes (K incluida), 28,4 min; maior uso de pilha 6680 de 32768 bytes (20%). RAM livre
 antes: 7,0 GB. Versao 3.0.0-a11.
+
+#### 7.4 parte 3 - a causa do #DF: o kernel com o GS do usuario em laco de #PF; entrada decide o swapgs pelo MSR - 20:30 a 21:00 - FEITO
+Com o relatorio novo da parte 2 e o disassembly do `isr_dispatch` testado,
+os registros do notebook fecham com um mecanismo preciso: o quadro de
+entrada em RDI = RBX = base+0x70 poe o RBP da primeira funcao chamada em
+base+0x10 (o do relatorio), o `RAX = 1` e o retorno do `percpu_ready()`, e
+o `percpu_get()` seguinte le `%gs:` com a base do usuario, faz `#PF`, e a
+entrada antiga (que decidia o `swapgs` pelo CS) entra de novo nele. 272
+bytes por volta ate a pilha acabar, sem tocar nos registros do usuario.
+Reproduzido no QEMU com `iretfalha` (strict): `swapgs` e `iretq` com CS
+invalido. Na entrada antiga deu o mesmo `#DF` do notebook (RAX = 1,
+RSP = base-0x40, CR2 em `...ff8`, cadeia `percpu_get` / `isr_dispatch` /
+`isr_common` repetida 241 vezes). Agora toda entrada decide o `swapgs`
+pelo `MSR_GS_BASE` (a paranoica virou a unica) e passa o resultado ao C,
+que entra em panico com o caso e os numeros: volta ao anel 3 que falhou no
+`iretq`/`sysretq` (com o quadro devolvido), entrada do anel 3 com o GS do
+kernel ja carregado, ou kernel rodando com o GS do usuario. O gatilho no
+notebook ainda nao esta provado; a segunda rodada diz qual. Detalhes:
+`docs/DECISOES.md`, v3.0.0-a12.
+Verificacao (nucleo: entrada de interrupcao): `check.ps1` limpo,
+sequencia K (12 verificacoes, com o segundo boot do `iretfalha`) verde;
+regressao completa verde, 757 verificacoes, 29,9 min. RAM livre antes: 6,8 GB. Versao 3.0.0-a12.

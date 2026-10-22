@@ -4219,3 +4219,75 @@ dois niveis. Nenhuma funcao do kernel tem quadro maior que 4 KiB
     versao rodava o mergulho na thread `main`, que usa a pilha de boot sem
     guarda: desceu sem limite e corrompeu memoria em silencio.
   - Na F (fora do modo estrito) os dois respondem EPERM.
+
+## v3.0.0-a12 (7.4, parte 3: o mecanismo do #DF: o kernel rodando com o GS do usuario)
+
+Lendo de novo o relatorio do dono contra o disassembly do `isr_dispatch`
+do kernel testado, os numeros fecham com um mecanismo preciso, e nao com
+uma cadeia longa nem com o topo de pilha errado:
+
+- O `isr_dispatch` testado tem quadro de 0x50 bytes (`push rbp`, 5 pushes,
+  `sub $0x18`) e guarda o quadro de entrada em RBX. Com o quadro em
+  `RDI = RBX = base + 0x70`, a primeira funcao que ele chama roda com
+  `RBP = RSP = base + 0x10`: exatamente o RBP do relatorio e o RSP em que a
+  CPU empurrou o quadro seguinte.
+- As primeiras chamadas do `isr_dispatch` sao `percpu_ready()` (que devolve
+  1: o `RAX = 1` do relatorio) e `percpu_get()`, que le `%gs:self`.
+- Se o GS estiver com a base do usuario (0), o `percpu_get()` le o endereco
+  0x20, faz `#PF` no anel 0, e o `isr_common` antigo, que decidia o
+  `swapgs` pelo CS do quadro (anel 0: nao troca), chama o `isr_dispatch` de
+  novo com o mesmo GS errado. Cada nivel gasta 0x110 bytes (quadro de 0xB0,
+  0x50 do `isr_dispatch`, 0x10 do `percpu_get`), ate a pilha acabar no
+  meio de um `isr_common`: `RIP = isr_common+3`.
+- Nesse laco so rodam o stub, o `isr_common`, o comeco do `isr_dispatch`,
+  o `percpu_ready` e o `percpu_get`, que nao tocam em RCX, RDX, RSI nem de
+  R8 a R11. Por isso eles guardam os valores do usuario: os argumentos do
+  `mmap` (RSI, RDX, R8 a R10), os flags de usuario em R11 e o endereco
+  recem-mapeado em RCX (`0x103440a60000`, dentro da faixa de `mmap` com
+  ASLR).
+- O `#DF` entra pela entrada paranoica, que le o `MSR_GS_BASE`, ve a base
+  do usuario e troca: por isso o relatorio saiu inteiro, com CPU, thread e
+  processo certos.
+
+O comeco do laco e o kernel entrando (ou estando) no anel 0 com o GS do
+usuario. Os caminhos possiveis: uma volta ao anel 3 que falha depois do
+`swapgs` (um `iretq` que da `#GP`, `#SS` ou `#NP` com os registros do
+usuario ja restaurados, o que bate com os registros do relatorio), ou um
+caminho que voltou ao usuario sem `swapgs` (o GS fica invertido no anel 3
+e a primeira interrupcao ou excecao vinda dele troca para a base 0). O
+codigo do Orion nao mostra nenhum dos dois de forma evidente; os dois
+dependem de algo que o QEMU nao faz (no QEMU a regressao inteira roda sem
+isso). O teste `iretfalha` reproduz o primeiro no QEMU: no kernel antigo,
+um `iretq` com CS invalido depois do `swapgs` da o mesmo `#DF` do notebook
+(conferido abaixo).
+
+### O que mudou
+
+- **Toda entrada de interrupcao e excecao decide o `swapgs` pelo
+  `MSR_GS_BASE`**, como a NMI e o `#DF` ja faziam desde a 8.5: base de
+  kernel (endereco negativo), nao troca; senao troca e destroca na saida. A
+  entrada paranoica virou a unica (`isr_paranoid` saiu). Custo: um `rdmsr`
+  por interrupcao (o timer a 1000 Hz por CPU, as falhas de pagina), pequeno
+  perto do resto do tratamento. O GS fica certo em qualquer caso, entao o
+  laco de `#PF` nao existe mais.
+- **O resultado da decisao vai para o C** (`isr_dispatch(frame, swapped)`),
+  que confere com o anel de onde o quadro veio (menos NMI, `#DF`, `#DB` e
+  `#MC`, que podem chegar no meio das janelas de troca):
+  - veio do anel 3 e o GS ja era o do kernel: algum caminho voltou ao
+    usuario sem `swapgs`; panico dizendo isso, com o vetor e o RIP do
+    usuario;
+  - veio do anel 0 com o GS do usuario: se o RIP aponta para um `iretq`
+    (bytes `48 cf`) ou `sysretq` (`48 0f 07`), panico "a volta ao anel 3
+    falhou" com a excecao, o erro e o quadro que o kernel tentava devolver
+    (RIP, CS, RFLAGS, RSP e SS do usuario); se nao, panico "o kernel rodava
+    com o GS do usuario" com o RIP.
+  O proximo teste no notebook para em uma dessas tres linhas, com os
+  numeros, em vez do `#DF`.
+- **`iretfalha` (shell do kernel, so no modo estrito, sequencia K):** uma
+  thread do kernel faz `swapgs` e `iretq` para o anel 3 com o CS apontando
+  para o descritor do TSS. A CPU recusa o `iretq` com `#GP` no anel 0 e o
+  GS do usuario carregado, o mesmo estado do notebook. Com a entrada
+  antiga: o laco de `#PF` e o `#DF` com `RIP = isr_common+3`, o `RSP` 0x40
+  abaixo do fundo e a cadeia pelo `RBP` repetindo o `percpu_get`. Com a
+  entrada nova: o panico "a volta ao anel 3 falhou no iretq", com o CS
+  invalido no quadro.

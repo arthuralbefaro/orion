@@ -976,7 +976,7 @@ if ($runAll -or $OnlyF) {
         "cmd:mount", "cmd:id", "cmd:ls /bin | wc", "cmd:ls -l /etc/shadow /bin/su", "cmd:ls -l /home",
         "cmd:echo vivo-na-ram > /home/orion/nota.txt", "cmd:cat /home/orion/nota.txt", "cmd:hello",
         "cmd:lua -e print(6*7)", "cmd:su orion -c id", "cmd:free", "wait:1",
-        "key:0B", "cmd:irqtest", "cmd:irqstorm", "cmd:estouro", "cmd:usbstall sdb", "cmd:usbtimeout sdb", "cmd:kmfail 5", "key:0B",
+        "key:0B", "cmd:irqtest", "cmd:irqstorm", "cmd:estouro", "cmd:iretfalha", "cmd:usbstall sdb", "cmd:usbtimeout sdb", "cmd:kmfail 5", "key:0B",
         "reboot:uefi,cd", "cmd:mount", "cmd:cat /home/orion/nota.txt", "wait:1",
         "reboot:bios,isodisk", "cmd:mount", "cmd:poweroff", "wait:4", "monlog:info status",
         "reboot:uefi,isodisk", "cmd:mount", "cmd:ls /doom", "cmd:reboot", "wait:4", "monlog:info status"
@@ -998,6 +998,7 @@ if ($runAll -or $OnlyF) {
     Expect $f "usbtimeout: EPERM, so no modo de teste" "fora do modo estrito o usbtimeout responde EPERM"
     Expect $f "irqstorm: EPERM, so no modo de teste" "fora do modo estrito o irqstorm responde EPERM"
     Expect $f "estouro: EPERM, so no modo de teste" "fora do modo estrito o estouro responde EPERM"
+    Expect $f "iretfalha: EPERM, so no modo de teste" "fora do modo estrito o iretfalha responde EPERM"
     ExpectNot $f "BUG: [^\n]*dentro de interrupcao" "nenhum aviso de contexto de interrupcao nos boots da ISO"
     Expect $f "-rw-------\s+1\s+root\s+root[^\n]*/etc/shadow" "live: /etc/shadow 0600 de root"
     Expect $f "-rwsr-xr-x\s+1\s+root\s+root[^\n]*/bin/su" "live: su setuid root"
@@ -1476,7 +1477,7 @@ if ($runAll -or $OnlyM) {
 # ---------------- Sequencia K: relatorio de estouro da pilha do kernel ----------------
 if ($runAll -or $OnlyK) {
     Write-Host "== Sequencia K (estouro da pilha do kernel com o timer, como no hardware real) ==" -ForegroundColor Cyan
-    $stepsK = @("key:0B", "cmd:estouro", "wait:5")
+    $stepsK = @("key:0B", "cmd:estouro", "wait:5", "reboot:", "key:0B", "cmd:iretfalha", "wait:5")
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -LogPath "out\reg-k.log" `
         -Script $stepsK -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $kl = Get-Log "out\reg-k.log"
@@ -1491,6 +1492,9 @@ if ($runAll -or $OnlyK) {
     Expect $kl "cadeia pelo RBP \(do mais recente para o mais antigo\):\s*\n\s+ffffffff8[0-9a-f]+\s*\n\s+\(o endereco acima se repete mais \d{3,} vez\(es\)\)" "a cadeia pelo RBP mostra a recursao compactada"
     Expect $kl "\d{3,} quadro\(s\) na cadeia" "a cadeia pelo RBP conta os quadros"
     Expect $kl "Sistema travado\." "o relatorio termina"
+    Expect $kl "----- reboot -----[\s\S]*?iretfalha: iretq para o anel 3 com CS invalido depois do swapgs" "segundo boot: iretq que falha depois do swapgs (o estado do notebook)"
+    Expect $kl "----- reboot -----[\s\S]*?\*\*\* KERNEL PANIC \*\*\*\s*\na volta ao anel 3 falhou no iretq em ffffffff8[0-9a-f]+: #GP General Protection \(erro 28\) com o GS do usuario ja carregado; quadro devolvido: RIP=0000000000400000 CS=2b RFLAGS=2 RSP=0000000000010000 SS=1b" "o iretq que falha vira panico com o quadro devolvido, sem o laco de #PF"
+    ExpectNot $kl "----- reboot -----[\s\S]*?EXCECAO NAO TRATADA: #DF" "sem #DF no iretq que falha: a entrada decide o swapgs pelo MSR"
 }
 
 # ---------------- Sequencia E: estresse de processos ----------------

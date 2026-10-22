@@ -4,6 +4,7 @@
 #include <kernel/version.h>
 #include <boot/bootinfo.h>
 #include <arch/x86_64/cpu.h>
+#include <arch/x86_64/gdt.h>
 #include <arch/x86_64/interrupts.h>
 #include <arch/x86_64/lapic.h>
 #include <drivers/console.h>
@@ -630,6 +631,37 @@ static void cmd_estouro(const char *args)
         kprintf("estouro: thread nao criada\n");
 }
 
+static void bad_iret_thread(void *arg)
+{
+    (void)arg;
+    cli();
+    __asm__ volatile(
+        "pushq %[ss]\n\t"
+        "pushq %[rsp]\n\t"
+        "pushq $0x2\n\t"
+        "pushq %[cs]\n\t"
+        "pushq %[rip]\n\t"
+        "swapgs\n\t"
+        "iretq"
+        :
+        : [ss] "i"(GDT_USER_DATA | GDT_RPL_USER), [rsp] "r"(0x10000ull), [cs] "i"(GDT_TSS | GDT_RPL_USER),
+          [rip] "r"(0x400000ull)
+        : "memory");
+}
+
+static void cmd_iretfalha(const char *args)
+{
+    (void)args;
+    if (!irqctx_strict()) {
+        kprintf("iretfalha: EPERM, so no modo de teste (QEMU com fw_cfg opt/orion/strict)\n");
+        return;
+    }
+    kprintf("iretfalha: iretq para o anel 3 com CS invalido depois do swapgs (o estado do notebook)\n");
+    time_sleep_ms(200);
+    if (!thread_create("iretfalha", bad_iret_thread, NULL))
+        kprintf("iretfalha: thread nao criada\n");
+}
+
 static void cmd_irqstorm(const char *args)
 {
     (void)args;
@@ -781,6 +813,7 @@ static const struct command commands[] = {
     { "usbtimeout", "cala a campainha de uma transferencia do pendrive (teste)", cmd_usbtimeout },
     { "irqtest", "testa o aviso de kmalloc e espera dentro de interrupcao", cmd_irqtest },
     { "irqstorm", "provoca tempestades de IRQ (borda e nivel) e confere a mascara (teste)", cmd_irqstorm },
+    { "iretfalha", "iretq para o anel 3 que falha depois do swapgs (teste)", cmd_iretfalha },
     { "estouro", "estoura a pilha do kernel com o timer, como no hardware real (teste)", cmd_estouro },
     { "kmfail", "faz 1 em N kmalloc de usuario comum falhar (modo de teste)", cmd_kmfail },
     { "arp",    "cache ARP",                            cmd_arp },
