@@ -2335,3 +2335,16 @@ Verificacao (nucleo: interrupcoes e pilha): `check.ps1` limpo; rodada
 manual com `fstest -a` no NVMe e `irqstorm`; regressao completa verde, 763 verificacoes, 34,2 min (a primeira, com a suspensao do Windows no meio, deu vermelho so na M e a segunda so no perf; correcoes nas entradas abaixo). RAM
 livre antes: 6,5 GB na primeira, 2,8 GB na final. Versao 3.0.0-a13. O push continua com o dono; o CI so
 roda de novo no proximo push dele.
+
+#### Correcao achada na regressao da parte 5: o OOM matava o `sh` - 2026-10-22 - FEITO
+A primeira regressao completa da parte 5 (192,6 min: o Windows suspendeu
+das 06:50 as 09:34 no meio da sequencia B, que mesmo assim passou) deu
+vermelho so na M, 6 de 763: no caso "dois processos enchendo juntos" o OOM
+matou o `sh` depois que a segunda vitima saiu. A vitima conta como saida ao
+virar zumbi, mas a memoria volta depois; uma falha nesse intervalo escolhia
+outra vitima. Defeito da 8.4, dependente de tempo. Agora quem precisa de
+memoria espera ate 2 s a da vitima voltar antes de escolher outra.
+Detalhes: `docs/DECISOES.md`, logo depois da v3.0.0-a13. Verificacao:
+sequencia M verde 3 vezes seguidas; a segunda regressao completa
+(32,2 min) passou na M e deu vermelho so no perf (entrada abaixo). RAM
+livre antes: 1,7 GB; esperados 2 min, 6,0 GB.

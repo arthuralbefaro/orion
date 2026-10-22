@@ -4328,3 +4328,23 @@ um `iretq` com CS invalido depois do `swapgs` da o mesmo `#DF` do notebook
   viraram `(?s)\A`, que os dois aceitam. Todos os 729 padroes da regressao
   agora compilam no Python (conferido extraindo-os pelo proprio
   `regress.py`). A sequencia K entrou na lista padrao do `regress.py`.
+
+## v3.0.0-a13, correcao achada na regressao: o OOM matava o `sh` depois que a vitima saia
+
+A regressao completa da parte 5 deu vermelho so na sequencia M. No caso
+"dois processos enchendo juntos", depois que a segunda vitima saiu, o OOM
+rodou de novo e matou o `sh` (47 paginas) com 45536 paginas livres no
+momento do aviso. A vitima conta como "saiu" quando vira zumbi, mas a
+memoria dela volta de forma assincrona (no aviso de saida havia 1890
+paginas livres; logo depois, 45536). Uma falha de pagina nesse intervalo
+via memoria insuficiente, nenhuma vitima pendente, e escolhia outra, ja sem
+os dois processos grandes na lista. O defeito vem da 8.4 e depende de
+tempo; apareceu agora numa regressao em que o Windows suspendeu no meio.
+
+Agora o OOM anota quando a ultima vitima saiu e, por ate 2 s
+(`OOM_SETTLE_MS`), quem precisar de memoria espera ela voltar (dormindo em
+passos de 10 ms, saindo antes se receber SIGKILL) antes de escolher outra
+vitima. Quem esperava a propria vitima sair tambem espera essa volta antes
+de repetir a falha. Passados os 2 s sem memoria, a escolha segue como
+antes. Verificacao: sequencia M verde tres vezes seguidas, com o caso
+"dois" sempre em `OomKills +2`.

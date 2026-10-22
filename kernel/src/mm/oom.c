@@ -11,10 +11,13 @@
 
 #define OOM_RECLAIM_PAGES 256
 #define OOM_VICTIM_WAIT_MS 5000
+#define OOM_SETTLE_MS 2000
 
 static spinlock_t oom_lock = SPINLOCK_INIT;
 static uint32_t victim_pid;
 static uint64_t victim_since;
+static uint64_t victim_left;
+static uint64_t settles;
 static uint64_t kills;
 static uint64_t reclaims;
 static uint64_t self_kills;
@@ -47,6 +50,29 @@ static bool victim_gone(uint32_t pid)
     return gone;
 }
 
+static void note_victim_left(uint32_t pid)
+{
+    __atomic_store_n(&victim_left, time_ticks() | 1, __ATOMIC_RELEASE);
+    log_info("oom", "pid %u saiu; %lu paginas livres", pid, pmm_free_count());
+}
+
+static int settle(void)
+{
+    uint64_t left = __atomic_load_n(&victim_left, __ATOMIC_ACQUIRE);
+    if (!left)
+        return 0;
+    while (time_ticks() - left < OOM_SETTLE_MS) {
+        if (oom_fatal_pending())
+            return -1;
+        if (memory_ok()) {
+            __atomic_add_fetch(&settles, 1, __ATOMIC_RELAXED);
+            return 1;
+        }
+        thread_sleep_ms(10);
+    }
+    return 0;
+}
+
 bool oom_recover(void)
 {
     if (oom_fatal_pending())
@@ -59,14 +85,25 @@ bool oom_recover(void)
         return true;
 
     struct process *me = process_current();
-    uint64_t flags = spin_lock_irqsave(&oom_lock);
-    uint32_t pid = victim_pid;
-    if (pid && (victim_gone(pid) || time_ticks() - victim_since > OOM_VICTIM_WAIT_MS)) {
-        if (victim_gone(pid))
-            log_info("oom", "pid %u saiu; %lu paginas livres", pid, pmm_free_count());
-        else
-            log_warn("oom", "pid %u ainda nao liberou a memoria em %u ms; escolhendo outra vitima", pid,
-                     OOM_VICTIM_WAIT_MS);
+    uint64_t flags;
+    uint32_t pid;
+    for (;;) {
+        int st = settle();
+        if (st != 0)
+            return st > 0;
+        flags = spin_lock_irqsave(&oom_lock);
+        pid = victim_pid;
+        if (pid && victim_gone(pid)) {
+            victim_pid = 0;
+            spin_unlock_irqrestore(&oom_lock, flags);
+            note_victim_left(pid);
+            continue;
+        }
+        break;
+    }
+    if (pid && time_ticks() - victim_since > OOM_VICTIM_WAIT_MS) {
+        log_warn("oom", "pid %u ainda nao liberou a memoria em %u ms; escolhendo outra vitima", pid,
+                 OOM_VICTIM_WAIT_MS);
         victim_pid = pid = 0;
     }
     bool chose = false;
@@ -109,8 +146,9 @@ bool oom_recover(void)
                 victim_pid = 0;
             spin_unlock_irqrestore(&oom_lock, flags);
             if (mine)
-                log_info("oom", "pid %u saiu; %lu paginas livres", pid, pmm_free_count());
-            return true;
+                note_victim_left(pid);
+            int st = settle();
+            return st >= 0;
         }
         if (memory_ok())
             return true;
