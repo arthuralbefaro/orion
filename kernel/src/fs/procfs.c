@@ -507,6 +507,9 @@ static void gen_interrupts(struct pbuf *b)
             pb_printf(b, " %11lu", interrupts_count_cpu((uint8_t)v, cpus[i]));
         pb_printf(b, "  %s\n", interrupts_name((uint8_t)v));
     }
+    uint64_t checks, fixed;
+    interrupts_user_iret_stats(&checks, &fixed);
+    pb_printf(b, "IRT: %lu volta(s) ao anel 3 por iretq conferida(s), %lu com seletor errado\n", checks, fixed);
 }
 
 static void gen_sched(struct pbuf *b)

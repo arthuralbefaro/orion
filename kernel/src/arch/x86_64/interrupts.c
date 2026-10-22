@@ -654,7 +654,45 @@ static void check_gs(const struct interrupt_frame *f, uint64_t swapped)
           f->rip);
 }
 
+static uint64_t user_iret_checks;
+static uint64_t user_iret_fixed;
+static uint32_t user_iret_warned;
+
+void interrupts_check_user_return(struct interrupt_frame *f, const char *where)
+{
+    if ((f->cs & 3) != 3)
+        return;
+    __atomic_add_fetch(&user_iret_checks, 1, __ATOMIC_RELAXED);
+    uint64_t want_cs = GDT_USER_CODE | GDT_RPL_USER, want_ss = GDT_USER_DATA | GDT_RPL_USER;
+    if (f->cs == want_cs && f->ss == want_ss)
+        return;
+    if (irqctx_strict())
+        panic("volta ao anel 3 por iretq (%s) com seletores errados: CS=%lx SS=%lx, esperado CS=%lx SS=%lx; num quadro "
+              "de interrupcao o SS e o que o anel 3 tinha, carregado pelo ultimo sysret (STAR) ou iretq; RIP=%016lx",
+              where, f->cs, f->ss, want_cs, want_ss, f->rip);
+    __atomic_add_fetch(&user_iret_fixed, 1, __ATOMIC_RELAXED);
+    if (!__atomic_exchange_n(&user_iret_warned, 1, __ATOMIC_ACQ_REL))
+        log_error("irq", "volta ao anel 3 por iretq (%s) com CS=%lx SS=%lx; corrigido para CS=%lx SS=%lx (aviso unico)",
+                  where, f->cs, f->ss, want_cs, want_ss);
+    f->cs = want_cs;
+    f->ss = want_ss;
+}
+
+void interrupts_user_iret_stats(uint64_t *checks, uint64_t *fixed)
+{
+    *checks = __atomic_load_n(&user_iret_checks, __ATOMIC_RELAXED);
+    *fixed = __atomic_load_n(&user_iret_fixed, __ATOMIC_RELAXED);
+}
+
+static void dispatch(struct interrupt_frame *frame, uint64_t swapped);
+
 void isr_dispatch(struct interrupt_frame *frame, uint64_t swapped)
+{
+    dispatch(frame, swapped);
+    interrupts_check_user_return(frame, "volta de interrupcao ou excecao");
+}
+
+static void dispatch(struct interrupt_frame *frame, uint64_t swapped)
 {
     check_gs(frame, swapped);
     uint8_t vec = (uint8_t)frame->int_no;

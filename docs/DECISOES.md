@@ -4361,3 +4361,75 @@ afrouxar a verificacao, o `cli` e o `sti` passaram para quem chama
 (`sys_prof`), e a funcao amostrada so roda com interrupcoes desligadas.
 Sequencia P verde tres vezes antes e tres depois da mudanca (359 a 369
 amostras, todas sem IRQ).
+
+## v3.0.0-a14 (7.4, parte 6: a causa do #DF e do #GP no notebook AMD: o STAR sem o RPL 3)
+
+### O que a segunda rodada mostrou
+
+Com a ISO a13, o notebook parou logo depois de `init iniciado` no panico
+novo da parte 3: "a volta ao anel 3 falhou no iretq em ffffffff80003a19:
+#GP (erro 18) com o GS do usuario ja carregado; quadro devolvido:
+RIP=1007d02 CS=23 RFLAGS=10202 RSP=7ffde379fb50 SS=18". Resolvido no
+`orion.elf` da a13: o endereco e o `iretq` do fim do `isr_common`, ou seja,
+a volta de uma interrupcao (os ultimos vetores eram o timer 64) que tinha
+chegado com a CPU no anel 3. O erro 18 e o proprio seletor 0x18 recusado:
+o `iretq` para o anel 3 exige SS com RPL 3.
+
+Num quadro de interrupcao vinda do anel 3, o SS foi empilhado pela CPU: e
+o SS que o anel 3 tinha. O kernel nao monta esse SS. Os quadros que o
+kernel monta estao certos (conferido em todos os lugares que escrevem
+seletores de usuario: o `syscall_entry` empilha 0x1b e 0x23; o `exec` e o
+`enter_user_mode` usam `GDT_USER_* | GDT_RPL_USER`; o `rt_sigreturn` e o
+`fork` copiam o quadro da syscall). Quem carregou SS=0x18 no anel 3 foi o
+`sysret`: o kernel gravava no STAR[63:48] o `GDT_KERNEL_DATA` (0x10) sem o
+RPL. O `sysret` carrega CS = STAR[63:48]+16 com RPL 3 forcado nos dois
+fabricantes, e SS = STAR[63:48]+8, que a Intel tambem forca para RPL 3 e a
+AMD carrega como esta (o Linux grava ali um seletor que ja tem RPL 3). Na
+AMD o anel 3 passava a rodar com SS=0x18; tudo funcionava ate a primeira
+interrupcao vinda do usuario, cujo `iretq` de volta dava `#GP(0x18)`.
+
+Esse mesmo `iretq` causou o `#DF` do primeiro teste: na a10, o `#GP` saia
+com o GS do usuario e caia no laco de `#PF` da parte 3.
+
+### Por que a regressao nunca pegou
+
+O QEMU sem aceleracao (TCG) implementa o `sysret` como a Intel: carrega
+SS = (STAR[63:48]+8) | 3 sempre, qualquer que seja o modelo de CPU. No QEMU
+o anel 3 sempre teve SS=0x1b, e o `iretq` de volta nunca viu 0x18. Nenhum
+teste no QEMU consegue por o anel 3 com SS de RPL 0 (o `iretq` e o
+`mov ss` recusam); so o `sysret` da AMD faz isso.
+
+### O que mudou
+
+- **STAR[63:48] = `GDT_KERNEL_DATA | GDT_RPL_USER` (0x13).** O `sysret`
+  volta com CS=0x23 e SS=0x1b nos dois fabricantes. No boot, o kernel
+  calcula o que o `sysret` carrega pela regra da Intel e pela da AMD,
+  escreve no log ("sysret volta com CS=23 SS=1b na Intel e CS=23 SS=1b na
+  AMD") e entra em panico se qualquer um nao for o seletor de usuario.
+  Sem a correcao o boot para em "STAR errado: ... CS=23 SS=18 (AMD)", o que
+  da um teste no QEMU que falha sem a correcao.
+- **Conferencia antes de todo `iretq` para o anel 3**
+  (`interrupts_check_user_return`): na volta de interrupcao e excecao
+  (fim do `isr_dispatch`) e na syscall que volta por `iretq` (`execve`,
+  `rt_sigreturn`). CS tem de ser 0x23 e SS 0x1b. No modo estrito, panico
+  dizendo o caminho, os seletores e que o SS de um quadro de interrupcao
+  vem do ultimo `sysret` ou `iretq` para o usuario; fora dele, corrige os
+  dois seletores, conta e avisa uma vez. `/proc/interrupts` ganhou a linha
+  `IRT:` com as voltas conferidas e as corrigidas. O `enter_user_mode` usa
+  constantes ja certas.
+- **`iretss`** (shell do kernel, modo estrito, terceiro boot da sequencia
+  K): entrega a conferencia um quadro com SS=0x18, que vira panico.
+- **`segtest`** (programa novo, sequencia R nova, com `-Smp 8`): 16 threads
+  por 5 s alternando syscall (volta por `sysret`), `sched_setaffinity` para
+  outra CPU (migracao no meio da syscall), laco longo lido sem parar (volta
+  por `iretq` depois de preempcao), `SIGALRM` a cada 2 ms com o handler
+  lendo os seletores (entrega de sinal e `rt_sigreturn`, que volta por
+  `iretq`) e 4 filhos de `fork`; le CS e SS no anel 3 em cada ponto e
+  compara a contagem `IRT:` do kernel antes e depois. Numa rodada: ~60 mil
+  leituras depois de syscall e de migracao, ~11 milhoes em laco preemptado,
+  ~1800 em handler de sinal, ~4100 voltas por `iretq` conferidas, nenhuma
+  errada. No QEMU ele passa com e sem a correcao (pelo motivo acima); no
+  notebook AMD, sem a correcao, ele leria SS=18. Por isso o roteiro manda
+  roda-lo no hardware.
+- `tools/regress.py` passou a respeitar o `-Smp` de cada sequencia (antes
+  usava o mesmo numero de CPUs para todas) e ganhou a R na lista padrao.

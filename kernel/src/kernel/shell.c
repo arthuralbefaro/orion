@@ -663,6 +663,25 @@ static void cmd_iretfalha(const char *args)
         kprintf("iretfalha: thread nao criada\n");
 }
 
+static void cmd_iretss(const char *args)
+{
+    (void)args;
+    if (!irqctx_strict()) {
+        kprintf("iretss: EPERM, so no modo de teste (QEMU com fw_cfg opt/orion/strict)\n");
+        return;
+    }
+    struct interrupt_frame f;
+    memset(&f, 0, sizeof(f));
+    f.cs = GDT_USER_CODE | GDT_RPL_USER;
+    f.ss = GDT_USER_DATA;
+    f.rip = 0x401000;
+    f.rflags = 0x202;
+    kprintf("iretss: quadro de volta ao anel 3 com SS=18, o SS que o sysret da AMD carregava\n");
+    time_sleep_ms(200);
+    interrupts_check_user_return(&f, "teste iretss");
+    kprintf("iretss: o quadro passou sem panico\n");
+}
+
 static void cmd_irqstorm(const char *args)
 {
     (void)args;
@@ -814,6 +833,7 @@ static const struct command commands[] = {
     { "usbtimeout", "cala a campainha de uma transferencia do pendrive (teste)", cmd_usbtimeout },
     { "irqtest", "testa o aviso de kmalloc e espera dentro de interrupcao", cmd_irqtest },
     { "irqstorm", "provoca tempestades de IRQ (borda e nivel) e confere a mascara (teste)", cmd_irqstorm },
+    { "iretss", "quadro de volta ao anel 3 com SS sem RPL 3 (teste)", cmd_iretss },
     { "iretfalha", "iretq para o anel 3 que falha depois do swapgs (teste)", cmd_iretfalha },
     { "estouro", "estoura a pilha do kernel com o timer, como no hardware real (teste)", cmd_estouro },
     { "kmfail", "faz 1 em N kmalloc de usuario comum falhar (modo de teste)", cmd_kmfail },

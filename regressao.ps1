@@ -19,6 +19,7 @@ param(
     [switch]$OnlyZ,
     [switch]$OnlyM,
     [switch]$OnlyK,
+    [switch]$OnlyR,
     [switch]$Noturna,
     [switch]$SlowWaits,
     [int]$StressRuns = 1,
@@ -31,7 +32,7 @@ $failures = @()
 $checks = 0
 if ($SlowWaits) { $env:ORION_SLOW_WAITS = "1" } else { Remove-Item Env:ORION_SLOW_WAITS -ErrorAction SilentlyContinue }
 $regStart = Get-Date
-$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG -or $OnlyW -or $OnlyH -or $OnlyI -or $OnlyP -or $OnlyZ -or $OnlyM -or $OnlyK)
+$runAll = -not ($OnlyA -or $OnlyB -or $OnlyC -or $OnlyD -or $OnlyE -or $OnlyF -or $OnlyV -or $OnlyN -or $OnlyU -or $OnlyS -or $OnlyG -or $OnlyW -or $OnlyH -or $OnlyI -or $OnlyP -or $OnlyZ -or $OnlyM -or $OnlyK -or $OnlyR)
 
 function Get-Log([string]$path) {
     return (Get-Content (Join-Path $Root $path) -Raw -ErrorAction SilentlyContinue)
@@ -977,7 +978,7 @@ if ($runAll -or $OnlyF) {
         "cmd:mount", "cmd:id", "cmd:ls /bin | wc", "cmd:ls -l /etc/shadow /bin/su", "cmd:ls -l /home",
         "cmd:echo vivo-na-ram > /home/orion/nota.txt", "cmd:cat /home/orion/nota.txt", "cmd:hello",
         "cmd:lua -e print(6*7)", "cmd:su orion -c id", "cmd:free", "wait:1",
-        "key:0B", "cmd:irqtest", "cmd:irqstorm", "cmd:estouro", "cmd:iretfalha", "cmd:usbstall sdb", "cmd:usbtimeout sdb", "cmd:kmfail 5", "key:0B",
+        "key:0B", "cmd:irqtest", "cmd:irqstorm", "cmd:estouro", "cmd:iretfalha", "cmd:iretss", "cmd:usbstall sdb", "cmd:usbtimeout sdb", "cmd:kmfail 5", "key:0B",
         "reboot:uefi,cd", "cmd:mount", "cmd:cat /home/orion/nota.txt", "wait:1",
         "reboot:bios,isodisk", "cmd:mount", "cmd:poweroff", "wait:4", "monlog:info status",
         "reboot:uefi,isodisk", "cmd:mount", "cmd:ls /doom", "cmd:reboot", "wait:4", "monlog:info status"
@@ -1000,6 +1001,7 @@ if ($runAll -or $OnlyF) {
     Expect $f "irqstorm: EPERM, so no modo de teste" "fora do modo estrito o irqstorm responde EPERM"
     Expect $f "estouro: EPERM, so no modo de teste" "fora do modo estrito o estouro responde EPERM"
     Expect $f "iretfalha: EPERM, so no modo de teste" "fora do modo estrito o iretfalha responde EPERM"
+    Expect $f "iretss: EPERM, so no modo de teste" "fora do modo estrito o iretss responde EPERM"
     ExpectNot $f "BUG: [^\n]*dentro de interrupcao" "nenhum aviso de contexto de interrupcao nos boots da ISO"
     Expect $f "-rw-------\s+1\s+root\s+root[^\n]*/etc/shadow" "live: /etc/shadow 0600 de root"
     Expect $f "-rwsr-xr-x\s+1\s+root\s+root[^\n]*/bin/su" "live: su setuid root"
@@ -1482,7 +1484,8 @@ if ($runAll -or $OnlyM) {
 # ---------------- Sequencia K: relatorio de estouro da pilha do kernel ----------------
 if ($runAll -or $OnlyK) {
     Write-Host "== Sequencia K (estouro da pilha do kernel com o timer, como no hardware real) ==" -ForegroundColor Cyan
-    $stepsK = @("key:0B", "cmd:estouro", "wait:5", "reboot:", "key:0B", "cmd:iretfalha", "wait:5")
+    $stepsK = @("key:0B", "cmd:estouro", "wait:5", "reboot:", "key:0B", "cmd:iretfalha", "wait:5",
+                "reboot:", "key:0B", "cmd:iretss", "wait:4")
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -LogPath "out\reg-k.log" `
         -Script $stepsK -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
     $kl = Get-Log "out\reg-k.log"
@@ -1499,7 +1502,31 @@ if ($runAll -or $OnlyK) {
     Expect $kl "Sistema travado\." "o relatorio termina"
     Expect $kl "----- reboot -----[\s\S]*?iretfalha: iretq para o anel 3 com CS invalido depois do swapgs" "segundo boot: iretq que falha depois do swapgs (o estado do notebook)"
     Expect $kl "----- reboot -----[\s\S]*?\*\*\* KERNEL PANIC \*\*\*\s*\na volta ao anel 3 falhou no iretq em ffffffff8[0-9a-f]+: #GP General Protection \(erro 28\) com o GS do usuario ja carregado; quadro devolvido: RIP=0000000000400000 CS=2b RFLAGS=2 RSP=0000000000010000 SS=1b" "o iretq que falha vira panico com o quadro devolvido, sem o laco de #PF"
-    ExpectNot $kl "----- reboot -----[\s\S]*?EXCECAO NAO TRATADA: #DF" "sem #DF no iretq que falha: a entrada decide o swapgs pelo MSR"
+    ExpectNot $kl "----- reboot -----(?:(?!----- reboot)[\s\S])*?EXCECAO NAO TRATADA: #DF" "sem #DF no iretq que falha: a entrada decide o swapgs pelo MSR"
+    Expect $kl "----- reboot -----[\s\S]*----- reboot -----[\s\S]*?iretss: quadro de volta ao anel 3 com SS=18" "terceiro boot: quadro de volta ao anel 3 com SS sem RPL 3 (o do sysret da AMD)"
+    Expect $kl "\*\*\* KERNEL PANIC \*\*\*\s*\nvolta ao anel 3 por iretq \(teste iretss\) com seletores errados: CS=23 SS=18, esperado CS=23 SS=1b" "no modo estrito o quadro com SS errado vira panico antes do iretq"
+    ExpectNot $kl "iretss: o quadro passou sem panico" "o quadro com SS errado nao passa"
+}
+
+# ---------------- Sequencia R: volta ao anel 3 por iretq em 8 CPUs ----------------
+if ($runAll -or $OnlyR) {
+    Write-Host "== Sequencia R (volta ao anel 3 por iretq e sysret, 8 CPUs) ==" -ForegroundColor Cyan
+    $stepsR = @("cmd:segtest 5", "until:120:segtest: fim", "cmd:cat /proc/interrupts", "wait:1")
+    & (Join-Path $Root "test.ps1") -Smp 8 -Image -NoBuild -LogPath "out\reg-r.log" `
+        -Script $stepsR -CommandDelay 1.5 -BootTimeout 90 -NoPrint | Out-Null
+    $rl = Get-Log "out\reg-r.log"
+    if ($Verbose) { Write-Output $rl }
+
+    Expect $rl "syscall/sysret ativos[^
+]*sysret volta com CS=23 SS=1b na Intel e CS=23 SS=1b na AMD" "STAR: o sysret volta com SS=1b tambem na AMD, que nao forca o RPL do SS"
+    Expect $rl "segtest: CS=23 SS=1b no comeco \(esperado CS=23 SS=1b\); 8 CPU\(s\), 16 thread\(s\)" "segtest em 8 CPUs com 16 threads"
+    Expect $rl "segtest: leituras de CS/SS: [1-9]\d* depois de syscall, [1-9]\d* depois de trocar de CPU, [1-9]\d* em laco preemptado, [1-9]\d* em handler de sinal \([1-9]\d* sinais\)" "CS/SS lidos depois de syscall, de migracao, de preempcao e dentro de handler de sinal"
+    Expect $rl "segtest: 4 filho\(s\) de fork conferiram CS/SS, 0 com erro" "filhos de fork voltam ao anel 3 com CS/SS certos"
+    Expect $rl "segtest: o kernel conferiu [1-9]\d* volta\(s\) ao anel 3 por iretq durante o teste, 0 com seletor errado" "o kernel confere cada volta por iretq e nenhuma tem seletor errado"
+    ExpectNot $rl "segtest: \d+ leitura\(s\) erradas" "nenhuma leitura de CS/SS errada no anel 3"
+    Expect $rl "segtest: TUDO OK" "segtest TUDO OK"
+    Expect $rl "IRT: [1-9]\d* volta\(s\) ao anel 3 por iretq conferida\(s\), 0 com seletor errado" "/proc/interrupts conta as voltas por iretq conferidas"
+    ExpectNot $rl "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA|BUG: " "nenhum panico nem BUG na sequencia R"
 }
 
 # ---------------- Sequencia E: estresse de processos ----------------

@@ -149,6 +149,23 @@ e do `out\orion.elf` tem de ser a mesma compilacao) e **so o modo live**:
 4. Se o sistema travar sem mensagem, anote o ultimo texto e, se der, se o
    `Caps Lock` ainda acende (diz se o teclado ainda e atendido).
 
+## 5b. Terceira rodada no notebook (ISO 3.0.0-a14, depois do `#GP` com SS=18)
+
+A segunda rodada (ISO a13) achou a causa: o `sysret` da AMD deixava o anel
+3 com SS=0x18, e o `iretq` da primeira interrupcao vinda do usuario dava
+`#GP`. A a14 corrige o STAR. Mesmo procedimento da 5a, so modo live, com
+a ISO 3.0.0-a14 (a versao aparece no log, `Orion 3.0.0-a14`):
+
+1. Confira no log do boot a linha `syscall/sysret ativos ... sysret volta
+   com CS=23 SS=1b na Intel e CS=23 SS=1b na AMD`.
+2. Depois do login, rode primeiro `segtest 5`. Ele leva uns 5 s, usa as 8
+   CPUs, e o resultado esperado e `segtest: TUDO OK` com `CS=23 SS=1b no
+   comeco` e `0 com seletor errado`. Anote as quatro linhas `segtest:`.
+3. Siga com os comandos do passo 2 da secao 5a e o `poweroff`.
+4. Se aparecer um panico, anote a linha inteira como na 5a. Uma linha nova
+   possivel: `volta ao anel 3 por iretq (...) com seletores errados: CS=...
+   SS=...`.
+
 ## 6. Instalar no disco (opcional, so se quiser)
 
 **Isto apaga o disco escolhido inteiro.** So faca num computador ou disco

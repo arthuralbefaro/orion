@@ -51,13 +51,14 @@ no hospedeiro e usa `hostfwd` (5555 e 8081).
 Proxima etapa: nenhuma no plano; todas as etapas estao feitas, menos a 7.4
 (`[!]`). Primeiro teste do dono (2026-10-21, notebook ASUS Vivobook AMD
 com Windows): `#DF` logo depois de `init iniciado`; resultado em
-`docs/hardware.md`, correcoes nas partes 1 a 5 da sessao 4 (v3.0.0-a11 a
-a13). Agora aguardando a segunda rodada, so no modo live, com a ISO nova
-(roteiro em docs/teste-hardware-real.md, secao 5a). As etapas 9.1 a 9.3
+`docs/hardware.md`, correcoes nas partes 1 a 6 da sessao 4 (v3.0.0-a11 a
+a14). Segunda rodada (2026-10-22, ISO a13) achou a causa (STAR sem RPL 3);
+agora aguardando a terceira rodada, so no modo live, com a ISO a14
+(roteiro em docs/teste-hardware-real.md, secao 5b). As etapas 9.1 a 9.3
 (instalar em USB, dual boot, rede USB) estao anotadas no `docs/PLANO.md` e
 nao comecam antes disso. Fase 7 fechada com a tag `v3.0-rc1` e a Fase 8
 com a `v3.0-rc2`; a tag `v3.0` (marco M5) so depois que a 7.4 fechar
-(decisao do dono, 2026-10-20). Versao 3.0.0-a13.
+(decisao do dono, 2026-10-20). Versao 3.0.0-a14.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -346,7 +347,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 7.1 | ISO hibrida | [x] | 06:26 | 09:44 | ver `git log` |
 | 7.2 | Live | [x] | 09:44 | 10:13 | ver `git log` |
 | 7.3 | Instalador | [x] | 12:44 | 12:58 | `80dfc68` |
-| 7.4 | Hardware real | [!] | 13:00 | 13:08 | 1o teste (2026-10-21): #DF, corrigido nas partes 1 a 3 da sessao 4; aguardando a 2a rodada so no modo live, roteiro em docs/teste-hardware-real.md (5a), resultado em docs/hardware.md |
+| 7.4 | Hardware real | [!] | 13:00 | 13:08 | 1o teste: #DF; 2o teste: #GP com SS=18 (STAR sem RPL 3), corrigido na a14; aguardando a 3a rodada so no modo live, roteiro em docs/teste-hardware-real.md (5b), resultado em docs/hardware.md |
 | 7.5 | Pacotes | [x] | 13:10 | 13:30 | |
 | 8.1 | Fila por CPU e nice | [x] | 14:05 | 15:10 | |
 | 8.2 | Kernel preemptivo (contador de travas de spin por thread desde a 5.7 parte 4; troca adiada chamada na hora pelo `spin_unlock`) | [x] | 15:15 | 16:05 | |
@@ -2360,3 +2361,30 @@ do OOM. Verificacao: sequencia P verde tres vezes antes e tres depois;
 regressao completa final verde, 763 verificacoes, 34,2 min, maior uso de
 pilha 8576 bytes (52%), pico do NVMe no `fstest` 1478/s, nenhuma
 tempestade acusada fora do teste. RAM livre antes: 2,8 GB.
+
+#### 7.4 parte 6 - segunda rodada no notebook: a causa e o STAR sem RPL 3 (o sysret da AMD) - 2026-10-22 - FEITO
+Segunda rodada do dono (ISO a13, Ventoy, UEFI): o live nao montou o
+disco, e logo depois de `init iniciado` o relatorio novo deu "a volta ao
+anel 3 falhou no iretq ... #GP (erro 18) ... CS=23 ... SS=18". Resolvido
+no `orion.elf` da a13: o `iretq` da volta de interrupcao no `isr_common`,
+com o SS que a CPU empilhou do anel 3. O kernel monta todos os quadros de
+usuario com RPL 3 (conferido em todos os lugares que escrevem os
+seletores); quem deixava SS=0x18 no anel 3 era o `sysret`, porque o STAR
+tinha `GDT_KERNEL_DATA` sem o RPL 3, e a AMD, ao contrario da Intel e do
+QEMU, nao forca o RPL do SS. O mesmo `iretq` foi o `#DF` do primeiro
+teste. Corrigido o STAR (0x13); boot calcula o que o `sysret` carrega nas
+duas regras e para em panico se estiver errado; conferencia dos seletores
+antes de todo `iretq` para o anel 3 (panico no modo estrito, correcao e
+aviso unico fora dele), contagem `IRT:` no `/proc/interrupts`; `iretss`
+no terceiro boot da K; `segtest` (novo) na sequencia R (nova, `-Smp 8`):
+16 threads com syscall, migracao, preempcao, sinal a cada 2 ms e fork,
+lendo CS/SS no anel 3. O `regress.py` passou a respeitar o `-Smp` de cada
+sequencia. Detalhes: `docs/DECISOES.md`, v3.0.0-a14.
+A regressao nunca passou por isso porque o `sysret` do QEMU (TCG) sempre
+forca SS com RPL 3. Teste que falha sem a correcao: a sequencia R com o
+STAR antigo deu vermelho em 8 de 9 (o boot para em "STAR errado ... SS=18
+(AMD)"); com a correcao, 9 de 9 (~11 milhoes de leituras, 4118 voltas por
+`iretq` conferidas, nenhuma errada).
+Verificacao (nucleo: entrada e saida do anel 3): `check.ps1` limpo,
+sequencias R (9) e K (15) verdes; regressao completa verde, 776 verificacoes, 31,9 min. RAM livre
+antes: 4,6 GB. Versao 3.0.0-a14.

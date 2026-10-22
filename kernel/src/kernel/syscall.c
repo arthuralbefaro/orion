@@ -2274,12 +2274,16 @@ bool syscall_dispatch(struct interrupt_frame *f)
     f->rax = (uint64_t)ret;
     process_unpin_all();
     signal_check(f);
+    if (full_restore)
+        interrupts_check_user_return(f, "syscall com volta por iretq");
     return full_restore;
 }
 
+#define STAR_SYSRET_BASE (GDT_KERNEL_DATA | GDT_RPL_USER)
+
 void syscall_init_cpu(void)
 {
-    uint64_t star = ((uint64_t)GDT_KERNEL_CODE << 32) | ((uint64_t)GDT_KERNEL_DATA << 48);
+    uint64_t star = ((uint64_t)GDT_KERNEL_CODE << 32) | ((uint64_t)STAR_SYSRET_BASE << 48);
     wrmsr(MSR_IA32_STAR, star);
     wrmsr(MSR_IA32_LSTAR, (uint64_t)syscall_entry);
     wrmsr(MSR_IA32_FMASK, RFLAGS_IF | (1 << 8) | (1 << 10) | (1 << 14) | (1 << 18));
@@ -2289,5 +2293,13 @@ void syscall_init_cpu(void)
 void syscall_init(void)
 {
     syscall_init_cpu();
-    log_info("syscall", "syscall/sysret ativos, entrada em %p", (void *)syscall_entry);
+    uint64_t base = rdmsr(MSR_IA32_STAR) >> 48;
+    uint64_t intel_cs = (base + 16) | 3, intel_ss = (base + 8) | 3;
+    uint64_t amd_cs = (base + 16) | 3, amd_ss = base + 8;
+    log_info("syscall", "syscall/sysret ativos, entrada em %p; sysret volta com CS=%lx SS=%lx na Intel e CS=%lx SS=%lx "
+             "na AMD, que nao forca o RPL do SS", (void *)syscall_entry, intel_cs, intel_ss, amd_cs, amd_ss);
+    uint64_t want_cs = GDT_USER_CODE | GDT_RPL_USER, want_ss = GDT_USER_DATA | GDT_RPL_USER;
+    if (intel_cs != want_cs || intel_ss != want_ss || amd_cs != want_cs || amd_ss != want_ss)
+        panic("STAR errado: o sysret voltaria ao anel 3 com CS=%lx SS=%lx (Intel) ou CS=%lx SS=%lx (AMD); esperado "
+              "CS=%lx SS=%lx", intel_cs, intel_ss, amd_cs, amd_ss, want_cs, want_ss);
 }

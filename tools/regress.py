@@ -57,6 +57,8 @@ def parse_sequences():
             seq["gui"] = "-Gui" in c
             seq["image"] = "-Image" in c
             seq["iso"] = bool(re.search(r"-Iso\b", c))
+            smp = re.search(r"-Smp\s+(\d+)\b", c)
+            seq["smp"] = int(smp.group(1)) if smp else None
             seq["iso_disk"] = "-IsoDisk" in c
             seq["bios"] = bool(re.search(r"-Bios\b", c))
             nic = re.search(r"-Nic\s+(\S+)", c)
@@ -233,7 +235,7 @@ def run_stress(seq, rep, runs, smp, image=False):
 
 def main():
     ap = argparse.ArgumentParser(description="Regressao do Orion (le os passos do regressao.ps1)")
-    ap.add_argument("which", nargs="?", default="ABCDFIVNUSGWHPZMKE", help="sequencias, ex.: ABCDFIVNUSGWHPZMKE ou AC")
+    ap.add_argument("which", nargs="?", default="ABCDFIVNUSGWHPZMKRE", help="sequencias, ex.: ABCDFIVNUSGWHPZMKRE ou AC")
     ap.add_argument("--smp", type=int, default=4)
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--stress-runs", type=int, default=1)
@@ -285,7 +287,7 @@ def main():
                                    cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(2)
         try:
-            _, log = qrun.run(seq["steps"], smp=a.smp, disk=seq["disk"], extra_disks=seq["extra"], gui=seq["gui"],
+            _, log = qrun.run(seq["steps"], smp=seq.get("smp") or a.smp, disk=seq["disk"], extra_disks=seq["extra"], gui=seq["gui"],
                               no_build=no_build, image=seq["image"], hostfwd=seq["hostfwd"],
                               boot_timeout=seq["boot"], command_delay=seq["delay"], log_path=seq["log"],
                               iso=seq.get("iso", False), iso_disk=seq.get("iso_disk", False),

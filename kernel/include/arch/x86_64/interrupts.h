@@ -72,6 +72,8 @@ uint32_t interrupts_peak_rate(uint8_t vector);
 int interrupts_storm_selftest(void);
 
 void interrupts_check_entry(const struct interrupt_frame *f, const char *how);
+void interrupts_check_user_return(struct interrupt_frame *f, const char *where);
+void interrupts_user_iret_stats(uint64_t *checks, uint64_t *fixed);
 void interrupts_dump(const struct interrupt_frame *f);
 void interrupts_dump_cpu_state(uint32_t cpu);
 void interrupts_dump_cpus(void);

@@ -34,9 +34,8 @@ nada de `instalar`.
   `percpu_get()`. Cada volta gasta 272 bytes, ate a pilha de 16 KiB acabar
   (`RIP = isr_common+3`, `RAX = 1` do `percpu_ready()`, RCX, RDX, RSI e R8
   a R11 ainda com os valores do usuario). O que deixou o GS do usuario no
-  anel 0 nesse notebook ainda nao esta provado: o mais provavel e uma volta
-  ao anel 3 (`iretq`) que falhou depois do `swapgs`, ou um caminho que
-  voltou ao usuario sem `swapgs`. A ISO nova decide o `swapgs` pelo
+  anel 0 foi uma volta ao anel 3 (`iretq`) que falhou depois do `swapgs`,
+  confirmado na segunda rodada (abaixo). A ISO a12 decide o `swapgs` pelo
   `MSR_GS_BASE` em toda entrada, entao o laco nao acontece mais, e para com
   uma mensagem que diz qual dos casos foi e com os numeros. Tambem confere
   o topo da pilha em toda entrada vinda do usuario, segue a cadeia pelo
@@ -66,8 +65,23 @@ nada de `instalar`.
 - **COM1:** nao existe UART em 0x3F8 (porta le 0xFF); a serial e detectada
   como ausente e a IRQ4 fica desligada.
 
+### Segunda rodada (2026-10-22, ISO 3.0.0-a13, Ventoy em modo normal, UEFI)
+
+- O modo live nao montou o disco: `modo live: disco interno nvme0n1 nao e
+  montado sozinho (use mount -r)`.
+- Logo depois de `init iniciado`, o relatorio novo mostrou a causa em vez
+  do `#DF`: `a volta ao anel 3 falhou no iretq ... #GP (erro 18) ...
+  quadro devolvido: RIP=1007d02 CS=23 RFLAGS=10202 RSP=7ffde379fb50 SS=18`.
+  Nenhuma IRQ mascarada; os ultimos vetores eram o timer.
+- Causa: o kernel gravava o STAR sem o RPL 3 no seletor de volta do
+  `sysret`. A Intel (e o QEMU) forca o RPL 3 do SS no `sysret`; a AMD nao,
+  e o anel 3 rodava com SS=0x18. A primeira interrupcao vinda do usuario
+  empilhava esse SS e o `iretq` de volta era recusado. No primeiro teste,
+  esse mesmo `iretq` com o GS do usuario carregado virou o laco de `#PF` e
+  o `#DF`. Corrigido na v3.0.0-a14 (`docs/DECISOES.md`).
+
 ### Pendente
 
-A 7.4 continua `[!]` ate a ISO nova (v3.0.0-a11 ou posterior) passar no
-modo live nesta maquina: chegar ao login, rodar os comandos do roteiro e
-desligar pelo `poweroff`.
+A 7.4 continua `[!]` ate a ISO 3.0.0-a14 (ou posterior) passar no modo
+live nesta maquina: chegar ao login, `segtest 5` com `TUDO OK`, os
+comandos do roteiro (secao 5b) e desligar pelo `poweroff`.
