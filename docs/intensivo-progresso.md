@@ -2348,3 +2348,15 @@ Detalhes: `docs/DECISOES.md`, logo depois da v3.0.0-a13. Verificacao:
 sequencia M verde 3 vezes seguidas; a segunda regressao completa
 (32,2 min) passou na M e deu vermelho so no perf (entrada abaixo). RAM
 livre antes: 1,7 GB; esperados 2 min, 6,0 GB.
+
+#### Verificacao do perfilador sem janela de interrupcoes ligadas - 2026-10-22 - FEITO
+A segunda regressao completa da parte 5 deu vermelho em 1 de 763: das 176
+amostras em `prof_selftest_irqoff`, 175 sem IRQ. A funcao ligava e
+desligava as interrupcoes dentro dela, e uma NMI caiu no prologo ou no
+epilogo numa rodada lenta (metade das amostras de sempre). O `cli` e o
+`sti` foram para quem chama; a verificacao continua exigindo todas as
+amostras sem IRQ. Detalhes: `docs/DECISOES.md`, logo depois da correcao
+do OOM. Verificacao: sequencia P verde tres vezes antes e tres depois;
+regressao completa final verde, 763 verificacoes, 34,2 min, maior uso de
+pilha 8576 bytes (52%), pico do NVMe no `fstest` 1478/s, nenhuma
+tempestade acusada fora do teste. RAM livre antes: 2,8 GB.

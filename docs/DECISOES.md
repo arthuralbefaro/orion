@@ -4348,3 +4348,16 @@ vitima. Quem esperava a propria vitima sair tambem espera essa volta antes
 de repetir a falha. Passados os 2 s sem memoria, a escolha segue como
 antes. Verificacao: sequencia M verde tres vezes seguidas, com o caso
 "dois" sempre em `OomKills +2`.
+
+## v3.0.0-a13, verificacao do perfilador sem janela de interrupcoes ligadas
+
+A regressao completa seguinte deu vermelho em uma verificacao da sequencia
+P: das 176 amostras em `prof_selftest_irqoff`, 175 vieram sem IRQ. A funcao
+fazia `irq_save` e `irq_restore` dentro dela, entao o prologo e o epilogo
+rodavam com interrupcoes ligadas, e uma NMI de amostragem pode cair ali (a
+rodada foi lenta, com metade das amostras normais). A verificacao exige
+todas as amostras sem IRQ, o que esta certo para o que ela mede. Em vez de
+afrouxar a verificacao, o `cli` e o `sti` passaram para quem chama
+(`sys_prof`), e a funcao amostrada so roda com interrupcoes desligadas.
+Sequencia P verde tres vezes antes e tres depois da mudanca (359 a 369
+amostras, todas sem IRQ).

@@ -88,11 +88,9 @@ bool prof_nmi(struct interrupt_frame *f)
 
 __attribute__((noinline)) static void prof_selftest_irqoff(uint64_t ms)
 {
-    uint64_t flags = irq_save();
     uint64_t end = time_now_us() + ms * 1000;
     while (time_now_us() < end)
         pause();
-    irq_restore(flags);
 }
 
 static long prof_start(uint64_t want_hz)
@@ -177,7 +175,9 @@ long sys_prof(uint64_t op, uint64_t arg, uint64_t ubuf, uint64_t max)
             return -EPERM;
         if (arg == 0 || arg > 2000)
             return -EINVAL;
+        uint64_t flags = irq_save();
         prof_selftest_irqoff(arg);
+        irq_restore(flags);
         return 0;
     }
     if (__atomic_exchange_n(&control_busy, 1, __ATOMIC_ACQ_REL))
