@@ -175,6 +175,19 @@ Fecha o que ficou aberto e tira os riscos que derrubam o kernel hoje.
 | 8.7 | `memcpy`, `memset` e `memmove` do kernel em assembly com `rep movsb`/`rep stosb` | P |
 | 8.8 | A thread `main` do kernel (entrada do teclado e da serial para o tty e o shell do kernel) dorme numa fila de espera acordada pela IRQ do teclado e da serial, em vez de acordar a cada 2 ms para olhar a entrada (anotado pelo dono na 8.1) | P |
 
+## Depois da 7.4 - a maquina unica do dono (anotado em 2026-10-21; so planejamento)
+
+O unico computador de verdade disponivel e um notebook ASUS Vivobook com
+AMD Ryzen e Windows no NVMe (`docs/hardware.md`). O Orion precisa conviver
+com ele sem apagar nada. Nada daqui esta implementado; entra no plano
+depois que a 7.4 fechar no modo live.
+
+| # | Etapa | Tam. | Pronto quando |
+|---|---|---|---|
+| 9.1 | **Instalador com destino em disco USB** (pendrive ou SSD externo): `instalar /dev/sdX` num disco removivel cria a ESP e a raiz ext2 nele, o Limine boota pelo USB e o sistema usa a raiz do USB, sem tocar no disco interno | M | boot pelo pendrive instalado, arquivos sobrevivem ao reboot, `lsblk` mostra o NVMe intacto |
+| 9.2 | **Dual boot no NVMe, mais adiante**: instalar so em espaco livre que o dono criar pelo Windows (sem apagar nem redimensionar particoes); reaproveitar a ESP existente sem mexer em `\EFI\Microsoft`, so adicionando a entrada do Limine (`\EFI\orion`); backup obrigatorio e conferido antes de qualquer escrita | G | o Windows continua bootando; o Orion boota pela entrada nova do firmware |
+| 9.3 | **Rede por adaptador USB**: este notebook nao tem placa suportada (Wi-Fi MediaTek, sem e1000; anotar o modelo exato que o `pci` mostrar em `docs/hardware.md`). Rede cabeada por adaptador USB CDC-ECM (classe padrao, driver simples) ou Realtek RTL8153 e o caminho mais curto | M | `ping 1.1.1.1 3` e `wget` no notebook pelo adaptador USB |
+
 ---
 
 ## Ordem recomendada

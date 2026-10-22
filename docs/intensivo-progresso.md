@@ -2300,3 +2300,18 @@ notebook ainda nao esta provado; a segunda rodada diz qual. Detalhes:
 Verificacao (nucleo: entrada de interrupcao): `check.ps1` limpo,
 sequencia K (12 verificacoes, com o segundo boot do `iretfalha`) verde;
 regressao completa verde, 757 verificacoes, 29,9 min. RAM livre antes: 6,8 GB. Versao 3.0.0-a12.
+
+#### 7.4 parte 4 - ISO nova, roteiro da segunda rodada e etapas 9.1 a 9.3 no plano - 21:00 a 21:10 - FEITO
+`build.ps1 -Iso` no HEAD `5f5dc3c`: `out\orion.iso` (65,1 MiB) e
+`out\orion.elf` da mesma compilacao (o kernel dentro da ISO e identico ao
+`out\orion.elf`, conferido byte a byte; versao 3.0.0-a12). Sequencia F
+nessa ISO, sem recompilar: 26 verificacoes, verde, nos quatro boots (CD e
+pendrive, BIOS e UEFI), com `modo live: disco interno ... nao e montado
+sozinho` e os comandos de teste respondendo EPERM fora do modo estrito.
+`docs/teste-hardware-real.md` ganhou a secao 5a (segunda rodada no
+notebook, so modo live, o que conferir e as linhas de panico novas que
+podem aparecer) e o que fotografar num `#DF`; `docs/hardware.md` tem o
+resultado do primeiro teste. `docs/PLANO.md` ganhou, so como anotacao, as
+etapas 9.1 (instalar em disco USB), 9.2 (dual boot no NVMe em espaco livre,
+sem tocar em `\EFI\Microsoft`, com backup) e 9.3 (rede por adaptador USB
+CDC-ECM ou RTL8153). A 7.4 continua `[!]` ate a segunda rodada passar.
