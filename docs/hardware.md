@@ -53,11 +53,13 @@ nada de `instalar`.
   codec dele nao tem caminho de um pino de saida ate um DAC (so pinos
   digitais). O audio analogico do notebook (alto-falantes e fone) passa pelo
   AMD ACP (Audio Coprocessor), que fica fora do escopo. Sem som.
-- **Rede:** nao ha placa Intel e1000 nem virtio; o Wi-Fi do notebook (o
-  Bluetooth `13d3:3556` e o par de um modulo MediaTek, provavelmente MT7921;
-  confirmar com `pci` no shell do kernel e anotar o ID aqui) nao tem
-  driver. Caminho mais curto: adaptador USB de rede cabeada (CDC-ECM ou
-  Realtek RTL8153), anotado no plano.
+- **Rede:** nenhuma placa de rede suportada: nao ha Intel e1000 nem virtio,
+  e nao ha porta de rede cabeada no notebook. Caminho mais curto: adaptador
+  USB de rede cabeada (CDC-ECM ou Realtek RTL8153), etapa 9.3 do plano.
+- **Wi-Fi: modelo ainda nao identificado.** O Bluetooth `13d3:3556` sugere
+  um modulo MediaTek (talvez MT7921), mas o ID PCI da placa ainda nao foi
+  anotado: no proximo boot, `lspci` (ISO 3.0.0-a15 ou posterior) mostra a
+  linha da classe `0280` (rede sem fio) com o `vendor:device`. Sem driver.
 - **Video:** sem driver para a GPU AMD; a tela fica no modo que o firmware
   entregou (framebuffer do Limine).
 - **Touchpad:** e I2C (nao PS/2); o `mouse` PS/2 nao encontra o dispositivo
@@ -80,8 +82,30 @@ nada de `instalar`.
   esse mesmo `iretq` com o GS do usuario carregado virou o laco de `#PF` e
   o `#DF`. Corrigido na v3.0.0-a14 (`docs/DECISOES.md`).
 
-### Pendente
+### Terceira rodada (2026-10-22, ISO 3.0.0-a14, Ventoy em modo normal, UEFI): SUCESSO
 
-A 7.4 continua `[!]` ate a ISO 3.0.0-a14 (ou posterior) passar no modo
-live nesta maquina: chegar ao login, `segtest 5` com `TUDO OK`, os
-comandos do roteiro (secao 5b) e desligar pelo `poweroff`.
+- Boot completo ate o login; o modo live nao montou o `nvme0n1`.
+- `segtest 5`: TUDO OK nas 8 CPUs com 16 threads; 99855 leituras de CS/SS
+  depois de syscall e de troca de CPU, 2494 sinais, 4 filhos de `fork`,
+  10704 voltas ao anel 3 por `iretq` conferidas pelo kernel, nenhuma com
+  seletor errado.
+- O `doom` abriu o framebuffer (1920x1080, escala 2), mas sem argumentos
+  nao achou o IWAD: o WAD estava em `/doom`, e o doomgeneric so procurava
+  no diretorio atual. O `find / -name '*.wad'` nao achou nada porque o `sh`
+  do Orion passa as aspas para o `find` (sem aspas ele acha). Corrigido na
+  3.0.0-a15: os dois Freedoom ficam em `/usr/share/games/doom` e o `doom`
+  acha o WAD sozinho.
+- Faltavam comandos para ver o PCI e o log do kernel no shell normal; a
+  3.0.0-a15 traz `lspci` (`/proc/pci`, com o driver de cada dispositivo) e
+  `dmesg` (`/proc/kmsg`).
+
+Com isso a etapa 7.4 fecha (marco M5: o Orion boota num computador fisico
+pelo pendrive e chega ao shell). O teste do Doom com a ISO 3.0.0-a15 fica
+como conferencia, nao como condicao da etapa.
+
+### Limitacoes que ficam (resumo)
+
+- Sem rede: nenhuma placa suportada; Wi-Fi ainda nao identificada.
+- Sem som: o audio analogico passa pelo AMD ACP, nao suportado; o HDA
+  presente e so o HDMI da GPU.
+- Sem driver de video da GPU AMD, de touchpad I2C e de COM1 (nao existe).

@@ -89,7 +89,12 @@ em notebooks as vezes `F1` ou `F10`).
    - `doom` (acha sozinho o `freedoom1.wad` em `/usr/share/games/doom`; o
      `freedoom2.wad` esta na mesma pasta, `doom -iwad
      /usr/share/games/doom/freedoom2.wad`; sai com `Esc` e o menu).
-5. **Shell do kernel** (`Ctrl+K` alterna): `pci`, `lsblk`, `irq`, `cpus`,
+5. **PCI e log do kernel no shell normal**: `lspci` lista cada dispositivo
+   com o `vendor:device`, a classe e o driver ligado (ou `nenhum`); `dmesg`
+   mostra o log do kernel desde o boot (`dmesg -g nvme` filtra). Para
+   mandar o log inteiro, fotografe a tela em partes ou anote as linhas
+   `[WARN]` e `[ERR ]` (`dmesg -g WARN`, `dmesg -g ERR`).
+   **Shell do kernel** (`Ctrl+K` alterna): `pci`, `lsblk`, `irq`, `cpus`,
    `acpi`, `fb` ajudam a entender o hardware. O `irq` mostra, por CPU, os
    ultimos 16 vetores atendidos, a profundidade de interrupcao e a IRQ que
    mais disparou no ultimo segundo.
@@ -167,6 +172,20 @@ a ISO 3.0.0-a14 (a versao aparece no log, `Orion 3.0.0-a14`):
 4. Se aparecer um panico, anote a linha inteira como na 5a. Uma linha nova
    possivel: `volta ao anel 3 por iretq (...) com seletores errados: CS=...
    SS=...`.
+
+## 5c. Quarta rodada no notebook (ISO 3.0.0-a15): Doom, PCI e log
+
+A terceira rodada passou e fechou a etapa 7.4. Esta e so conferencia, no
+modo live como sempre:
+
+1. `lspci` e anote a linha da placa Wi-Fi (classe `0280`) com o
+   `vendor:device`; `dmesg -g ERR` e `dmesg -g WARN`.
+2. `doom`, sem argumentos: tem de achar o `freedoom1.wad` sozinho
+   (`adding /usr/share/games/doom/freedoom1.wad`) e abrir o jogo. O teclado
+   do notebook joga (setas, `Ctrl` atira, `Espaco` abre portas); `Esc` abre
+   o menu para sair. `doom -iwad /usr/share/games/doom/freedoom2.wad` abre
+   o Freedoom 2.
+3. `poweroff`.
 
 ## 6. Instalar no disco (opcional, so se quiser)
 

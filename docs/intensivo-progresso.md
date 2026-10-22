@@ -48,17 +48,17 @@ hub na H, com audio na S e com troca de video na G (BGA) e na W
 (virtio-gpu), com 646 verificacoes em ~20 min; a sequencia A sobe o `tools/hostweb.py`
 no hospedeiro e usa `hostfwd` (5555 e 8081).
 
-Proxima etapa: nenhuma no plano; todas as etapas estao feitas, menos a 7.4
-(`[!]`). Primeiro teste do dono (2026-10-21, notebook ASUS Vivobook AMD
-com Windows): `#DF` logo depois de `init iniciado`; resultado em
-`docs/hardware.md`, correcoes nas partes 1 a 6 da sessao 4 (v3.0.0-a11 a
-a14). Segunda rodada (2026-10-22, ISO a13) achou a causa (STAR sem RPL 3);
-agora aguardando a terceira rodada, so no modo live, com a ISO a14
-(roteiro em docs/teste-hardware-real.md, secao 5b). As etapas 9.1 a 9.3
-(instalar em USB, dual boot, rede USB) estao anotadas no `docs/PLANO.md` e
-nao comecam antes disso. Fase 7 fechada com a tag `v3.0-rc1` e a Fase 8
-com a `v3.0-rc2`; a tag `v3.0` (marco M5) so depois que a 7.4 fechar
-(decisao do dono, 2026-10-20). Versao 3.0.0-a14.
+Proxima etapa: nenhuma no plano; todas as etapas estao feitas. A 7.4
+fechou em 2026-10-22: o terceiro teste do dono (ISO a14, notebook ASUS
+Vivobook AMD com Windows, modo live) chegou ao login e passou no
+`segtest`; marco M5 cumprido. O caminho ate la (o `#DF` do primeiro teste,
+o STAR sem RPL 3 da AMD, a seguranca do disco interno) esta nas partes 1 a
+8 da sessao 4 e em `docs/hardware.md`. A ISO 3.0.0-a15 leva o Doom que
+acha o WAD sozinho, `lspci` e `dmesg`, para o dono conferir (secao 5c do
+roteiro). Proximas etapas, so anotadas no `docs/PLANO.md`: 9.1 (instalar
+em USB), 9.2 (dual boot no NVMe) e 9.3 (rede por adaptador USB). Fase 7
+fechada com a tag `v3.0-rc1` e a Fase 8 com a `v3.0-rc2`; a tag `v3.0`
+(marco M5) entra com uma regressao completa verde. Versao 3.0.0-a15.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -347,7 +347,7 @@ Requisitos da 5.8 (audio HDA), decididos pelo dono em 2026-10-19:
 | 7.1 | ISO hibrida | [x] | 06:26 | 09:44 | ver `git log` |
 | 7.2 | Live | [x] | 09:44 | 10:13 | ver `git log` |
 | 7.3 | Instalador | [x] | 12:44 | 12:58 | `80dfc68` |
-| 7.4 | Hardware real | [!] | 13:00 | 13:08 | 1o teste: #DF; 2o teste: #GP com SS=18 (STAR sem RPL 3), corrigido na a14; aguardando a 3a rodada so no modo live, roteiro em docs/teste-hardware-real.md (5b), resultado em docs/hardware.md |
+| 7.4 | Hardware real | [x] | 13:00 | 2026-10-22 | 3o teste do dono (ISO a14) passou no notebook ASUS Vivobook AMD; resultado em docs/hardware.md |
 | 7.5 | Pacotes | [x] | 13:10 | 13:30 | |
 | 8.1 | Fila por CPU e nice | [x] | 14:05 | 15:10 | |
 | 8.2 | Kernel preemptivo (contador de travas de spin por thread desde a 5.7 parte 4; troca adiada chamada na hora pelo `spin_unlock`) | [x] | 15:15 | 16:05 | |
@@ -2452,3 +2452,14 @@ No caminho: o `nicetest` misto oscilou muito hoje; o commit da a14
 compilado num worktree a parte falhou do mesmo jeito (4 de 5) nesta
 maquina e hora, entao nao e regressao; registrado no `DECISOES.md`.
 Verificacao: a mesma regressao completa da parte 8 (A com o `permtest`, Z e E verdes).
+
+#### Fecho da 7.4 - 2026-10-22
+Terceiro teste do dono no notebook ASUS Vivobook (AMD Ryzen, Windows no
+NVMe), ISO 3.0.0-a14, Ventoy em modo normal, UEFI: boot completo ate o
+login, modo live sem montar o `nvme0n1`, `segtest 5` TUDO OK nas 8 CPUs
+(10704 voltas por `iretq` conferidas, nenhuma com seletor errado). A 7.4
+fica `[x]`: o Orion boota num computador fisico pelo pendrive e chega ao
+shell (marco M5). Limitacoes que ficam nesse notebook, em
+`docs/hardware.md`: sem rede suportada, Wi-Fi ainda nao identificada, sem
+som (o audio analogico passa pelo AMD ACP, nao suportado), sem driver de
+video da GPU nem de touchpad I2C.
