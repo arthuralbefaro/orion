@@ -4433,3 +4433,36 @@ teste no QEMU consegue por o anel 3 com SS de RPL 0 (o `iretq` e o
   roda-lo no hardware.
 - `tools/regress.py` passou a respeitar o `-Smp` de cada sequencia (antes
   usava o mesmo numero de CPUs para todas) e ganhou a R na lista padrao.
+
+## v3.0.0-a15 (7.4, parte 7: o Doom acha o WAD sozinho; os dois Freedoom na ISO)
+
+O terceiro teste no notebook passou, mas o `doom` sem argumentos parou em
+"No IWAD file was found" e tentou o `/usr/bin/zenity`. O WAD estava na ISO
+desde a 7.2, em `/doom/freedoom1.wad`; o doomgeneric (fora de `ORIGCODE`)
+so procura no diretorio atual, e o `find / -name '*.wad'` do dono nao
+achou nada porque o `sh` do Orion nao tira as aspas: `'*.wad'` chega ao
+`find` com as aspas (sem aspas, ele acha). O roteiro mandava usar
+`doom -iwad /doom/freedoom1.wad`, mas ninguem lembra disso.
+
+- **Os WADs vao para `/usr/share/games/doom`**, o caminho padrao do Doom
+  no Linux, e o `freedoom2.wad` entra junto (SHA-256 conferido pelo mesmo
+  zip do Freedoom 0.13.0, nos dois scripts: `tools/freedoom.ps1` e
+  `tools/freedoom.py`). O `/doom` antigo e apagado da arvore de saida no
+  build. A ISO passou de 65 para 93 MiB e o initramfs de 57 para 84 MiB;
+  o modo live usa essa memoria a mais, o que cabe nos 512 MiB do QEMU da
+  sequencia F e sobra no notebook.
+- **O `main` do Doom do Orion (`user/musl/doom`) procura o IWAD** antes de
+  iniciar o jogo, sem tocar no `third_party`: com `-iwad`, confere se o
+  arquivo existe; sem `-iwad`, procura doom2, plutonia, tnt, doom, doom1,
+  freedoom1, freedoom2 e freedm em `DOOMWADDIR`, `/usr/share/games/doom`,
+  `/usr/local/share/games/doom`, `/doom` e no diretorio atual, e passa o
+  primeiro que achar. Um WAD comercial copiado para la tem prioridade sobre
+  o Freedoom; entre os dois Freedoom, o 1 (o Doom original) vem antes.
+- **Sem WAD, mensagem clara e saida com codigo 1** dizendo onde procurou e
+  o que fazer, antes de o doomgeneric chegar ao `I_Error`, que chamaria o
+  `zenity`. O mesmo vale para `-iwad` com arquivo inexistente.
+- **Sequencia F:** na ISO live, `ls -l /usr/share/games/doom` mostra os dois
+  WADs, o `doom` sem argumentos acha o `freedoom1.wad`, desenha centenas de
+  quadros e a captura tem a cena do jogo; `-iwad` inexistente e a pasta
+  movida dao as mensagens novas; o `zenity` nunca aparece. B e S passaram a
+  rodar o `doom` sem `-iwad`.

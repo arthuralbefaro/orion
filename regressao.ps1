@@ -637,7 +637,7 @@ if ($runAll -or $OnlyB) {
     Write-Host "== Sequencia B (grafica) ==" -ForegroundColor Cyan
     $stepsB = @(
         "key:0B", "cmd:mem", "key:0B", "wait:1",
-        "cmd:doom -iwad /doom/freedoom1.wad -nogui -orionquit 30", "wait:22", "shot:out\shots\reg-doom.ppm",
+        "cmd:doom -nogui -orionquit 30", "wait:22", "shot:out\shots\reg-doom.ppm",
         "until:120:quadros em", "wait:1",
         "cmd:wm", "wait:3", "shot:out\shots\reg-wm-1-inicial.ppm",
         "mon:sendkey l", "mon:sendkey s", "mon:sendkey ret", "wait:1.5",
@@ -655,7 +655,7 @@ if ($runAll -or $OnlyB) {
         "type:sleep 100 &", "mon:sendkey ret", "wait:1", "type:monitor &", "mon:sendkey ret", "wait:4",
         "shot:out\shots\reg-app-monitor.ppm", "mon:sendkey pgdn", "mon:sendkey pgdn", "mon:sendkey pgdn", "mon:sendkey pgdn",
         "mon:sendkey up", "wait:0.5", "mon:sendkey tab", "mon:sendkey ret", "wait:2.5", "mon:sendkey q", "wait:2",
-        "type:arquivos /usr/share &", "mon:sendkey ret", "wait:4", "mon:sendkey down", "mon:sendkey down", "mon:sendkey down",
+        "type:arquivos /usr/share &", "mon:sendkey ret", "wait:4", "mon:sendkey down", "mon:sendkey down", "mon:sendkey down", "mon:sendkey down",
         "mon:sendkey ret", "wait:1.5", "shot:out\shots\reg-app-arquivos.ppm", "mon:sendkey down", "mon:sendkey down", "mon:sendkey ret",
         "wait:4", "mon:sendkey q", "wait:2", "mon:sendkey tab", "type:pasta-nova", "mon:sendkey ret", "wait:1",
         "mon:sendkey tab", "mon:sendkey tab", "mon:sendkey tab", "mon:sendkey tab", "mon:sendkey ret", "wait:0.5", "mon:sendkey ret", "wait:1",
@@ -684,7 +684,7 @@ if ($runAll -or $OnlyB) {
     $b = Get-Log "out\reg-b.log"
     if ($Verbose) { Write-Output $b }
 
-    Expect $b "adding /doom/freedoom1.wad" "doom: carregou o freedoom1.wad"
+    Expect $b "adding /usr/share/games/doom/freedoom1.wad" "doom: achou sozinho o freedoom1.wad em /usr/share/games/doom"
     Expect $b "doom: framebuffer \d+x\d+, escala \d" "doom: framebuffer e /dev/input"
     Expect $b "doom: \d{3,} quadros em \d+ ms" "doom rodou a demo (centenas de quadros)"
     Expect $b "doom: sem som \(/dev/dsp: " "sem placa de som o Doom avisa e roda mudo"
@@ -737,7 +737,7 @@ if ($runAll -or $OnlyB) {
     Expect $b "agora se chama 'terminal: sh pid \d+'" "terminal abre um sh numa pty"
     Expect $b "cat /tmp/term\.txt\s*\n48\s*\ndepois\s*\n" "terminal: comandos e Ctrl+C chegam ao sh do app (COLUMNS=48) pela pty"
     Expect $b "(?s)'terminal: sh pid \d+'.*?wm: app da janela \d+ saiu \(pediu para fechar\)" "terminal fecha quando o sh sai"
-    Test-ShotPixel "out\shots\reg-app-terminal.ppm" 345 350 0xc8d4e0 24 "captura do terminal: cursor depois do ls, na linha do prompt"
+    Test-ShotPixel "out\shots\reg-app-terminal.ppm" 342 365 0xc8d4e0 24 "captura do terminal: cursor depois do ls, na linha do prompt"
     Test-ShotPixel "out\shots\reg-app-terminal.ppm" 700 500 0x0a0e17 12 "captura do terminal: fundo da tela"
     Expect $b 'crash: pedindo ao kernel para executar codigo de usuario \(SMEP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?busca de instrucao[\s\S]*?SMEP: o kernel tentou executar codigo de usuario \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMEP: kernel executando pagina de usuario vira panico controlado"
     Expect $b 'crash: pedindo ao kernel para ler memoria de usuario sem copy_from_user \(SMAP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?SMAP: o kernel acessou memoria de usuario fora das copias de uaccess \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMAP: kernel lendo memoria de usuario fora do uaccess vira panico controlado"
@@ -981,7 +981,10 @@ if ($runAll -or $OnlyF) {
         "key:0B", "cmd:irqtest", "cmd:irqstorm", "cmd:estouro", "cmd:iretfalha", "cmd:iretss", "cmd:usbstall sdb", "cmd:usbtimeout sdb", "cmd:kmfail 5", "key:0B",
         "reboot:uefi,cd", "cmd:mount", "cmd:cat /home/orion/nota.txt", "wait:1",
         "reboot:bios,isodisk", "cmd:mount", "cmd:poweroff", "wait:4", "monlog:info status",
-        "reboot:uefi,isodisk", "cmd:mount", "cmd:ls /doom", "cmd:reboot", "wait:4", "monlog:info status"
+        "reboot:uefi,isodisk", "cmd:mount", "cmd:ls -l /usr/share/games/doom",
+        "cmd:doom -nogui -orionquit 25", "wait:18", "shot:out\shots\reg-f-doom.ppm", "until:60:quadros em", "wait:1",
+        "cmd:doom -iwad /tmp/nao-existe.wad", "cmd:mv /usr/share/games/doom /usr/share/games/doom-fora", "cmd:doom -orionquit 3", "wait:2",
+        "cmd:mv /usr/share/games/doom-fora /usr/share/games/doom", "cmd:reboot", "wait:4", "monlog:info status"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Iso -Bios -NoBuild -NoStrict -LogPath "out\reg-f.log" `
         -Script $stepsF -CommandDelay 1.5 -BootTimeout 90 -NoPrint | Out-Null
@@ -1011,7 +1014,13 @@ if ($runAll -or $OnlyF) {
     Expect $f "lua -e print\(6\*7\)\s*\n42" "live: lua roda"
     Expect $f "su orion -c id\s*\nuid=1000\(orion\)" "live: su para orion"
     Expect $f "----- reboot uefi,cd -----[\s\S]*?cat: /home/orion/nota\.txt: Arquivo ou diretorio inexistente" "live: nada sobrevive ao reboot (raiz so em RAM)"
-    Expect $f "ls /doom\s*\n[^\n]*freedoom1\.wad" "live: o wad do Doom esta no initramfs"
+    Expect $f "ls -l /usr/share/games/doom\s*\n[^\n]*freedoom1\.wad\s*\n[^\n]*freedoom2\.wad" "live: os dois WADs do Freedoom estao em /usr/share/games/doom"
+    Expect $f "adding /usr/share/games/doom/freedoom1.wad" "live: o doom acha o freedoom1.wad sem -iwad"
+    Expect $f "doom: \d{3,} quadros em \d+ ms" "live: o doom desenha centenas de quadros na ISO"
+    Test-ShotColors "out\shots\reg-f-doom.ppm" "live: captura do doom na ISO tem a cena do jogo" 40
+    Expect $f "doom: o IWAD /tmp/nao-existe.wad nao existe ou nao pode ser lido" "live: -iwad com arquivo inexistente da mensagem clara"
+    Expect $f "doom: nenhum IWAD encontrado \(freedoom1.wad[^\n]*\n[^\n]*doom -iwad /caminho/arquivo.wad" "live: sem WAD o doom explica onde procurou e o que fazer"
+    ExpectNot $f "zenity" "live: o doom nunca chama o zenity"
     Expect $f '----- reboot bios,isodisk -----(?:(?!----- reboot)[\s\S])*?entrando no estado S5(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "poweroff pelo ACPI no BIOS"
     Expect $f '----- reboot uefi,isodisk -----(?:(?!----- reboot)[\s\S])*?reiniciando pelo registrador de reset do FADT(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "reboot pelo ACPI no UEFI a partir do live"
     ExpectNot $f "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico nos quatro boots da ISO"
@@ -1251,7 +1260,7 @@ if ($runAll -or $OnlyS) {
         "cmd:play --teste-ocupado", "cmd:play --tom 1000 2000 --taxa 22050 --gravar /tmp/t.wav", "wait:1",
         "cmd:play /tmp/t.wav", "until:15:play: fim", "cmd:play /tmp/t.wav --nao-bloqueia", "until:15:play: fim",
         "key:0B", "cmd:hda", "key:0B",
-        "cmd:doom -iwad /doom/freedoom1.wad -nogui -playdemo demo1 -orionquit 12", "until:40:quadros em", "wait:2",
+        "cmd:doom -nogui -playdemo demo1 -orionquit 12", "until:40:quadros em", "wait:2",
         "cmd:cat /proc/interrupts", "wait:1"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Audio -LogPath "out\reg-s.log" `

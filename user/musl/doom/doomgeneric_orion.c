@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -217,19 +218,71 @@ void DG_SetWindowTitle(const char *title)
     (void)title;
 }
 
+static const char *const iwad_names[] = {
+    "doom2.wad", "plutonia.wad", "tnt.wad", "doom.wad", "doom1.wad", "freedoom1.wad", "freedoom2.wad", "freedm.wad",
+};
+
+static char iwad_path[512];
+
+static const char *find_iwad(void)
+{
+    const char *dirs[6];
+    int n = 0;
+    const char *env = getenv("DOOMWADDIR");
+    if (env && *env)
+        dirs[n++] = env;
+    dirs[n++] = "/usr/share/games/doom";
+    dirs[n++] = "/usr/local/share/games/doom";
+    dirs[n++] = "/doom";
+    dirs[n++] = ".";
+    for (size_t w = 0; w < sizeof(iwad_names) / sizeof(iwad_names[0]); w++) {
+        for (int d = 0; d < n; d++) {
+            snprintf(iwad_path, sizeof(iwad_path), "%s/%s", dirs[d], iwad_names[w]);
+            if (access(iwad_path, R_OK) == 0)
+                return iwad_path;
+        }
+    }
+    return NULL;
+}
+
 int main(int argc, char **argv)
 {
-    int out = 1;
-    for (int i = 1; i < argc; i++) {
+    static char *args[64];
+    int out = 0;
+    bool has_iwad = false;
+    args[out++] = argv[0];
+    for (int i = 1; i < argc && out < 60; i++) {
         if (strcmp(argv[i], "-orionquit") == 0 && i + 1 < argc) {
             quit_after_ms = (uint64_t)strtoul(argv[i + 1], NULL, 10) * 1000;
             i++;
             continue;
         }
-        argv[out++] = argv[i];
+        if (strcmp(argv[i], "-iwad") == 0) {
+            has_iwad = true;
+            if (i + 1 >= argc || access(argv[i + 1], R_OK) != 0) {
+                fprintf(stderr, "doom: o IWAD %s nao existe ou nao pode ser lido\n", i + 1 < argc ? argv[i + 1] : "(faltou o arquivo)");
+                return 1;
+            }
+        }
+        args[out++] = argv[i];
     }
-    argv[out] = NULL;
-    doomgeneric_Create(out, argv);
+    if (!has_iwad) {
+        const char *iwad = find_iwad();
+        if (!iwad) {
+            const char *env = getenv("DOOMWADDIR");
+            fprintf(stderr,
+                    "doom: nenhum IWAD encontrado (freedoom1.wad, freedoom2.wad, doom.wad, doom2.wad...) em %s%s"
+                    "/usr/share/games/doom, /usr/local/share/games/doom, /doom e no diretorio atual.\n"
+                    "doom: copie um .wad para /usr/share/games/doom, aponte DOOMWADDIR para a pasta dele ou use "
+                    "doom -iwad /caminho/arquivo.wad\n",
+                    env && *env ? env : "", env && *env ? " (DOOMWADDIR), " : "");
+            return 1;
+        }
+        args[out++] = "-iwad";
+        args[out++] = (char *)iwad;
+    }
+    args[out] = NULL;
+    doomgeneric_Create(out, args);
     for (;;)
         doomgeneric_Tick();
 }

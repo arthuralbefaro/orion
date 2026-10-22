@@ -237,11 +237,13 @@ foreach ($inst in $muslInstalls) {
     Set-Content -Path $manifest -Value ($now.Keys | Sort-Object) -Encoding ascii
 }
 if ($userBins.ContainsKey("doom")) {
-    $wad = $null
-    try { $wad = & (Join-Path $Root "tools\freedoom.ps1") } catch { Write-Warning "sem o freedoom1.wad ($_); o doom fica sem IWAD" }
-    if ($wad) {
-        $wadDir = Join-Path $EspDir "doom"
-        $wadOut = Join-Path $wadDir "freedoom1.wad"
+    $wads = @()
+    try { $wads = @(& (Join-Path $Root "tools\freedoom.ps1")) } catch { Write-Warning "sem os WADs do Freedoom ($_); o doom fica sem IWAD" }
+    $oldWadDir = Join-Path $EspDir "doom"
+    if (Test-Path $oldWadDir) { Remove-Item -Recurse -Force $oldWadDir }
+    $wadDir = Join-Path $EspDir "usr\share\games\doom"
+    foreach ($wad in $wads) {
+        $wadOut = Join-Path $wadDir (Split-Path $wad -Leaf)
         New-Item -ItemType Directory -Force -Path $wadDir | Out-Null
         if (-not (Test-Path $wadOut) -or (Get-Item $wadOut).Length -ne (Get-Item $wad).Length) { Copy-Item $wad $wadOut -Force }
     }

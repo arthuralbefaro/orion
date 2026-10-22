@@ -2388,3 +2388,21 @@ STAR antigo deu vermelho em 8 de 9 (o boot para em "STAR errado ... SS=18
 Verificacao (nucleo: entrada e saida do anel 3): `check.ps1` limpo,
 sequencias R (9) e K (15) verdes; regressao completa verde, 776 verificacoes, 31,9 min. RAM livre
 antes: 4,6 GB. Versao 3.0.0-a14.
+
+#### 7.4 parte 7 - terceiro teste no notebook passou; o Doom acha o WAD sozinho - 2026-10-22 - FEITO
+Terceiro teste do dono (ISO a14, Ventoy, UEFI): SUCESSO. Boot completo ate
+o login, live sem montar o `nvme0n1`, `segtest 5` TUDO OK nas 8 CPUs
+(99855 leituras depois de syscall e de troca de CPU, 2494 sinais, 4
+filhos, 10704 voltas por `iretq`, 0 com seletor errado). O `doom` sem
+argumentos nao achou o WAD: ele estava em `/doom`, mas o doomgeneric so
+procura no diretorio atual (e o `find / -name '*.wad'` do dono falhou
+porque o `sh` do Orion passa as aspas para o `find`). Os dois Freedoom vao
+para `/usr/share/games/doom`, e o `main` do Doom do Orion acha o IWAD
+(`DOOMWADDIR`, caminhos padrao) e da mensagem clara sem ele, sem chamar o
+`zenity`. Detalhes: `docs/DECISOES.md`, v3.0.0-a15 parte 7.
+Verificacao: sequencias F (33, com o Doom na ISO live e a captura), B
+(62), S e I verdes. A B precisou de dois ajustes no teste (a pasta `games`
+nova mudou a posicao de `imagens` no app `arquivos` e a linha do cursor no
+terminal); uma rodada com a imagem reaproveitada (`-NoBuild`) falhou no
+`config` porque a rodada anterior tinha gravado o `/etc/wm.conf` na
+imagem, o que nao acontece na regressao completa, que refaz a imagem.

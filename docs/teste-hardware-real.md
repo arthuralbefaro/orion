@@ -86,7 +86,9 @@ em notebooks as vezes `F1` ou `F10`).
      endereco nao veio sozinho);
    - `wm` para o ambiente grafico (sai com `Ctrl+Alt+X`);
    - `play --tom 440 2000` (deve tocar um tom de 2 s, so no lado esquerdo);
-   - `doom -iwad /doom/freedoom1.wad` (sai com `Esc` e o menu).
+   - `doom` (acha sozinho o `freedoom1.wad` em `/usr/share/games/doom`; o
+     `freedoom2.wad` esta na mesma pasta, `doom -iwad
+     /usr/share/games/doom/freedoom2.wad`; sai com `Esc` e o menu).
 5. **Shell do kernel** (`Ctrl+K` alterna): `pci`, `lsblk`, `irq`, `cpus`,
    `acpi`, `fb` ajudam a entender o hardware. O `irq` mostra, por CPU, os
    ultimos 16 vetores atendidos, a profundidade de interrupcao e a IRQ que
