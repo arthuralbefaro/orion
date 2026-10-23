@@ -4786,3 +4786,17 @@ no OOM; e uma corrida da propria correcao da a13, em duas janelas:
 
 Verificacao: sequencia M verde 10 vezes seguidas (antes, 3 falhas em 13),
 com "saiu" antes de cada nova vitima no log.
+
+## v3.0.1-a1: versao depois da tag `v3.0`
+
+- A tag `v3.0` (commit `11f3d5d`) marca o kernel 3.0.0-a15. O commit
+  seguinte (aspas no `sh`, `FLUSH` conferido, corrida do OOM) mudou a ISO
+  sem mudar o nome da versao, e o boot nao deixava saber qual codigo
+  estava rodando.
+- Regra daqui em diante: toda mudanca depois de uma tag sobe a versao. Os
+  commits que vem depois da `v3.0` sao a serie 3.0.1-aN (N sobe a cada
+  commit que muda o que vai na ISO) e levam `v3.0.1:` no titulo; a
+  proxima tag fecha a serie como 3.0.1. Esta e a 3.0.1-a1: o codigo do
+  commit `0a00abb` com a versao nova.
+- A pendencia de integridade do `FLUSH` no AHCI e no virtio-blk virou a
+  etapa 9.4 do `docs/PLANO.md`.

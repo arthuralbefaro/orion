@@ -53,12 +53,14 @@ fechou em 2026-10-22: o terceiro teste do dono (ISO a14, notebook ASUS
 Vivobook AMD com Windows, modo live) chegou ao login e passou no
 `segtest`; marco M5 cumprido. O caminho ate la (o `#DF` do primeiro teste,
 o STAR sem RPL 3 da AMD, a seguranca do disco interno) esta nas partes 1 a
-8 da sessao 4 e em `docs/hardware.md`. A ISO 3.0.0-a15 leva o Doom que
-acha o WAD sozinho, `lspci` e `dmesg`, para o dono conferir (secao 5c do
-roteiro). Proximas etapas, so anotadas no `docs/PLANO.md`: 9.1 (instalar
-em USB), 9.2 (dual boot no NVMe) e 9.3 (rede por adaptador USB). Fase 7
-fechada com a tag `v3.0-rc1` e a Fase 8 com a `v3.0-rc2`; a tag `v3.0`
-(marco M5) entra com uma regressao completa verde. Versao 3.0.0-a15.
+8 da sessao 4 e em `docs/hardware.md`. A ISO 3.0.1-a1 leva o Doom que
+acha o WAD sozinho, `lspci`, `dmesg` e as aspas no `sh`, para o dono
+conferir (secao 5c do roteiro). Proximas etapas, so anotadas no
+`docs/PLANO.md`: 9.1 (instalar em USB), 9.2 (dual boot no NVMe), 9.3 (rede
+por adaptador USB) e 9.4 (`FLUSH` no AHCI e no virtio-blk, pendencia de
+integridade). Fase 7 fechada com a tag `v3.0-rc1`, a Fase 8 com a
+`v3.0-rc2` e o marco M5 com a `v3.0` (commit `11f3d5d`, versao
+3.0.0-a15). Depois da tag a versao e 3.0.1-aN. Versao 3.0.1-a1.
 
 As etapas 5.2 a 5.9 (MSI, virtio, NVMe, USB, audio, video) ficaram `[ ]` de
 proposito: a "Ordem recomendada" do `docs/PLANO.md` poe a Fase 6 antes da
@@ -2488,3 +2490,9 @@ No caminho: a regressao completa achou uma corrida no OOM (a segunda
 vitima morta sem esperar a memoria da primeira voltar), corrigida em
 `mm/oom.c`; sequencia M verde 10 vezes seguidas. Detalhes no
 `docs/DECISOES.md`, logo depois da parte 12.
+
+#### Versao 3.0.1-a1 e a pendencia do `FLUSH` - 2026-10-23 - FEITO
+A ISO tinha mudado depois da tag `v3.0` com o mesmo nome 3.0.0-a15. Agora
+toda mudanca depois de uma tag sobe a versao: serie 3.0.1-aN, commits
+`v3.0.1:` (`docs/DECISOES.md`). A falta de `FLUSH` no AHCI e no virtio-blk
+virou a etapa 9.4 do `docs/PLANO.md`.
