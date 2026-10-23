@@ -34,6 +34,7 @@
 #define SYS_RMDIR         84
 #define SYS_UNLINK        87
 #define SYS_FSYNC         74
+#define SYS_FDATASYNC     75
 #define SYS_FTRUNCATE     77
 #define SYS_SYNC          162
 #define SYS_REBOOT        169
@@ -159,6 +160,7 @@
 #define SYS_SETPRIORITY   141
 #define SYS_SETRLIMIT     160
 #define SYS_PRLIMIT64     302
+#define SYS_SYNCFS        306
 #define SYS_READDIR       1000
 #define SYS_OPENPTY       1001
 #define SYS_KFAULT        1002

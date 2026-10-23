@@ -29,6 +29,8 @@ struct blockdev {
     uint64_t rd_sectors;
     uint64_t wr_ios;
     uint64_t wr_sectors;
+    uint64_t fl_ios;
+    bool unflushed;
     uint32_t refs;
     bool gone;
     bool released;
@@ -50,6 +52,8 @@ bool blockdev_read(struct blockdev *dev, uint64_t lba, uint32_t count, void *buf
 bool blockdev_read_cached(struct blockdev *dev, uint64_t lba, uint32_t count, void *buf);
 bool blockdev_write(struct blockdev *dev, uint64_t lba, uint32_t count, const void *buf);
 bool blockdev_sync(void);
+bool blockdev_writeback(void);
+uint64_t blockdev_flush_total(void);
 bool blockdev_writable(const struct blockdev *dev);
 void blockdev_cache_init(void);
 

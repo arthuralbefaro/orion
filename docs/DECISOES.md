@@ -4619,3 +4619,170 @@ falha mostram poucas migracoes (~100 em 4 s) e quase nenhum
 balanceamento, entao nao e pingue-pongue entre CPUs. A verificacao nao foi
 afrouxada; fica anotada para investigar o calculo do tempo virtual (o
 candidato e cobrar da thread o tempo em que a vCPU nao rodou).
+
+## v3.0.0-a15, parte 11: aspas no `sh`
+
+No terceiro teste no notebook, `find / -name '*.wad'` nao achou nada
+mesmo com o WAD na ISO: o `sh` proprio quebrava a linha em palavras com
+`strtok` nos espacos, depois de expandir as variaveis na linha inteira, e
+passava as aspas como texto. O `find` recebia o padrao `'*.wad'`, com as
+aspas.
+
+**Avaliado: o `dash` como shell de login.** Ele ja esta em `/bin/dash` e
+trata aspas, expansao e escapes como o POSIX manda (a sequencia A testa
+isso desde a 1.9). Mas foi compilado sem libedit: sem historico, sem setas
+para editar a linha e sem `Ctrl+L`, que e o que se usa o tempo todo no
+console. Trocar o shell de login por ele seria piorar o dia a dia para
+corrigir um caso. Decisao: o `/bin/sh` proprio continua como shell de
+login e ganha um lexer de verdade; o `dash` continua para scripts.
+
+O lexer novo trabalha palavra por palavra, sobre a linha original:
+
+- `'...'` e literal; `"..."` expande `$NOME`, `${NOME}`, `$?` e `$$`, e a
+  barra invertida ali dentro so escapa `$`, `"`, `\` e a crase; fora das
+  aspas, `\x` vira `x`.
+- `''` e `""` sao um argumento vazio; uma variavel vazia sem aspas some.
+- Variavel sem aspas e dividida em espacos, tabs e quebras de linha (o
+  `IFS` padrao, fixo); entre aspas duplas, nao.
+- `;`, `&`, `&&`, `||`, `|`, `<`, `>`, `>>` e `2>` so sao operadores fora
+  das aspas; `echo "x>y"` nao cria arquivo.
+- `NOME="a b" cmd` e atribuicao (o nome antes do `=` tem de estar sem
+  aspas, como no POSIX), e o valor nao e dividido.
+- Aspas sem fechar dao `sh: aspas sem fechar` e status 2; o `sh` nao pede
+  a continuacao da linha.
+- No `sh -c`, as quebras de linha viram `;` so fora das aspas.
+
+Continua faltando, e fica para o `dash`: `*` e `?` expandidos pelo shell,
+`$(...)` e crase, `IFS`, here-doc, `if` e `for`. O `help` do `sh` mostra
+as tres formas de aspas.
+
+Dois passos da regressao dependiam das aspas literais e mudaram: o
+`printf` do teste do `telnet` (os escapes `\377` agora vao entre aspas
+simples) e o `pkg remove` como usuario comum, que ia por um script do
+`dash` so porque o `sh` nao passava `'pkg remove lua'` inteiro. Agora e
+`su orion -c 'pkg remove lua'` direto no `sh`. A sequencia A ganhou oito
+verificacoes: aspas simples e duplas e barra invertida; divisao de `$VAR`
+com e sem aspas e o argumento vazio; operadores entre aspas; `VAR="a b"
+cmd`; o `find /usr -name '*.wad'` do notebook; aspas sem fechar; `sh -c`
+com aspas dentro; e o shell vivo depois do erro.
+
+## v3.0.0-a15, parte 12: o `FLUSH` conferido
+
+A parte 10 tirou o `FLUSH` de cada escrita e deixou so no `sync`. A
+auditoria, caminho por caminho, de onde o `FLUSH` precisa chegar ao NVMe:
+
+| Caminho | Antes | Agora |
+|---|---|---|
+| `sync` | `vfs_sync`, `blockdev_sync`, `FLUSH` | igual |
+| `fsync` | o mesmo que `sync`, sem conferir o fd | igual, com `EBADF` para fd invalido |
+| `fdatasync` | **nao existia: `ENOSYS`** | o mesmo que `fsync` |
+| `syncfs` | nao existia | o mesmo que `fsync` |
+| `umount` | `vfs_umount` chama o `sync` do sistema de arquivos (FAT: `fat_sync` com `blockdev_sync`) e o `unmount` (ext2: `ext2_sync` e `blockdev_sync`) | igual; no FAT o `blockdev_sync` passou do `fat_sync` para o `fat_unmount` |
+| `poweroff` e `reboot` | o programa chama `sync()`; o kernel chama `vfs_sync` de novo no `power_off`/`power_reboot` (a syscall roda com interrupcoes ligadas) | igual, com a linha `discos gravados (N FLUSH)` no log |
+| `bdflush`, a cada 2 s | `vfs_sync`: um `FLUSH` a cada 2 s, mesmo com o disco parado | so se alguma escrita chegou ao disco desde o ultimo `FLUSH` |
+
+O contador novo mostrou mais um: cada `fsync` mandava **dois** `FLUSH`. O
+`fat_sync` (a ESP montada em `/boot/efi`) chamava o `blockdev_sync` por
+conta propria, e o `vfs_sync` chama de novo logo depois. Pior, o `bdflush`
+passa pelo `fat_sync` a cada 2 s, entao com a ESP montada havia um `FLUSH`
+forcado a cada 2 s mesmo com o disco parado. O `fat_sync` agora so grava a
+FAT; o `blockdev_sync` foi para o `fat_unmount`, como ja era no ext2, e o
+`umount` continua mandando o `FLUSH`.
+
+O `fdatasync` faltando era o defeito: a musl manda a syscall 75, o kernel
+devolvia `ENOSYS`, e o programa que confia no `fdatasync` (bancos de
+dados, editores) ou desistia ou seguia achando que o dado estava gravado.
+`fsync`, `fdatasync` e `syncfs` fazem o mesmo que o `sync` (gravam tudo e
+mandam `FLUSH` a todos os discos): grava mais que o pedido, nunca menos.
+
+Cada disco agora conta os `FLUSH` mandados (`fl_ios`) e tem um indicador
+de escrita ainda sem `FLUSH` (`unflushed`, ligado no `raw_write`). O
+`/proc/diskstats` passou ao formato do Linux 5.5: depois dos 11 campos de
+antes vem os 4 de descarte (zerados), o numero de `FLUSH` e o tempo deles
+(zerado). Os pedidos explicitos (`sync`, `fsync`, `fdatasync`, `syncfs`,
+`umount`, `poweroff`, `reboot`) sempre mandam `FLUSH`; o `bdflush` so
+quando o indicador esta ligado. Se o `FLUSH` falha, o indicador volta a
+ficar ligado.
+
+**Escrita direta e os caches.** Ha dois caches no caminho:
+
+- O **cache de blocos** (256 setores, `block.c`). A escrita direta de 8
+  setores ou mais atualizava as copias desses setores no cache e as
+  marcava limpas *antes* de mandar o comando. Se o comando falhasse, o
+  cache ficava com um dado que o disco nao tinha, marcado como limpo: as
+  leituras seguintes mostrariam um dado que nunca chegou ao disco. Agora
+  o comando vai primeiro; se deu certo, as copias recebem o dado novo e
+  ficam limpas; se falhou, sao descartadas. Uma copia suja que a escrita
+  direta cobre fica limpa com o dado novo, para o `sync` seguinte nao
+  gravar o dado velho por cima.
+- O **cache de paginas** (`pcache.c`) fica acima do cache de blocos: o
+  ext2 e o FAT copiam para ele os mesmos bytes, no `pcache_write`, depois
+  que a escrita no sistema de arquivos deu certo, qualquer que seja o
+  caminho no cache de blocos. Escrever no disco cru (`/dev/nvme0n1p2`)
+  com o sistema de arquivos montado nao passa pelo cache de paginas desse
+  sistema, como no Linux; isso nao muda com a escrita direta.
+
+O teste e um programa novo, o `flushtest`:
+
+- `flushtest -f <disco> <arquivo>`: `fsync`, `fdatasync`, `syncfs` e
+  `sync` devolvem 0 e o contador de `FLUSH` do disco sobe; 5 s parado
+  depois de um `sync` nao mandam nenhum `FLUSH`; `fsync` e
+  `fdatasync` num fd fechado dao `EBADF`; 16 KiB escritos e lidos (o cache
+  de paginas fica cheio), um `mmap` deles, 8 KiB escritos no meio e lidos
+  logo depois pelo `read` e pelo `mmap`, 100 bytes por cima, e o arquivo
+  reaberto.
+- `flushtest -b <dispositivo> <disco>`: no disco cru, um setor escrito
+  sozinho (fica sujo no cache), 4 KiB por cima (escrita direta) e o setor
+  lido de novo pelo cache; um setor sujo no meio de 4 KiB lidos; 4 KiB
+  diretos por cima de um setor sujo; e, depois do `fsync`, 4 KiB lidos do
+  disco para conferir que o setor sujo antigo nao foi gravado por cima.
+- `flushtest -c <disco> <comando>`: roda o comando e confere que o
+  contador subiu.
+
+O modo `-b` usa `lseek` e `read`/`write`, como o `fsck.ext2`, o
+`mkfs.ext2` e o `instalar`: o `pread`/`pwrite` do Orion so aceita arquivo
+regular e da `ESPIPE` num disco cru (o Linux aceita; fica anotado). A
+primeira versao do teste usava `pread`, falhou nas seis verificacoes, e a
+regressao nao acusou: o padrao `(?s)flushtest -b ....*?fim, 0 falha` pulava
+a saida do `-b` e casava com o `fim` do `flushtest -f` mais adiante. Os
+padroes agora nao atravessam outro `flushtest: fim`.
+
+Para saber se o `-b` pega um cache errado, o kernel foi compilado uma vez
+com a escrita direta sem mexer nas copias do cache: cinco das sete
+verificacoes falharam, inclusive a de que, depois do `fsync`, o setor sujo
+antigo foi gravado por cima do dado novo.
+
+Na sequencia N (raiz no NVMe, ext2 de 1 KiB): `flushtest -f`, o `umount`
+da ESP pelo `flushtest -c` (e a ESP montada de novo), `reboot` e
+`poweroff` com `discos gravados (N FLUSH)` com N de 1 para cima. Na I:
+`flushtest -b` no disco em branco antes do instalador, e `flushtest -f`
+no sistema instalado (ext2 de 4 KiB, onde todo bloco de dados vai pela
+escrita direta).
+
+Fica anotado: so o NVMe tem `flush`. O AHCI (`FLUSH CACHE EXT`) e o
+virtio-blk (`VIRTIO_BLK_T_FLUSH`) nunca mandaram; num disco SATA com cache
+de escrita ligado, o que foi gravado pode ficar no cache do disco numa
+queda de energia. O notebook do teste e NVMe.
+
+## v3.0.0-a15, correcao achada na regressao: o OOM ainda matava a segunda vitima sem esperar
+
+A regressao completa das partes 11 e 12 deu vermelho em "uma vitima por
+vez" (sequencia M, caso "dois processos enchendo juntos"): o pid 10 foi
+morto na linha seguinte a saida do pid 9, sem o aviso "pid 9 saiu" no meio
+e sem os 2 s de espera da a13 (`OOM_SETTLE_MS`). Nada destas partes mexe
+no OOM; e uma corrida da propria correcao da a13, em duas janelas:
+
+- Quem via a vitima sair zerava `victim_pid` dentro da trava, mas so
+  gravava `victim_left` (o instante que o `settle` usa para esperar a
+  memoria voltar) depois de solta-la. Outra thread que entrasse nesse
+  intervalo achava `victim_pid` zerado e o `victim_left` antigo, e
+  escolhia outra vitima na hora. Agora as duas coisas acontecem juntas
+  dentro da trava (`mark_victim_left`); so o aviso fica fora.
+- Com isso a falha caiu, mas nao sumiu (3 em 13 rodadas da M). A thread
+  que escolhe passava pelo `settle` antes de pegar a trava: se a vitima
+  saisse enquanto ela esperava a trava, ela entrava com a janela de 2 s ja
+  conferida, mas de antes da saida. Agora, dentro da trava, se uma vitima
+  saiu ha menos de 2 s, ela solta a trava e volta ao `settle`.
+
+Verificacao: sequencia M verde 10 vezes seguidas (antes, 3 falhas em 13),
+com "saiu" antes de cada nova vitima no log.

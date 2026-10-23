@@ -9,6 +9,7 @@
 
 #include <arch/x86_64/cpu.h>
 #include <arch/x86_64/interrupts.h>
+#include <fs/block.h>
 #include <fs/vfs.h>
 #include <kernel/log.h>
 #include <kernel/smp.h>
@@ -133,8 +134,11 @@ bool power_pci_route(uint8_t slot, uint8_t pin, struct pci_irq_route *out)
 
 static void flush_disks(void)
 {
-    if (interrupts_enabled())
-        vfs_sync();
+    if (!interrupts_enabled())
+        return;
+    uint64_t before = blockdev_flush_total();
+    bool ok = vfs_sync();
+    log_info("acpi", "discos gravados (%lu FLUSH)%s", blockdev_flush_total() - before, ok ? "" : ", com erro");
 }
 
 void power_off(void)

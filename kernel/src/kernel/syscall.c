@@ -371,6 +371,13 @@ static long sys_rename(const char *ufrom, const char *uto)
     return sys_renameat(AT_FDCWD, ufrom, AT_FDCWD, uto);
 }
 
+static long sys_fsync(int fd)
+{
+    if (!process_fd_pin(fd))
+        return -EBADF;
+    return vfs_sync() ? 0 : -EIO;
+}
+
 static long sys_ftruncate(int fd, uint64_t size)
 {
     struct file *f = process_fd_pin(fd);
@@ -2252,6 +2259,8 @@ bool syscall_dispatch(struct interrupt_frame *f)
     case SYS_RENAME:      ret = sys_rename((const char *)f->rdi, (const char *)f->rsi); break;
     case SYS_FTRUNCATE:   ret = sys_ftruncate((int)f->rdi, f->rsi); break;
     case SYS_FSYNC:
+    case SYS_FDATASYNC:
+    case SYS_SYNCFS:      ret = sys_fsync((int)f->rdi); break;
     case SYS_SYNC:        ret = vfs_sync() ? 0 : -EIO; break;
     case SYS_REBOOT:      ret = sys_reboot((uint32_t)f->rdi, (uint32_t)f->rsi, (uint32_t)f->rdx); break;
     case SYS_GETPGID:     ret = process_getpgid((int)f->rdi); break;

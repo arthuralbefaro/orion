@@ -151,7 +151,10 @@ static bool raw_write(struct blockdev *base, uint64_t lba, uint32_t count, const
         return false;
     __atomic_add_fetch(&base->wr_ios, 1, __ATOMIC_RELAXED);
     __atomic_add_fetch(&base->wr_sectors, count, __ATOMIC_RELAXED);
-    return base->write && base->write(base, lba, count, buf);
+    if (!base->write || !base->write(base, lba, count, buf))
+        return false;
+    __atomic_store_n(&base->unflushed, true, __ATOMIC_RELEASE);
+    return true;
 }
 
 static struct cache_entry *cache_lookup(struct blockdev *base, uint64_t lba)
@@ -282,15 +285,19 @@ bool blockdev_write(struct blockdev *dev, uint64_t lba, uint32_t count, const vo
 
     mutex_lock(&cache_lock);
     if (count >= BLOCK_DIRECT_MIN) {
+        bool ok = raw_write(base, abs, count, buf);
         for (uint32_t i = 0; i < count; i++) {
             struct cache_entry *e = cache_lookup(base, abs + i);
-            if (e) {
+            if (!e)
+                continue;
+            if (ok) {
                 memcpy(e->data, (const uint8_t *)buf + i * BLOCK_SECTOR, BLOCK_SECTOR);
-                e->dirty = false;
                 e->stamp = ++cache_clock;
+            } else {
+                e->valid = false;
             }
+            e->dirty = false;
         }
-        bool ok = raw_write(base, abs, count, buf);
         mutex_unlock(&cache_lock);
         return ok;
     }
@@ -310,13 +317,11 @@ bool blockdev_write(struct blockdev *dev, uint64_t lba, uint32_t count, const vo
     return true;
 }
 
-bool blockdev_sync(void)
+static bool sync_all(bool force)
 {
-    if (!cache)
-        return true;
     bool ok = true;
     mutex_lock(&cache_lock);
-    for (uint32_t i = 0; i < BLOCK_CACHE_ENTRIES; i++) {
+    for (uint32_t i = 0; cache && i < BLOCK_CACHE_ENTRIES; i++) {
         if (!cache[i].valid || !cache[i].dirty)
             continue;
         if (raw_write(cache[i].dev, cache[i].lba, 1, cache[i].data)) {
@@ -332,10 +337,35 @@ bool blockdev_sync(void)
         struct blockdev *d = &devices[i];
         if (d->parent || d->released || d->gone || !d->flush)
             continue;
-        if (!d->flush(d))
+        bool pending = __atomic_exchange_n(&d->unflushed, false, __ATOMIC_ACQ_REL);
+        if (!force && !pending)
+            continue;
+        __atomic_add_fetch(&d->fl_ios, 1, __ATOMIC_RELAXED);
+        if (!d->flush(d)) {
+            __atomic_store_n(&d->unflushed, true, __ATOMIC_RELEASE);
             ok = false;
+        }
     }
     return ok;
+}
+
+bool blockdev_sync(void)
+{
+    return sync_all(true);
+}
+
+bool blockdev_writeback(void)
+{
+    return sync_all(false);
+}
+
+uint64_t blockdev_flush_total(void)
+{
+    uint64_t total = 0;
+    uint32_t n = __atomic_load_n(&device_count, __ATOMIC_ACQUIRE);
+    for (uint32_t i = 0; i < n; i++)
+        total += __atomic_load_n(&devices[i].fl_ios, __ATOMIC_RELAXED);
+    return total;
 }
 
 void blockdev_cache_stats(uint64_t *hits, uint64_t *misses, uint64_t *writes, uint32_t *dirty)

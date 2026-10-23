@@ -50,9 +50,14 @@ static bool victim_gone(uint32_t pid)
     return gone;
 }
 
+static void mark_victim_left(void)
+{
+    victim_pid = 0;
+    __atomic_store_n(&victim_left, time_ticks() | 1, __ATOMIC_RELEASE);
+}
+
 static void note_victim_left(uint32_t pid)
 {
-    __atomic_store_n(&victim_left, time_ticks() | 1, __ATOMIC_RELEASE);
     log_info("oom", "pid %u saiu; %lu paginas livres", pid, pmm_free_count());
 }
 
@@ -92,9 +97,14 @@ bool oom_recover(void)
         if (st != 0)
             return st > 0;
         flags = spin_lock_irqsave(&oom_lock);
+        uint64_t left = __atomic_load_n(&victim_left, __ATOMIC_ACQUIRE);
+        if (left && time_ticks() - left < OOM_SETTLE_MS) {
+            spin_unlock_irqrestore(&oom_lock, flags);
+            continue;
+        }
         pid = victim_pid;
         if (pid && victim_gone(pid)) {
-            victim_pid = 0;
+            mark_victim_left();
             spin_unlock_irqrestore(&oom_lock, flags);
             note_victim_left(pid);
             continue;
@@ -143,7 +153,7 @@ bool oom_recover(void)
             flags = spin_lock_irqsave(&oom_lock);
             bool mine = victim_pid == pid;
             if (mine)
-                victim_pid = 0;
+                mark_victim_left();
             spin_unlock_irqrestore(&oom_lock, flags);
             if (mine)
                 note_victim_left(pid);

@@ -2463,3 +2463,28 @@ shell (marco M5). Limitacoes que ficam nesse notebook, em
 `docs/hardware.md`: sem rede suportada, Wi-Fi ainda nao identificada, sem
 som (o audio analogico passa pelo AMD ACP, nao suportado), sem driver de
 video da GPU nem de touchpad I2C.
+
+#### Aspas no `sh` e o `FLUSH` conferido - 2026-10-22 - FEITO
+(1) O `sh` passava as aspas como texto (`find / -name '*.wad'` recebia
+`'*.wad'`). O `dash` foi avaliado como shell de login e ficou de fora: e
+compilado sem libedit, sem historico nem edicao de linha. O `sh` proprio
+ganhou um lexer por palavra: aspas simples, duplas com `$`, barra
+invertida, argumento vazio, `$VAR` dividido so sem aspas, operadores so
+fora das aspas, `VAR="a b" cmd`, erro para aspas sem fechar. Oito
+verificacoes novas na A; dois passos que dependiam das aspas literais
+mudaram (o `printf` do `telnet` e o `pkg remove` por `su -c`).
+(2) Auditoria do `FLUSH` depois da parte 10: `sync`, `fsync`, `umount`,
+`poweroff` e `reboot` chegavam ao NVMe; o `fdatasync` nao existia
+(`ENOSYS`) e o `syncfs` tambem nao; o `fat_sync` mandava um `FLUSH` a mais
+em todo `sync` e um a cada 2 s pelo `bdflush` com a ESP montada; a escrita
+direta que falhasse deixava no cache, marcado limpo, um dado que nao chegou
+ao disco. Corrigidos; contador de `FLUSH` por disco no `/proc/diskstats`;
+o `bdflush` so manda `FLUSH` se houve escrita; `discos gravados (N FLUSH)`
+no `poweroff`/`reboot`. Teste novo `flushtest` nas sequencias N e I
+(disco cru, arquivo com `read` e `mmap`, `umount`), conferido contra um
+kernel com o cache de blocos errado de proposito.
+Detalhes: `docs/DECISOES.md`, v3.0.0-a15 partes 11 e 12.
+No caminho: a regressao completa achou uma corrida no OOM (a segunda
+vitima morta sem esperar a memoria da primeira voltar), corrigida em
+`mm/oom.c`; sequencia M verde 10 vezes seguidas. Detalhes no
+`docs/DECISOES.md`, logo depois da parte 12.

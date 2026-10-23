@@ -1514,7 +1514,7 @@ static int fat_sync(struct mount *m)
     mutex_lock(&f->lock);
     bool ok = fat_flush(f);
     mutex_unlock(&f->lock);
-    return blockdev_sync() && ok ? 0 : -EIO;
+    return ok ? 0 : -EIO;
 }
 
 static void fat_free(struct fat_fs *f)
@@ -1530,6 +1530,7 @@ static void fat_unmount(struct mount *m)
     struct fat_fs *f = m->priv;
     if (!f)
         return;
+    blockdev_sync();
     mutex_deinit(&f->lock);
     fat_free(f);
     m->priv = NULL;

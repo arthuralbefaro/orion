@@ -284,7 +284,7 @@ if ($runAll -or $OnlyA) {
         "cmd:nc -l 7777 < /dev/null > /tmp/nc.out &", "wait:1", "cmd:echo transferido-pelo-nc | nc -N 127.0.0.1 7777", "wait:2",
         "cmd:cat /tmp/nc.out", "cmd:nc -z 127.0.0.1 7778", "wait:2",
         "cmd:echo GET /index.html HTTP/1.0 | nc -N 10.0.2.2 8088", "wait:3",
-        "cmd:printf \377\373\001ola\n | nc -l 7779 > /tmp/tn.out &", "wait:1", "cmd:echo oi | telnet 127.0.0.1 7779", "wait:3",
+        "cmd:printf '\377\373\001ola\n' | nc -l 7779 > /tmp/tn.out &", "wait:1", "cmd:echo oi | telnet 127.0.0.1 7779", "wait:3",
         "cmd:od -b /tmp/tn.out", "wait:2", "cmd:rm /tmp/nc.out /tmp/tn.out",
         "cmd:nslookup example.com", "wait:8",
         "cmd:nslookup example.com", "wait:8",
@@ -304,6 +304,11 @@ if ($runAll -or $OnlyA) {
         "cmd:unset GREETING", 'cmd:echo vazio[$GREETING]', "wait:1",
         "cmd:true && echo e-ok", "cmd:false && echo NAO-DEVIA", "cmd:false || echo ou-ok",
         "cmd:echo um ; echo dois", 'cmd:false ; echo status=$?',
+        'cmd:echo ''a  b'' "c  d" e\ f \"x\" \''y\''', 'cmd:QV=''um dois''',
+        'cmd:printf ''[%s]\n'' $QV "$QV" ''''; echo "q=$QV" ''l=$QV'' \$QV',
+        'cmd:cd /tmp; echo ''a;b|c&d'' "x>y" ''z<w''; test -e y || echo nao-criou-y; cd /',
+        'cmd:XQ="v  1" printenv XQ', "cmd:find /usr -name '*.wad'", "wait:3",
+        "cmd:echo 'abc", 'cmd:sh -c ''echo c1; echo "c  2"''', "cmd:echo depois-das-aspas", "wait:1",
         "cmd:XV=abc printenv XV", "cmd:printenv XV || echo XV-sumiu",
         "cmd:sleep 3 &", "cmd:jobs", "cmd:wait", "wait:1",
         "cmd:sleep 2 & sleep 1 & jobs", "cmd:fg", "wait:3", "cmd:jobs", "wait:1",
@@ -610,6 +615,14 @@ if ($runAll -or $OnlyA) {
     Expect $a "\nou-ok" "|| roda o segundo comando quando o primeiro falha"
     Expect $a "\num\r?\ndois" "; roda os dois comandos em sequencia"
     Expect $a "\nstatus=1" "`$? tem o status do ultimo comando"
+    Expect $a '\na  b c  d e f "x" ''y''\s*\n' "sh: aspas simples, duplas e barra invertida viram um argumento sem as aspas"
+    Expect $a '\n\[um\]\s*\n\[dois\]\s*\n\[um dois\]\s*\n\[\]\s*\nq=um dois l=\$QV \$QV\s*\n' "sh: `$VAR sem aspas divide, entre aspas duplas nao, entre simples nao expande; '' e argumento vazio"
+    Expect $a '\na;b\|c&d x>y z<w\s*\n(?:\[saiu com 1\]\s*\n)?nao-criou-y' "sh: ; | & > < entre aspas sao texto, nao operadores"
+    Expect $a 'printenv XQ\s*\nv  1\s*\n' 'sh: VAR="a b" cmd passa o valor com espacos'
+    Expect $a "-name '\*\.wad'\s*\n(?:/usr/share/games/doom/freedoom[12]\.wad\s*\n){2}" "sh: find -name '*.wad' recebe o padrao sem as aspas"
+    Expect $a "echo 'abc\s*\nsh: aspas sem fechar\s*\n" "sh: aspas sem fechar dao erro"
+    Expect $a '\nc1\s*\nc  2\s*\n' "sh -c com aspas dentro do comando"
+    Expect $a "\ndepois-das-aspas" "sh continua depois do erro de aspas"
     Expect $a "XV=abc printenv XV\s*\n\s*abc" "VAR=x cmd passa a variavel so para o comando"
     Expect $a "\nXV-sumiu" "VAR=x cmd nao muda o ambiente do shell"
     Expect $a "\[1\] \d+\s*\n" "cmd & devolve o numero do trabalho e o pid"
@@ -750,10 +763,10 @@ if ($runAll -or $OnlyB) {
     Expect $b 'crash: pedindo ao kernel para executar codigo de usuario \(SMEP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?busca de instrucao[\s\S]*?SMEP: o kernel tentou executar codigo de usuario \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMEP: kernel executando pagina de usuario vira panico controlado"
     Expect $b 'crash: pedindo ao kernel para ler memoria de usuario sem copy_from_user \(SMAP\)[\s\S]*?EXCECAO NAO TRATADA: #PF Page Fault[\s\S]*?SMAP: o kernel acessou memoria de usuario fora das copias de uaccess \(endereco 0000[0-9a-f]{12}\); panico controlado' "SMAP: kernel lendo memoria de usuario fora do uaccess vira panico controlado"
     ExpectNot $b 'crash: o kernel voltou' "o kernel nunca volta de um acesso proibido a memoria de usuario"
-    Expect $b 'reboot: gravando os discos e reiniciando\s*\[info\] acpi\s+reiniciando: gravando os discos\s*\[info\] acpi\s+reiniciando pelo registrador de reset do FADT(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "reboot pelo registrador de reset do FADT (uACPI)"
+    Expect $b 'reboot: gravando os discos e reiniciando\s*\[info\] acpi\s+reiniciando: gravando os discos\s*\[info\] acpi\s+discos gravados \(\d+ FLUSH\)\s*\[info\] acpi\s+reiniciando pelo registrador de reset do FADT(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "reboot pelo registrador de reset do FADT (uACPI)"
     ExpectNot $b 'reiniciando pelo controlador do teclado' "reboot nao precisou do controlador do teclado"
-    Expect $b 'poweroff: gravando os discos e desligando\s*\[info\] acpi\s+desligando: gravando os discos\s*\[info\] acpi\s+entrando no estado S5(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "poweroff entra no S5 e o QEMU desliga"
-    Expect $b 'botao de energia apertado: desligando\s*\[info\] acpi\s+desligando: gravando os discos\s*\[info\] acpi\s+entrando no estado S5(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "botao de energia (system_powerdown) desliga pelo ACPI"
+    Expect $b 'poweroff: gravando os discos e desligando\s*\[info\] acpi\s+desligando: gravando os discos\s*\[info\] acpi\s+discos gravados \(\d+ FLUSH\)\s*\[info\] acpi\s+entrando no estado S5(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "poweroff entra no S5 e o QEMU desliga"
+    Expect $b 'botao de energia apertado: desligando\s*\[info\] acpi\s+desligando: gravando os discos\s*\[info\] acpi\s+discos gravados \(\d+ FLUSH\)\s*\[info\] acpi\s+entrando no estado S5(?:(?!----- reboot)[\s\S])*?VM status: paused \(shutdown\)' "botao de energia (system_powerdown) desliga pelo ACPI"
 }
 
 # ---------------- Sequencia C: disco e shell ----------------
@@ -1042,6 +1055,7 @@ if ($runAll -or $OnlyI) {
     }
     New-BlankImage "out\inst.img" 512
     $stepsI = @(
+        "cmd:flushtest -b /dev/nvme0n1 nvme0n1", "until:60:flushtest: fim",
         "cmd:instalar", "wait:2",
         "cmd:instalar /dev/nvme0n1", "until:10:Digite o nome do disco", "raw:nao", "key:0D", "until:10:cancelado",
         "cmd:instalar /dev/nvme0n1p1 --sim", "cmd:instalar /dev/nvme0n1 --sim", "until:600:instalar: tire a ISO", "wait:2",
@@ -1053,10 +1067,11 @@ if ($runAll -or $OnlyI) {
         "cmd:echo persiste-no-disco > /root/nota.txt", "cmd:sync", "wait:2",
         "reboot:uefi,nenhuma",
         "cmd:cat /root/nota.txt", "cmd:lsblk", "wait:1",
+        "cmd:flushtest -f nvme0n1 /root/ft.bin", "until:120:flushtest: fim",
         "cmd:rm /bin/lua", "cmd:lua -v", "cmd:pkg update", "until:30:pkg: ", "cmd:pkg disponiveis",
         "cmd:pkg install lua", "until:60:pkg: ", "cmd:lua -e print(6*7,_VERSION)", "cmd:ls -l /bin/lua", "cmd:pkg list",
         "cmd:pkg install quebrado", "until:30:pkg: ", "cmd:ls /bin/quebrado",
-        "cmd:echo su orion -c 'pkg remove lua' > /tmp/rmlua.sh", "cmd:dash /tmp/rmlua.sh", "cmd:pkg remove lua", "cmd:lua -v", "cmd:pkg list", "cmd:ls /var/lib/pkg/installed", "wait:1"
+        "cmd:su orion -c 'pkg remove lua'", "cmd:pkg remove lua", "cmd:lua -v", "cmd:pkg list", "cmd:ls /var/lib/pkg/installed", "wait:1"
     )
     $web = Start-HostWeb 8088
     & (Join-Path $Root "test.ps1") -Smp $Smp -Iso -NoBuild -ExtraNvme "out/inst.img" -LogPath "out\reg-i.log" `
@@ -1065,6 +1080,8 @@ if ($runAll -or $OnlyI) {
     $ins = Get-Log "out\reg-i.log"
     if ($Verbose) { Write-Output $ins }
 
+    Expect $ins "(?s)flushtest -b /dev/nvme0n1 nvme0n1(?:(?!flushtest: fim).)*flushtest: fim, 0 falha\(s\)" "flushtest no disco cru: escrita direta de 4 KiB atualiza o cache de blocos e o fsync manda FLUSH"
+    Expect $ins "(?s)flushtest -f nvme0n1 /root/ft\.bin(?:(?!flushtest: fim).)*flushtest: fim, 0 falha\(s\)" "flushtest no sistema instalado (ext2 de 4 KiB, escrita direta): FLUSH e cache de paginas coerente"
     Expect $ins "Discos encontrados:\s*\n\s*nvme0n1\s+512 MiB\s+QEMU NVMe Ctrl\s+interno\s*\n\s*\(sem particao reconhecida\)\s*\n\s*Destinos sem outro sistema: /dev/nvme0n1" "instalar sem argumento lista o disco com modelo, tamanho e particoes"
     Expect $ins "(?s)instalar /dev/nvme0n1\s*\nDisco escolhido:.{0,200}?Isto apaga TODO o disco nvme0n1 \(512 MiB\)\. Digite o nome do disco \(nvme0n1\) para continuar: [^\n]*\n[^\n]*instalar: cancelado" "sem o nome do disco o instalador nao mexe nele"
     Expect $ins "(?s)instalar: tire a ISO.*?nvme0n1\s+512 MiB\s+QEMU NVMe Ctrl\s+interno\s+\*\*\* TEM OUTRO SISTEMA: nao use \*\*\*\s*\n\s*nvme0n1p1\s+64 MiB\s+ESP sem outro carregador\s*\n\s*nvme0n1p2\s+\d+ MiB\s+raiz Linux x86-64 \(Orion ou outro Linux instalado\)\s+<<<\s*\n.{0,200}?instalar: nvme0n1 tem outro sistema; --sim nao vale aqui" "disco com outro sistema: marcado na lista e --sim recusado"
@@ -1147,7 +1164,10 @@ if ($runAll -or $OnlyN) {
         "cmd:mkdir /root/nt", "cmd:fstest -a /root/nt", 'cmd:echo FIM$X-NFSTEST', "until:600:FIM-NFSTEST",
         "cmd:rmdir /root/nt", "cmd:echo persiste-no-nvme > /root/persiste.txt", "cmd:sync", "wait:2",
         "cmd:cat /proc/interrupts", "wait:1", "key:0B", "cmd:irq", "wait:1", "key:0B",
-        "reboot:", "cmd:cat /root/persiste.txt", "cmd:rm /root/persiste.txt", "cmd:sync", "wait:1"
+        "reboot:", "cmd:cat /root/persiste.txt", "cmd:rm /root/persiste.txt", "cmd:sync", "wait:1",
+        "cmd:flushtest -f nvme0n1 /root/ft.bin", "until:120:flushtest: fim",
+        "cmd:flushtest -c nvme0n1 umount /boot/efi", "until:60:flushtest: fim", "cmd:mount -t vfat /dev/nvme0n1p1 /boot/efi",
+        "cmd:ls /boot/efi/boot", "wait:1", "cmd:reboot", "wait:4", "monlog:info status", "reboot:", "cmd:poweroff", "wait:4", "monlog:info status"
     )
     & (Join-Path $Root "test.ps1") -Smp $Smp -Image -NoBuild -Bus nvme -LogPath "out\reg-n.log" `
         -Script $stepsN -CommandDelay 1.5 -BootTimeout 60 -NoPrint | Out-Null
@@ -1165,6 +1185,12 @@ if ($runAll -or $OnlyN) {
     Expect $n "(?s)cat /proc/interrupts.*?\n\s*\d+:(\s+\d+){4}\s+nvme" "/proc/interrupts conta a MSI-X do NVMe"
     ExpectNot $n "(?s)cat /proc/interrupts.*?\n\s*\d+:\s+0\s+0\s+0\s+0\s+nvme" "a MSI-X do NVMe chegou de fato"
     Expect $n "(?s)----- reboot -----.*?cat /root/persiste\.txt\s*\npersiste-no-nvme" "o que foi gravado no NVMe sobrevive ao reboot"
+    Expect $n "(?s)flushtest -f nvme0n1 /root/ft\.bin(?:(?!flushtest: fim).)*?fsync devolve 0 e manda FLUSH ao nvme0n1 \(\d+ -> \d+\): OK\s*\nflushtest: fdatasync devolve 0 e manda FLUSH ao nvme0n1 \(\d+ -> \d+\): OK\s*\nflushtest: syncfs devolve 0 e manda FLUSH ao nvme0n1 \(\d+ -> \d+\): OK\s*\nflushtest: sync devolve 0 e manda FLUSH ao nvme0n1 \(\d+ -> \d+\): OK" "fsync, fdatasync, syncfs e sync mandam FLUSH ao NVMe"
+    Expect $n "(?s)flushtest -f nvme0n1 /root/ft\.bin(?:(?!flushtest: fim).)*flushtest: fim, 0 falha\(s\)" "flushtest no NVMe (ext2 de 1 KiB): FLUSH, EBADF e cache de paginas coerente"
+    Expect $n "flushtest: umount manda FLUSH ao nvme0n1 \(\d+ -> \d+\): OK" "umount manda FLUSH ao NVMe"
+    Expect $n "(?s)mount -t vfat /dev/nvme0n1p1 /boot/efi\s*\n(?:[^\n]*\n){0,3}?[^\n]*/dev/nvme0n1p1 montado em /boot/efi \(vfat\)" "a ESP volta a montar depois do umount"
+    Expect $n "(?s)reiniciando: gravando os discos.{0,600}?discos gravados \([1-9]\d* FLUSH\)\r?\n" "reboot manda FLUSH ao NVMe antes de reiniciar"
+    Expect $n "(?s)desligando: gravando os discos.{0,600}?discos gravados \([1-9]\d* FLUSH\)\r?\n" "poweroff manda FLUSH ao NVMe antes de desligar"
     ExpectNot $n "\*\*\* KERNEL PANIC \*\*\*|\*\*\* EXCECAO NAO TRATADA" "nenhum panico na sequencia N"
 }
 

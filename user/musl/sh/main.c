@@ -143,44 +143,169 @@ static void resolve(const char *cmd, char *out, size_t size)
     snprintf(out, size, "%.*s/%s", len, first, cmd);
 }
 
-static void expand_vars(const char *in, char *out, size_t size)
+static int quote_char(char c)
 {
-    size_t o = 0;
-    while (*in && o + 1 < size) {
-        if (*in != '$') {
-            out[o++] = *in++;
+    return c == '\\' || c == '\'' || c == '"';
+}
+
+static char *skip_quoted(char *p)
+{
+    if (*p == '\\')
+        return p[1] ? p + 2 : p + 1;
+    if (*p == '\'') {
+        char *e = strchr(p + 1, '\'');
+        return e ? e + 1 : NULL;
+    }
+    for (p++; *p; p++) {
+        if (*p == '\\' && p[1])
+            p++;
+        else if (*p == '"')
+            return p + 1;
+    }
+    return NULL;
+}
+
+static int quotes_closed(char *line)
+{
+    for (char *p = line; *p;) {
+        if (!quote_char(*p)) {
+            p++;
             continue;
         }
-        in++;
-        if (*in == '?') {
-            in++;
-            char num[16];
-            snprintf(num, sizeof(num), "%d", last_status);
-            for (const char *v = num; *v && o + 1 < size; v++)
-                out[o++] = *v;
-            continue;
-        }
+        p = skip_quoted(p);
+        if (!p)
+            return 0;
+    }
+    return 1;
+}
+
+struct lex {
+    char *out;
+    char *end;
+    char *field;
+    int started;
+    int overflow;
+    char *fields[MAX_ARGS];
+    int n;
+};
+
+static void lex_put(struct lex *l, char ch)
+{
+    l->started = 1;
+    if (l->out + 1 < l->end)
+        *l->out++ = ch;
+    else
+        l->overflow = 1;
+}
+
+static void lex_break(struct lex *l)
+{
+    if (!l->started)
+        return;
+    *l->out++ = '\0';
+    if (l->n < MAX_ARGS)
+        l->fields[l->n++] = l->field;
+    l->field = l->out;
+    l->started = 0;
+}
+
+static void lex_expand(struct lex *l, char **pp, int split)
+{
+    char *p = *pp;
+    char num[16];
+    const char *val = NULL;
+    if (*p == '?' || *p == '$') {
+        snprintf(num, sizeof(num), "%d", *p == '?' ? last_status : (int)getpid());
+        val = num;
+        p++;
+    } else {
         char name[64];
         size_t n = 0;
-        int braced = *in == '{';
+        int braced = *p == '{';
+        char *start = p;
         if (braced)
-            in++;
-        while (*in && n < sizeof(name) - 1 && name_char(*in))
-            name[n++] = *in++;
+            p++;
+        while (*p && n < sizeof(name) - 1 && name_char(*p))
+            name[n++] = *p++;
         name[n] = '\0';
-        if (braced && *in == '}')
-            in++;
+        if (braced && *p == '}')
+            p++;
         if (!n) {
-            out[o++] = '$';
-            continue;
+            p = start;
+            lex_put(l, '$');
+        } else {
+            val = getenv(name);
         }
-        const char *val = getenv(name);
-        if (!val)
-            continue;
-        while (*val && o + 1 < size)
-            out[o++] = *val++;
     }
-    out[o] = '\0';
+    for (; val && *val; val++) {
+        if (split && (*val == ' ' || *val == '\t' || *val == '\n'))
+            lex_break(l);
+        else
+            lex_put(l, *val);
+    }
+    *pp = p;
+}
+
+static int word_end(char c)
+{
+    return !c || c == ' ' || c == '\t' || c == '<' || c == '>';
+}
+
+static int lex_word(struct lex *l, char **pp)
+{
+    char *p = *pp;
+    int name = 1;
+    int split = 1;
+    int assign = 0;
+    l->n = 0;
+    l->field = l->out;
+    l->started = 0;
+    while (!word_end(*p)) {
+        if (*p == '\\') {
+            name = 0;
+            p++;
+            if (*p)
+                lex_put(l, *p++);
+        } else if (*p == '\'') {
+            name = 0;
+            l->started = 1;
+            for (p++; *p && *p != '\''; p++)
+                lex_put(l, *p);
+            if (*p)
+                p++;
+        } else if (*p == '"') {
+            name = 0;
+            l->started = 1;
+            for (p++; *p && *p != '"';) {
+                if (*p == '\\' && (p[1] == '$' || p[1] == '"' || p[1] == '\\' || p[1] == '`')) {
+                    lex_put(l, p[1]);
+                    p += 2;
+                } else if (*p == '$') {
+                    p++;
+                    lex_expand(l, &p, 0);
+                } else {
+                    lex_put(l, *p++);
+                }
+            }
+            if (*p)
+                p++;
+        } else if (*p == '$') {
+            name = 0;
+            p++;
+            lex_expand(l, &p, split);
+        } else {
+            if (*p == '=' && name && l->out > l->field && !(l->field[0] >= '0' && l->field[0] <= '9')) {
+                assign = 1;
+                split = 0;
+            }
+            if (!name_char(*p))
+                name = 0;
+            lex_put(l, *p++);
+        }
+    }
+    lex_break(l);
+    *pp = p;
+    return assign;
 }
 
 static int is_assignment(const char *word)
@@ -204,46 +329,64 @@ static void apply_assignment(const char *word)
     setenv(name, eq + 1, 1);
 }
 
-static int parse_cmd(char *text, struct cmd *c)
+static int parse_cmd(char *text, struct cmd *c, struct lex *l)
 {
     memset(c, 0, sizeof(*c));
-    char *save;
-    char *tok = strtok_r(text, " \t", &save);
-    while (tok) {
-        const char **target = NULL;
-        int append = 0;
-        if (strcmp(tok, "<") == 0) {
-            target = &c->in_file;
-        } else if (strcmp(tok, ">") == 0) {
-            target = &c->out_file;
-        } else if (strcmp(tok, ">>") == 0) {
-            target = &c->out_file;
-            append = 1;
-        } else if (strcmp(tok, "2>") == 0) {
-            target = &c->err_file;
-        } else if (tok[0] == '<' && tok[1]) {
-            c->in_file = tok + 1;
-        } else if (tok[0] == '>' && tok[1] == '>' && tok[2]) {
-            c->out_file = tok + 2;
+    const char **target = NULL;
+    char *p = text;
+    for (;;) {
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (!*p)
+            break;
+        const char **next = NULL;
+        int len = 0;
+        if (p[0] == '>' && p[1] == '>') {
+            next = &c->out_file;
             c->append = 1;
-        } else if (tok[0] == '>' && tok[1]) {
-            c->out_file = tok + 1;
-        } else if (c->argc == 0 && is_assignment(tok) && c->nassign < MAX_ASSIGNS) {
-            c->assign[c->nassign++] = tok;
-        } else if (c->argc < MAX_ARGS - 1) {
-            c->argv[c->argc++] = tok;
+            len = 2;
+        } else if (p[0] == '>') {
+            next = &c->out_file;
+            c->append = 0;
+            len = 1;
+        } else if (p[0] == '<') {
+            next = &c->in_file;
+            len = 1;
+        } else if (p[0] == '2' && p[1] == '>') {
+            next = &c->err_file;
+            len = 2;
         }
+        if (next) {
+            if (target)
+                break;
+            target = next;
+            p += len;
+            continue;
+        }
+        int assign = lex_word(l, &p);
         if (target) {
-            tok = strtok_r(NULL, " \t", &save);
-            if (!tok) {
-                fputs("sh: falta o nome do arquivo depois do redirecionamento\n", stderr);
+            if (l->n != 1) {
+                fputs("sh: redirecionamento ambiguo\n", stderr);
                 return -1;
             }
-            *target = tok;
-            if (append)
-                c->append = 1;
+            *target = l->fields[0];
+            target = NULL;
+            continue;
         }
-        tok = strtok_r(NULL, " \t", &save);
+        for (int i = 0; i < l->n; i++) {
+            if (assign && c->argc == 0 && c->nassign < MAX_ASSIGNS)
+                c->assign[c->nassign++] = l->fields[i];
+            else if (c->argc < MAX_ARGS - 1)
+                c->argv[c->argc++] = l->fields[i];
+        }
+    }
+    if (target) {
+        fputs("sh: falta o nome do arquivo depois do redirecionamento\n", stderr);
+        return -1;
+    }
+    if (l->overflow) {
+        fputs("sh: comando longo demais\n", stderr);
+        return -1;
     }
     c->argv[c->argc] = NULL;
     return c->argc;
@@ -515,6 +658,7 @@ static int run_builtin(struct cmd *c)
         puts("builtins: cd, pwd, sync, clear, history, export, unset, jobs, fg, wait, ulimit, exit, help");
         puts("variaveis:   NOME=valor, $NOME, ${NOME}, $? (status do ultimo comando)");
         puts("             NOME=valor cmd  (so para esse comando); PATH escolhe onde procurar");
+        puts("aspas:       'literal'  \"expande $NOME\"  \\x escapa um caractere");
         puts("arquivos: ls cat cp mv rm mkdir touch head tail grep sort uniq tee wc echo");
         puts("sistema:  date sleep top ps kill uptime free time env printenv clear true false");
         puts("testes:   fstest polltest sigtest ptytest forktest badptr stress memtest crash");
@@ -669,11 +813,8 @@ static int run_pipeline(struct cmd *cmds, int n, int background, const char *tex
 
 static int run_segment(char *raw, int background)
 {
-    char line[LINE_SIZE * 2];
-    expand_vars(raw, line, sizeof(line));
-
     char text[JOB_TEXT];
-    const char *t = line;
+    const char *t = raw;
     while (*t == ' ' || *t == '\t')
         t++;
     snprintf(text, sizeof(text), "%s", t);
@@ -683,20 +824,34 @@ static int run_segment(char *raw, int background)
 
     char *stages[MAX_STAGES];
     int n = 0;
-    char *p = line;
-    while (n < MAX_STAGES) {
-        stages[n++] = p;
-        char *bar = strchr(p, '|');
-        if (!bar)
-            break;
-        *bar = '\0';
-        p = bar + 1;
+    char *p = raw;
+    stages[n++] = p;
+    while (*p) {
+        if (quote_char(*p)) {
+            p = skip_quoted(p);
+            continue;
+        }
+        if (*p == '|') {
+            if (n == MAX_STAGES) {
+                fputs("sh: pipeline longo demais\n", stderr);
+                return 2;
+            }
+            *p++ = '\0';
+            stages[n++] = p;
+            continue;
+        }
+        p++;
     }
 
+    static char words[LINE_SIZE * 4];
+    struct lex lx;
+    memset(&lx, 0, sizeof(lx));
+    lx.out = words;
+    lx.end = words + sizeof(words);
     struct cmd cmds[MAX_STAGES];
     int count = 0;
     for (int i = 0; i < n; i++) {
-        int argc = parse_cmd(stages[i], &cmds[count]);
+        int argc = parse_cmd(stages[i], &cmds[count], &lx);
         if (argc < 0)
             return 2;
         if (argc == 0) {
@@ -726,6 +881,10 @@ static int split_list(char *line, struct segment *segs)
     char *start = line;
     char *p = line;
     while (*p && n < MAX_SEGS) {
+        if (quote_char(*p)) {
+            p = skip_quoted(p);
+            continue;
+        }
         enum seg_op op = OP_END;
         int len = 0;
         if (p[0] == '&' && p[1] == '&') {
@@ -770,6 +929,11 @@ static int blank(const char *s)
 
 static void run_line(char *line)
 {
+    if (!quotes_closed(line)) {
+        fputs("sh: aspas sem fechar\n", stderr);
+        last_status = 2;
+        return;
+    }
     struct segment segs[MAX_SEGS];
     int n = split_list(line, segs);
     enum seg_op prev = OP_SEQ;
@@ -804,9 +968,15 @@ int main(int argc, char **argv)
             return 2;
         }
         snprintf(line, sizeof(line), "%s", argv[2]);
-        for (char *q = line; *q; q++)
+        for (char *q = line; q && *q;) {
+            if (quote_char(*q)) {
+                q = skip_quoted(q);
+                continue;
+            }
             if (*q == '\n' || *q == '\r')
                 *q = ';';
+            q++;
+        }
         run_line(line);
         return last_status;
     }

@@ -1472,7 +1472,7 @@ int vfs_umount(struct vnode *root)
     return 0;
 }
 
-bool vfs_sync(void)
+static bool sync_mounts(void)
 {
     bool ok = true;
     mutex_lock(&mount_lock);
@@ -1480,6 +1480,12 @@ bool vfs_sync(void)
         if (m->type->sync && m->type->sync(m) < 0)
             ok = false;
     mutex_unlock(&mount_lock);
+    return ok;
+}
+
+bool vfs_sync(void)
+{
+    bool ok = sync_mounts();
     return blockdev_sync() && ok;
 }
 
@@ -1488,7 +1494,8 @@ static void bdflush(void *arg)
     (void)arg;
     for (;;) {
         thread_sleep_ms(2000);
-        vfs_sync();
+        sync_mounts();
+        blockdev_writeback();
     }
 }
 

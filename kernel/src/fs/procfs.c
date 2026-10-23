@@ -420,8 +420,8 @@ static void gen_diskstats(struct pbuf *b)
         struct blockdev *d = blockdev_at(i);
         if (!d)
             continue;
-        pb_printf(b, "%4u %7u %s %lu 0 %lu 0 %lu 0 %lu 0 0 0 0\n", 8u, i, d->name, d->rd_ios, d->rd_sectors,
-                  d->wr_ios, d->wr_sectors);
+        pb_printf(b, "%4u %7u %s %lu 0 %lu 0 %lu 0 %lu 0 0 0 0 0 0 0 0 %lu 0\n", 8u, i, d->name, d->rd_ios,
+                  d->rd_sectors, d->wr_ios, d->wr_sectors, d->fl_ios);
     }
 }
 
